@@ -118,3 +118,7 @@ EOF3
 
 "$factile_bin" --mount-file "$tmpdir/mounts.toml" create /product-docs/workflows/payment-import --type Workflow --title 'Payment Import Workflow' --body "$tmpdir/new-workflow.md" --json >/dev/null
 "$factile_bin" --mount-file "$tmpdir/mounts.toml" read /product-docs/workflows/payment-import --json >/dev/null
+
+npm_stage="$tmpdir/npm"
+node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.1.0 >/dev/null
+node packaging/npm/scripts/smoke-test.mjs --root "$npm_stage" >/dev/null

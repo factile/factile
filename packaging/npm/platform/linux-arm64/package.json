@@ -1,0 +1,26 @@
+{
+  "name": "@factile/cli-linux-arm64",
+  "version": "0.1.0",
+  "description": "Factile CLI native binary for Linux arm64.",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/factile/factile.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TRADEMARKS.md"
+  ]
+}

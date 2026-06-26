@@ -1,0 +1,31 @@
+{
+  "name": "@factile/cli",
+  "version": "0.1.0",
+  "description": "Scoped alias for the Factile CLI npm package.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/factile/factile.git"
+  },
+  "homepage": "https://github.com/factile/factile#readme",
+  "bugs": {
+    "url": "https://github.com/factile/factile/issues"
+  },
+  "bin": {
+    "factile": "bin/factile.js",
+    "ft": "bin/factile.js"
+  },
+  "dependencies": {
+    "factile": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TRADEMARKS.md"
+  ]
+}

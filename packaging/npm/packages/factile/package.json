@@ -1,0 +1,33 @@
+{
+  "name": "factile",
+  "version": "0.1.0",
+  "description": "Factile CLI.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/factile/factile.git"
+  },
+  "homepage": "https://github.com/factile/factile#readme",
+  "bugs": {
+    "url": "https://github.com/factile/factile/issues"
+  },
+  "bin": {
+    "factile": "bin/factile.js",
+    "ft": "bin/factile.js"
+  },
+  "optionalDependencies": {
+    "@factile/cli-linux-x64": "0.1.0",
+    "@factile/cli-linux-arm64": "0.1.0",
+    "@factile/cli-darwin-x64": "0.1.0",
+    "@factile/cli-darwin-arm64": "0.1.0",
+    "@factile/cli-win32-x64": "0.1.0"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TRADEMARKS.md"
+  ]
+}

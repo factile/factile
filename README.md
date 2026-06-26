@@ -11,7 +11,7 @@ Factile is a local-first command line tool for Open Knowledge Format bundles. It
 mounts local Markdown knowledge, gives it stable virtual paths, and exposes the
 same reader contract through a native Go CLI and a local stdio MCP server.
 
-Status: early local-first v0.1.0. JSON output is intended as the stable
+Status: early local-first v0.1.1. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
@@ -21,6 +21,16 @@ auth, marketplace search, or cloud sync in this repository.
 ## Install
 
 Factile is one Go binary named `factile`.
+
+Install with npm:
+
+```bash
+npm install -g factile
+factile version
+```
+
+The npm package also installs `ft` as a shorter alias. It only installs the
+binary; repository setup remains explicit with `factile init`.
 
 Build or install from source:
 
@@ -35,7 +45,7 @@ and put `factile` on your `PATH`.
 The installer script supports Linux and macOS. Pin the release tag you want:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.1.1/install.sh | bash
 ```
 
 From a checkout, build directly:
@@ -169,7 +179,7 @@ Curator mode installs catalog/write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.1.0; there is no recipe runner or `factile recipe` command.
+v0.1.1; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -184,7 +194,7 @@ Trace logging is local-only and disabled unless the environment variable is set.
 
 ## Known Limitations
 
-Factile v0.1.0 is intentionally local-only:
+Factile v0.1.1 is intentionally local-only:
 
 - There is no hosted service, remote bundle sync, auth, marketplace, billing, or
   cloud MCP in this repository.
@@ -192,7 +202,7 @@ Factile v0.1.0 is intentionally local-only:
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
 - The broader documentation bundle is not published in this repository yet; the
-  README covers the supported v0.1.0 surface.
+  README covers the supported v0.1.1 surface.
 
 ## Supported Platforms
 

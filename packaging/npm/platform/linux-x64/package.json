@@ -1,0 +1,26 @@
+{
+  "name": "@factile/cli-linux-x64",
+  "version": "0.1.0",
+  "description": "Factile CLI native binary for Linux x64.",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/factile/factile.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "TRADEMARKS.md"
+  ]
+}
