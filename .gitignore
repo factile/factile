@@ -1,0 +1,28 @@
+# Public release exclusions
+AGENTS.md
+TASKS.md
+.agents/
+.beads/
+.codex/
+.factile/
+.idea/
+docs/
+demo/
+test/refinement/
+tmp/
+
+# Build and run artifacts
+bin/
+dist/
+/factile
+/factile.exe
+*.test
+coverage.out
+
+# Local environment and databases
+.env
+.env.*
+!.env.example
+.dolt/
+*.db
+.beads-credential-key

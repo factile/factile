@@ -1,0 +1,25 @@
+{
+  "id": "software.capture-decision",
+  "title": "Capture Decision",
+  "profile": "software",
+  "mode": "curator",
+  "purpose": "Record a durable architecture or implementation decision.",
+  "steps": [
+    {
+      "title": "Find related decisions",
+      "command": "factile search <kb-path> <decision topic> --format json"
+    },
+    {
+      "title": "Use the ADR template",
+      "command": "profiles/software/templates/adr.md"
+    },
+    {
+      "title": "Create the ADR",
+      "command": "factile create <path> --type \"Architecture Decision Record\" --title <title> --body <file>"
+    },
+    {
+      "title": "Validate the decision scope",
+      "command": "factile validate <scope> --format json"
+    }
+  ]
+}

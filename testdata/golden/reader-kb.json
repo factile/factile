@@ -1,0 +1,17 @@
+{
+  "path": "/engineering",
+  "folders": [
+    {
+      "path": "/engineering/common",
+      "title": "Common"
+    },
+    {
+      "path": "/engineering/django",
+      "title": "Django"
+    },
+    {
+      "path": "/engineering/playbook",
+      "title": "Playbook"
+    }
+  ]
+}

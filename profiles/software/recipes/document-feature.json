@@ -1,0 +1,25 @@
+{
+  "id": "software.document-feature",
+  "title": "Document Feature",
+  "profile": "software",
+  "mode": "curator",
+  "purpose": "Add user-facing or agent-facing documentation for an implemented feature.",
+  "steps": [
+    {
+      "title": "Find existing feature docs",
+      "command": "factile search <kb-path> <feature name> --format json"
+    },
+    {
+      "title": "Choose a template",
+      "command": "Use the profile document type that matches the feature surface."
+    },
+    {
+      "title": "Write the document",
+      "command": "factile create <path> --type <type> --title <title> --body <file>"
+    },
+    {
+      "title": "Validate links and frontmatter",
+      "command": "factile validate <kb-path> --format json"
+    }
+  ]
+}

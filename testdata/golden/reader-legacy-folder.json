@@ -1,0 +1,16 @@
+{
+  "path": "/legacy/notes",
+  "documents": [
+    {
+      "path": "/legacy/notes/legacy",
+      "type": "Reference",
+      "title": "Legacy Mount Note",
+      "description": "Demonstrates compatibility with direct mount registries.",
+      "tags": [
+        "legacy",
+        "mounts"
+      ],
+      "revision": "sha256:cfd19dc4961e53157d546deca7274d956ebcd3781ea7e39d1196a4484949fea6"
+    }
+  ]
+}

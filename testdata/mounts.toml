@@ -1,0 +1,9 @@
+[mounts."/product-docs"]
+source = "./testdata/bundles/product-docs"
+kind = "local"
+writable = true
+
+[mounts."/broken-docs"]
+source = "./testdata/bundles/broken-docs"
+kind = "local"
+writable = true

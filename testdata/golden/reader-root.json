@@ -1,0 +1,13 @@
+{
+  "path": "/",
+  "folders": [
+    {
+      "path": "/engineering",
+      "title": "Engineering"
+    },
+    {
+      "path": "/legacy",
+      "title": "Legacy"
+    }
+  ]
+}

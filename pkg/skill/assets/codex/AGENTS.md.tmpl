@@ -1,0 +1,23 @@
+<!-- factile:codex:start -->
+## Local knowledge
+
+This repository may have local Factile knowledge available by path.
+
+Reader commands work by path. Do not classify a path as a Knowledge Base, bundle link, or OKF folder before navigating it.
+
+If a Knowledge Base defines named Views, use `--view <id>` with `list`, `search`, `context`, or `graph` when that View matches the task.
+
+For tasks involving architecture, design, implementation choices, domain concepts, runbooks, standards, policies, documentation, reviews, or decisions:
+
+1. Discover available knowledge with `factile list / --json`.
+2. Inspect compact cards with `factile list / --brief --json` or `factile stat <path> --json`.
+3. Get focused task context with `factile context / '<task summary>' --json`.
+4. Read specific concepts with `factile read <path> --json` only when more detail is needed.
+5. Prefer Factile context over ad-hoc guessing when project knowledge is relevant.
+
+{{MODE_BLOCK}}
+
+{{PROFILE_BLOCK}}Skip Factile for mechanical renames, formatting, syntax fixes, and obvious local edits.
+
+If Factile is unavailable, continue with normal repository inspection.
+<!-- factile:codex:end -->

@@ -1,0 +1,25 @@
+{
+  "id": "software.design-feature",
+  "title": "Design Feature",
+  "profile": "software",
+  "mode": "curator",
+  "purpose": "Prepare a feature design using existing local knowledge and profile templates.",
+  "steps": [
+    {
+      "title": "Inspect the target KB",
+      "command": "factile kb inspect <kb-path> --format json"
+    },
+    {
+      "title": "Gather design context",
+      "command": "factile context <kb-path> <feature summary> --format json"
+    },
+    {
+      "title": "Create or update design document",
+      "command": "factile create <path> --type \"Technical Design\" --title <title> --body <file>"
+    },
+    {
+      "title": "Validate the KB",
+      "command": "factile validate <kb-path> --format json"
+    }
+  ]
+}

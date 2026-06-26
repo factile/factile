@@ -1,0 +1,25 @@
+{
+  "id": "software.write-runbook",
+  "title": "Write Runbook",
+  "profile": "software",
+  "mode": "curator",
+  "purpose": "Capture operational response steps for a known failure or maintenance task.",
+  "steps": [
+    {
+      "title": "Gather incident or operation context",
+      "command": "factile context <kb-path> <operation summary> --format json"
+    },
+    {
+      "title": "Use the runbook template",
+      "command": "profiles/software/templates/runbook.md"
+    },
+    {
+      "title": "Create the runbook",
+      "command": "factile create <path> --type Runbook --title <title> --body <file>"
+    },
+    {
+      "title": "Validate the runbook scope",
+      "command": "factile validate <scope> --format json"
+    }
+  ]
+}

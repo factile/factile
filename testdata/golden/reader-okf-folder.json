@@ -1,0 +1,17 @@
+{
+  "path": "/engineering/django/runbooks",
+  "documents": [
+    {
+      "path": "/engineering/django/runbooks/ocr-failure",
+      "type": "Runbook",
+      "title": "OCR Failure Runbook",
+      "description": "Steps to follow when OCR extraction fails.",
+      "tags": [
+        "invoices",
+        "ocr",
+        "failures"
+      ],
+      "revision": "sha256:f47ce3dd7d9c0b1b1aea450eb1257c23ae9520bae3b044d80db8ac11ced42285"
+    }
+  ]
+}

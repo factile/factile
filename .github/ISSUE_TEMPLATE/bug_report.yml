@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem in the Factile CLI or local MCP server.
+title: "Bug: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal commands, fixture paths, or steps that reproduce the issue.
+      placeholder: |
+        factile --mount-file ./testdata/mounts.toml list /
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `factile version`, tag, commit, or build source.
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, shell, Go version if built from source, and any relevant paths.
+    validations:
+      required: false

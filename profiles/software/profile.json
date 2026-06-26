@@ -1,0 +1,118 @@
+{
+  "id": "software",
+  "title": "Software Engineering",
+  "description": "Profile for curating software engineering knowledge bases.",
+  "document_types": [
+    {
+      "id": "adr",
+      "type": "Architecture Decision Record",
+      "purpose": "Capture durable architecture decisions, context, options, and consequences."
+    },
+    {
+      "id": "runbook",
+      "type": "Runbook",
+      "purpose": "Document operational response steps for known incidents and maintenance tasks."
+    },
+    {
+      "id": "workflow",
+      "type": "Workflow",
+      "purpose": "Describe repeated engineering or product flows from trigger to outcome."
+    },
+    {
+      "id": "domain-concept",
+      "type": "Domain Concept",
+      "purpose": "Define important domain language used by the codebase and product."
+    },
+    {
+      "id": "api",
+      "type": "API",
+      "purpose": "Describe public or internal API contracts, payloads, and behavior."
+    },
+    {
+      "id": "module-service",
+      "type": "Module or Service",
+      "purpose": "Explain a code module, service boundary, ownership, and dependencies."
+    },
+    {
+      "id": "data-model",
+      "type": "Data Model",
+      "purpose": "Document entities, fields, relationships, migrations, and invariants."
+    },
+    {
+      "id": "deployment",
+      "type": "Deployment",
+      "purpose": "Explain deployment topology, rollout process, environments, and rollback."
+    },
+    {
+      "id": "testing-strategy",
+      "type": "Testing Strategy",
+      "purpose": "Describe test layers, fixtures, coverage expectations, and verification commands."
+    },
+    {
+      "id": "security-note",
+      "type": "Security Note",
+      "purpose": "Capture security assumptions, controls, sensitive data handling, and risks."
+    }
+  ],
+  "templates": [
+    {
+      "id": "adr",
+      "document_type": "Architecture Decision Record",
+      "path": "templates/adr.md"
+    },
+    {
+      "id": "runbook",
+      "document_type": "Runbook",
+      "path": "templates/runbook.md"
+    },
+    {
+      "id": "workflow",
+      "document_type": "Workflow",
+      "path": "templates/workflow.md"
+    },
+    {
+      "id": "domain-concept",
+      "document_type": "Domain Concept",
+      "path": "templates/domain-concept.md"
+    },
+    {
+      "id": "api",
+      "document_type": "API",
+      "path": "templates/api.md"
+    },
+    {
+      "id": "module-service",
+      "document_type": "Module or Service",
+      "path": "templates/module-service.md"
+    },
+    {
+      "id": "data-model",
+      "document_type": "Data Model",
+      "path": "templates/data-model.md"
+    },
+    {
+      "id": "deployment",
+      "document_type": "Deployment",
+      "path": "templates/deployment.md"
+    },
+    {
+      "id": "testing-strategy",
+      "document_type": "Testing Strategy",
+      "path": "templates/testing-strategy.md"
+    },
+    {
+      "id": "security-note",
+      "document_type": "Security Note",
+      "path": "templates/security-note.md"
+    }
+  ],
+  "recipes": [
+    "software.answer-question",
+    "software.review-code",
+    "software.design-feature",
+    "software.document-feature",
+    "software.write-runbook",
+    "software.capture-decision",
+    "software.validate-bundle"
+  ]
+}

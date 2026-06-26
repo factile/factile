@@ -1,0 +1,21 @@
+{
+  "id": "software.review-code",
+  "title": "Review Code",
+  "profile": "software",
+  "mode": "reader",
+  "purpose": "Review code against local architecture, runbooks, and standards.",
+  "steps": [
+    {
+      "title": "Find relevant architecture",
+      "command": "factile context / <review summary> --format json"
+    },
+    {
+      "title": "Check related validation guidance",
+      "command": "factile search / validation --format json"
+    },
+    {
+      "title": "Report findings first",
+      "command": "Use repository review conventions and cite Factile paths when used."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "software.validate-bundle",
+  "title": "Validate Bundle",
+  "profile": "software",
+  "mode": "curator",
+  "purpose": "Validate an OKF bundle or KB path after curation work.",
+  "steps": [
+    {
+      "title": "Run validation",
+      "command": "factile validate <path> --format json"
+    },
+    {
+      "title": "Inspect graph issues",
+      "command": "factile graph <path> --format json"
+    },
+    {
+      "title": "Fix invalid documents with revisions",
+      "command": "factile write <path> --rev <rev> --body <file>"
+    }
+  ]
+}
