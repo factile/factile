@@ -1,12 +1,19 @@
 # Factile
 
+[![Verify](https://github.com/factile/factile/actions/workflows/verify.yml/badge.svg)](https://github.com/factile/factile/actions/workflows/verify.yml)
+[![Release](https://github.com/factile/factile/actions/workflows/release.yml/badge.svg)](https://github.com/factile/factile/actions/workflows/release.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/factile/factile.svg)](https://pkg.go.dev/github.com/factile/factile)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Factile turns docs you own into structured context agents can trust.
 
 Factile is a local-first command line tool for Open Knowledge Format bundles. It
 mounts local Markdown knowledge, gives it stable virtual paths, and exposes the
 same reader contract through a native Go CLI and a local stdio MCP server.
 
-Status: early local-first v0.1.0. JSON output is intended as the stable agent/script contract; CLI text and command ergonomics may still evolve before v1.0.
+Status: early local-first v0.1.0. JSON output is intended as the stable
+agent/script contract; CLI text and command ergonomics may still evolve before
+v1.0.
 
 Factile does not implement remote bundles, hosted MCP, subscriptions, billing,
 auth, marketplace search, or cloud sync in this repository.
@@ -174,6 +181,18 @@ FACTILE_TRACE_FILE=.factile/usage.jsonl factile context / "invoice import" --jso
 ```
 
 Trace logging is local-only and disabled unless the environment variable is set.
+
+## Known Limitations
+
+Factile v0.1.0 is intentionally local-only:
+
+- There is no hosted service, remote bundle sync, auth, marketplace, billing, or
+  cloud MCP in this repository.
+- Recipes are seed guidance data, not executable workflows.
+- Text output is a human interface; use JSON for scripts and agents.
+- Rename reports backlink warnings; it does not rewrite links automatically.
+- The broader documentation bundle is not published in this repository yet; the
+  README covers the supported v0.1.0 surface.
 
 ## Supported Platforms
 
