@@ -5,6 +5,8 @@ TASKS.md
 .beads/
 .codex/
 .factile/
+!testdata/catalog-workspace/.factile/
+!testdata/catalog-workspace/.factile/**
 .idea/
 docs/
 demo/

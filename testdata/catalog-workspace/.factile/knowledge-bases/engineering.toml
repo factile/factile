@@ -1,0 +1,52 @@
+id = "engineering"
+path = "/engineering"
+title = "Engineering Knowledge Base"
+description = "Engineering knowledge assembled from reusable bundles."
+profile = "software-engineering"
+default_trust = "local"
+default_writable = true
+
+[[bundles]]
+id = "engineering-common"
+path = "/engineering/common"
+source = "../../../bundles/shared-guides"
+kind = "local"
+writable = false
+title = "Common Engineering Guides"
+description = "Shared setup and operating guides."
+trust = "shared"
+
+[[bundles]]
+id = "engineering-django"
+path = "/engineering/django"
+source = "../../../bundles/product-docs"
+kind = "local"
+writable = true
+title = "Django Product Docs"
+description = "Product workflow and runbook examples."
+trust = "local"
+when_to_use = "Use when working on invoice import workflows or runbooks."
+
+[[bundles]]
+id = "engineering-playbook"
+path = "/engineering/playbook"
+source = "../../../bundles/shared-guides"
+kind = "local"
+writable = false
+title = "Engineering Playbook"
+description = "The same shared guides linked at another path."
+trust = "shared"
+
+[[views]]
+id = "engineering"
+title = "Engineering"
+description = "Full engineering navigation."
+bundles = ["engineering-common", "engineering-django", "engineering-playbook"]
+when_to_use = "Use for engineering work that needs all local and shared guides."
+
+[[views]]
+id = "reader"
+title = "Reader"
+description = "Focused reader navigation."
+bundles = ["engineering-django", "engineering-common"]
+when_to_use = "Use for product workflow and runbook questions."

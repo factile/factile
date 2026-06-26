@@ -2,7 +2,8 @@
 set -euo pipefail
 
 export GOCACHE="${GOCACHE:-/tmp/factile-go-build-cache}"
-mkdir -p "$GOCACHE"
+export GOMODCACHE="${GOMODCACHE:-/tmp/factile-go-mod-cache}"
+mkdir -p "$GOCACHE" "$GOMODCACHE"
 
 repo_root="$(pwd)"
 tmpdir="$(mktemp -d)"
