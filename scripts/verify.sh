@@ -81,13 +81,13 @@ mkdir -p "$catalog_workspace"
   "$factile_bin" kb create /engineering --title "Engineering" --json >/dev/null
   "$factile_bin" kb link /engineering "$tmpdir/bundles/product-docs" /engineering/docs --title "Product Docs" --description "Fixture product documentation" --read-only --json >/dev/null
   "$factile_bin" kb inspect /engineering --json >/dev/null
-  "$factile_bin" kb view set /engineering reader --bundle /engineering/docs --title "Reader" --json >/dev/null
   "$factile_bin" list /engineering --json >/dev/null
-  "$factile_bin" list /engineering --view reader --json >/dev/null
   "$factile_bin" list /engineering --brief --json >/dev/null
+  "$factile_bin" search /engineering 'invoice' --json >/dev/null
+  "$factile_bin" context /engineering 'invoice import workflow' --json >/dev/null
+  "$factile_bin" graph /engineering --json >/dev/null
   "$factile_bin" stat /engineering/docs --json >/dev/null
   "$factile_bin" validate /engineering/docs --json >/dev/null
-  "$factile_bin" kb view delete /engineering reader --json >/dev/null
   "$factile_bin" kb unlink /engineering/docs --json >/dev/null
 )
 
@@ -120,5 +120,5 @@ EOF3
 "$factile_bin" --mount-file "$tmpdir/mounts.toml" read /product-docs/workflows/payment-import --json >/dev/null
 
 npm_stage="$tmpdir/npm"
-node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.1.0 >/dev/null
+node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.2.0 >/dev/null
 node packaging/npm/scripts/smoke-test.mjs --root "$npm_stage" >/dev/null

@@ -48,7 +48,7 @@ type Mount = vfs.Mount
 type KnowledgeBase = catalog.KnowledgeBase
 type KnowledgeBaseRef = catalog.KnowledgeBaseRef
 type BundleLink = catalog.BundleLink
-type View = catalog.View
+type LibraryView = catalog.LibraryView
 
 type SearchResult struct {
 	Concept ConceptSummary `json:"concept"`
@@ -164,6 +164,25 @@ type MountListResult struct {
 	Mounts []Mount `json:"mounts"`
 }
 
+type SummaryResult struct {
+	Workspace    WorkspaceSummary `json:"workspace"`
+	Knowledge    []CardSummary    `json:"knowledge"`
+	Views        []LibraryView    `json:"views"`
+	Sources      []Mount          `json:"sources"`
+	Health       []HealthSummary  `json:"health"`
+	NextCommands []string         `json:"next_commands"`
+}
+
+type WorkspaceSummary struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+}
+
+type HealthSummary struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 type StatResult struct {
 	Card CardSummary `json:"card"`
 }
@@ -199,25 +218,18 @@ type BundleUnlinkResult struct {
 	Removed       bool                 `json:"removed"`
 }
 
-type ViewInput struct {
-	Title        string
-	Description  string
-	Bundles      []string
-	WhenToUse    string
-	WhenNotToUse string
-	Status       string
+type ViewListResult struct {
+	Views []LibraryView `json:"views"`
 }
 
 type ViewResult struct {
-	KnowledgeBase KnowledgeBaseSummary `json:"knowledge_base"`
-	View          View                 `json:"view"`
-	Action        string               `json:"action,omitempty"`
+	View   LibraryView `json:"view"`
+	Action string      `json:"action,omitempty"`
 }
 
 type ViewDeleteResult struct {
-	KnowledgeBase KnowledgeBaseSummary `json:"knowledge_base"`
-	ViewID        string               `json:"view_id"`
-	Deleted       bool                 `json:"deleted"`
+	ID      string `json:"id"`
+	Deleted bool   `json:"deleted"`
 }
 
 type BundleInspectResult struct {
@@ -245,7 +257,9 @@ type GraphOptions struct {
 	Depth int
 	View  string
 }
-type ValidateOptions struct{}
+type ValidateOptions struct {
+	View string
+}
 type StatOptions struct{}
 type MountOptions struct {
 	Writable bool
@@ -260,6 +274,12 @@ type BundleLinkInput struct {
 	Description string
 	Writable    bool
 	Kind        string
+}
+type ViewInput struct {
+	Title       string
+	Description string
+	Status      string
+	Paths       []string
 }
 type UnmountOptions struct{}
 type RenameOptions struct {
@@ -310,6 +330,7 @@ type Workspace interface {
 	Context(ctx context.Context, path string, query string, opts ContextOptions) (ContextPack, error)
 	Graph(ctx context.Context, path string, opts GraphOptions) (GraphResult, error)
 	Validate(ctx context.Context, path string, opts ValidateOptions) (ValidationResult, error)
+	Summary(ctx context.Context) (SummaryResult, error)
 	Create(ctx context.Context, path string, input CreateConceptInput) (ConceptResult, error)
 	Write(ctx context.Context, path string, input WriteConceptInput) (ConceptResult, error)
 	Patch(ctx context.Context, path string, input PatchConceptInput) (ConceptResult, error)
@@ -324,8 +345,10 @@ type Workspace interface {
 	CreateKnowledgeBase(ctx context.Context, path string, input KnowledgeBaseCreateInput) (KnowledgeBaseResult, error)
 	LinkBundle(ctx context.Context, knowledgeBasePath string, source string, bundlePath string, input BundleLinkInput) (BundleLinkResult, error)
 	UnlinkBundle(ctx context.Context, bundlePath string) (BundleUnlinkResult, error)
-	SetKnowledgeBaseView(ctx context.Context, knowledgeBasePath string, viewID string, input ViewInput) (ViewResult, error)
-	DeleteKnowledgeBaseView(ctx context.Context, knowledgeBasePath string, viewID string) (ViewDeleteResult, error)
+	ListViews(ctx context.Context) (ViewListResult, error)
+	InspectView(ctx context.Context, id string) (ViewResult, error)
+	SetView(ctx context.Context, id string, input ViewInput) (ViewResult, error)
+	DeleteView(ctx context.Context, id string) (ViewDeleteResult, error)
 	InspectBundle(ctx context.Context, source string) (BundleInspectResult, error)
 	FindBundles(ctx context.Context, startPath string) (BundleFindResult, error)
 }

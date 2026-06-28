@@ -105,21 +105,65 @@ func (r *Renderer) RenderKnowledgeBase(w io.Writer, result factile.KnowledgeBase
 			}
 		}
 	}
-	if len(kb.Views) > 0 {
-		if _, err := fmt.Fprintln(w, "\nViews:"); err != nil {
+	return nil
+}
+
+func (r *Renderer) RenderViewList(w io.Writer, result factile.ViewListResult) error {
+	if len(result.Views) == 0 {
+		_, err := fmt.Fprintln(w, "No Library Views.")
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "Library Views:"); err != nil {
+		return err
+	}
+	for _, view := range result.Views {
+		if _, err := fmt.Fprintln(w, "  "+summaryLine(view.ID, view.Title, view.Description)); err != nil {
 			return err
-		}
-		for _, view := range kb.Views {
-			line := summaryLine(view.ID, view.Title, view.Description)
-			if len(view.Bundles) > 0 {
-				line += " [" + strings.Join(view.Bundles, ", ") + "]"
-			}
-			if _, err := fmt.Fprintln(w, "  "+line); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
+}
+
+func (r *Renderer) RenderView(w io.Writer, result factile.ViewResult) error {
+	view := result.View
+	if result.Action != "" {
+		if _, err := fmt.Fprintln(w, actionTitle(result.Action)+" Library View "+view.ID); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(w, "Library View "+view.ID); err != nil {
+		return err
+	}
+	metadata := map[string]any{
+		"title":       view.Title,
+		"description": view.Description,
+		"status":      view.Status,
+	}
+	if rendered := r.RenderMetadata(metadata); rendered != "" {
+		if _, err := fmt.Fprintln(w, rendered); err != nil {
+			return err
+		}
+	}
+	if len(view.Paths) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "\nPaths:"); err != nil {
+		return err
+	}
+	for _, path := range view.Paths {
+		if _, err := fmt.Fprintln(w, "  "+path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Renderer) RenderViewDelete(w io.Writer, result factile.ViewDeleteResult) error {
+	if result.Deleted {
+		_, err := fmt.Fprintln(w, "Deleted Library View "+result.ID)
+		return err
+	}
+	_, err := fmt.Fprintln(w, "Library View not deleted "+result.ID)
+	return err
 }
 
 func (r *Renderer) RenderBundleLink(w io.Writer, result factile.BundleLinkResult) error {
@@ -137,33 +181,6 @@ func (r *Renderer) RenderBundleUnlink(w io.Writer, result factile.BundleUnlinkRe
 			return err
 		}
 	} else if _, err := fmt.Fprintln(w, "Bundle not linked "+result.BundlePath); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(w, "Knowledge Base: "+result.KnowledgeBase.Path)
-	return err
-}
-
-func (r *Renderer) RenderView(w io.Writer, result factile.ViewResult) error {
-	action := actionTitle(defaultText(result.Action, "set"))
-	if _, err := fmt.Fprintf(w, "%s View %s\n", action, result.View.ID); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "Knowledge Base: "+result.KnowledgeBase.Path); err != nil {
-		return err
-	}
-	if len(result.View.Bundles) > 0 {
-		_, err := fmt.Fprintln(w, "Bundles: "+strings.Join(result.View.Bundles, ", "))
-		return err
-	}
-	return nil
-}
-
-func (r *Renderer) RenderViewDelete(w io.Writer, result factile.ViewDeleteResult) error {
-	if result.Deleted {
-		if _, err := fmt.Fprintln(w, "Deleted View "+result.ViewID); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintln(w, "View not found "+result.ViewID); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(w, "Knowledge Base: "+result.KnowledgeBase.Path)

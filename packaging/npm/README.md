@@ -3,6 +3,12 @@
 This directory contains npm package templates and release helpers for the
 Factile CLI.
 
+The public user-facing install command is:
+
+```bash
+npm install -g factile
+```
+
 Package roles:
 
 - `factile` is the canonical npm package.
@@ -19,7 +25,7 @@ ft
 Local package smoke test:
 
 ```bash
-node packaging/npm/scripts/prepare-packages.mjs --build --out /tmp/factile-npm --version 0.1.0
+node packaging/npm/scripts/prepare-packages.mjs --build --out /tmp/factile-npm --version 0.2.0
 node packaging/npm/scripts/smoke-test.mjs --root /tmp/factile-npm
 ```
 

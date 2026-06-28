@@ -209,76 +209,6 @@ func (w *LocalWorkspace) UnlinkBundle(ctx context.Context, inputPath string) (Bu
 	return BundleUnlinkResult{KnowledgeBase: knowledgeBaseSummary(ref), BundlePath: bundlePath, Removed: true}, nil
 }
 
-func (w *LocalWorkspace) SetKnowledgeBaseView(ctx context.Context, knowledgeBasePath string, viewID string, input ViewInput) (ViewResult, error) {
-	_ = ctx
-	id, err := normalizeViewID(viewID)
-	if err != nil {
-		return ViewResult{}, err
-	}
-	_, ref, filename, err := w.findKnowledgeBase(knowledgeBasePath)
-	if err != nil {
-		return ViewResult{}, err
-	}
-	view := catalog.View{
-		ID:           id,
-		Title:        input.Title,
-		Description:  input.Description,
-		WhenToUse:    input.WhenToUse,
-		WhenNotToUse: input.WhenNotToUse,
-		Status:       input.Status,
-	}
-	action := ""
-	err = storage.WithFileLock(filename, func() error {
-		kb, err := catalog.LoadKnowledgeBaseFile(filename)
-		if err != nil {
-			return catalogLoadError(err)
-		}
-		bundleIDs, err := resolveViewBundleRefs(kb, id, input.Bundles)
-		if err != nil {
-			return err
-		}
-		view.Bundles = bundleIDs
-		action = catalog.SetView(&kb, view)
-		if err := catalog.WriteKnowledgeBaseFile(filename, kb); err != nil {
-			return catalogLoadError(err)
-		}
-		return nil
-	})
-	if err != nil {
-		return ViewResult{}, NormalizeError(err)
-	}
-	return ViewResult{KnowledgeBase: knowledgeBaseSummary(ref), View: view, Action: action}, nil
-}
-
-func (w *LocalWorkspace) DeleteKnowledgeBaseView(ctx context.Context, knowledgeBasePath string, viewID string) (ViewDeleteResult, error) {
-	_ = ctx
-	id, err := normalizeViewID(viewID)
-	if err != nil {
-		return ViewDeleteResult{}, err
-	}
-	_, ref, filename, err := w.findKnowledgeBase(knowledgeBasePath)
-	if err != nil {
-		return ViewDeleteResult{}, err
-	}
-	err = storage.WithFileLock(filename, func() error {
-		kb, err := catalog.LoadKnowledgeBaseFile(filename)
-		if err != nil {
-			return catalogLoadError(err)
-		}
-		if !catalog.DeleteView(&kb, id) {
-			return errorf(ErrValidationFailed, "View not found in Knowledge Base %s: %s", kb.Path, id)
-		}
-		if err := catalog.WriteKnowledgeBaseFile(filename, kb); err != nil {
-			return catalogLoadError(err)
-		}
-		return nil
-	})
-	if err != nil {
-		return ViewDeleteResult{}, NormalizeError(err)
-	}
-	return ViewDeleteResult{KnowledgeBase: knowledgeBaseSummary(ref), ViewID: id, Deleted: true}, nil
-}
-
 func (w *LocalWorkspace) catalogPaths() (catalogPaths, error) {
 	workDir := w.opts.WorkDir
 	if workDir == "" {
@@ -351,57 +281,6 @@ func (w *LocalWorkspace) findBundleLink(bundlePath string) (catalog.KnowledgeBas
 		}
 	}
 	return catalog.KnowledgeBaseRef{}, "", errorf(ErrMountNotFound, "Bundle link not found: %s", bundlePath)
-}
-
-func normalizeViewID(input string) (string, error) {
-	id := strings.TrimSpace(input)
-	if id == "" {
-		return "", errorf(ErrValidationFailed, "View id is required")
-	}
-	for _, r := range id {
-		if !isViewIDChar(r) {
-			return "", errorf(ErrValidationFailed, "Invalid View id: %s", input)
-		}
-	}
-	return id, nil
-}
-
-func isViewIDChar(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_'
-}
-
-func resolveViewBundleRefs(kb catalog.KnowledgeBase, viewID string, refs []string) ([]string, error) {
-	byID := map[string]string{}
-	byPath := map[string]string{}
-	for _, bundle := range kb.Bundles {
-		byID[bundle.ID] = bundle.ID
-		if normalized, err := vfs.NormalizePath(bundle.Path); err == nil {
-			byPath[normalized] = bundle.ID
-		}
-	}
-	seen := map[string]bool{}
-	bundleIDs := make([]string, 0, len(refs))
-	for _, raw := range refs {
-		ref := strings.TrimSpace(raw)
-		if ref == "" {
-			return nil, errorf(ErrValidationFailed, "View bundle id is required: %s", viewID)
-		}
-		id, ok := byID[ref]
-		if !ok {
-			if normalized, err := vfs.NormalizePath(ref); err == nil {
-				id, ok = byPath[normalized]
-			}
-		}
-		if !ok {
-			return nil, errorf(ErrValidationFailed, "View references unknown bundle: %s in %s", ref, viewID)
-		}
-		if seen[id] {
-			return nil, errorf(ErrValidationFailed, "Duplicate view bundle reference: %s in %s", id, viewID)
-		}
-		seen[id] = true
-		bundleIDs = append(bundleIDs, id)
-	}
-	return bundleIDs, nil
 }
 
 func loadLibraryAllowMissing(filename string) (catalog.Library, error) {

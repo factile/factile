@@ -8,7 +8,8 @@ description: Use local Factile OKF knowledge for architecture, design, documenta
 
 Factile exposes local OKF knowledge as a virtual filesystem.
 Reader commands work on paths such as `/`, `/engineering`, and `/engineering/django`; do not stop to classify a path as a Library, Knowledge Base, bundle link, or OKF folder before navigating it.
-When a Knowledge Base defines named Views, use `--view <id>` with `list`, `search`, `context`, or `graph` to narrow that reader operation.
+At a Knowledge Base path, reader commands include every linked Bundle. Use a narrower path when the task scope is specific.
+Use `--view <id>` on reader commands when a named library view matches the task; views narrow scope without changing document paths.
 
 Use Factile when the task may depend on repository-specific:
 
@@ -40,21 +41,28 @@ Do not use Factile for mechanical renames, formatting, syntax fixes, or obvious 
    factile stat <path> --json
    ```
 
-3. Get focused context for the task:
+3. When a named library view appears relevant, inspect it and use it to narrow reader commands:
+
+   ```bash
+   factile view inspect <view-id> --json
+   factile context / '<one sentence task summary>' --view <view-id> --json
+   ```
+
+4. Get focused context for the task:
 
    ```bash
    factile context / '<one sentence task summary>' --json
    ```
 
-4. If the context references a specific concept that matters, read it:
+5. If the context references a specific concept that matters, read it:
 
    ```bash
    factile read <concept-path> --json
    ```
 
-5. Use the retrieved knowledge to guide the work.
+6. Use the retrieved knowledge to guide the work.
 
-6. In the final response, mention the specific Factile concept paths used when relevant.
+7. In the final response, mention the specific Factile concept paths used when relevant.
 
 ## Rules
 

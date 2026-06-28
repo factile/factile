@@ -23,6 +23,8 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	}
 	if err := r.renderHelpSection(w, "Start here", []helpItem{
 		{command: "factile init", description: "Create .factile knowledge in this repo"},
+		{command: "factile", description: "Show this workspace summary"},
+		{command: "factile status", description: "Show this workspace summary"},
 		{command: "factile /", description: "Browse or read from a path"},
 		{command: "factile list /", description: "Browse available knowledge"},
 		{command: "factile list / --brief", description: "Show compact reader cards"},
@@ -54,13 +56,14 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		items []helpItem
 	}{
 		{title: "Reader commands", items: []helpItem{
+			{command: "status", description: "Show workspace knowledge, views, sources, and next commands"},
 			{command: "list [path] [--brief] [--view <id>]", description: "Browse folders and documents"},
 			{command: "stat <path>", description: "Show one compact card"},
 			{command: "read <concept-path>", description: "Read one document"},
 			{command: "search <path> <query> [--view <id>]", description: "Search local documents"},
 			{command: "context <path> <query> [--depth 0|1] [--view <id>]", description: "Assemble relevant context"},
 			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect local links"},
-			{command: "validate <path>", description: "Validate an OKF scope"},
+			{command: "validate <path> [--view <id>]", description: "Validate an OKF scope"},
 		}},
 		{title: "Curator commands", items: []helpItem{
 			{command: "kb list", description: "List Knowledge Bases"},
@@ -68,8 +71,10 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "kb create <kb-path> --title <title>", description: "Create a Knowledge Base"},
 			{command: "kb link <kb-path> <source> <bundle-path>", description: "Add a local Bundle"},
 			{command: "kb unlink <bundle-path>", description: "Remove a Bundle link"},
-			{command: "kb view set <kb-path> <view-id> --bundle <id-or-path>", description: "Create or replace a View"},
-			{command: "kb view delete <kb-path> <view-id>", description: "Delete a View"},
+			{command: "view list", description: "List library views"},
+			{command: "view inspect <id>", description: "Inspect a library view"},
+			{command: "view set <id> --title <title> --path <path>", description: "Create or replace a library view"},
+			{command: "view delete <id>", description: "Delete a library view"},
 		}},
 		{title: "Write commands", items: []helpItem{
 			{command: "create <concept-path> --type <type> --title <title> --body <file>", description: "Create a document"},

@@ -43,7 +43,10 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	if err != nil {
 		return ListResult{}, err
 	}
-	mounts, err := w.mountsForView(normalized, opts.View)
+	if strings.TrimSpace(opts.View) != "" {
+		return w.listForView(normalized, opts)
+	}
+	mounts, err := w.mounts()
 	if err != nil {
 		return ListResult{}, NormalizeError(err)
 	}
@@ -110,6 +113,55 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	return w.listResult(target.Path, folders, documents, opts)
 }
 
+func (w *LocalWorkspace) listForView(normalized string, opts ListOptions) (ListResult, error) {
+	if _, target, err := w.resolve(normalized); err == nil && target.Kind == TargetConcept {
+		return ListResult{}, errorf(ErrPathIsNotBundle, "Path is a concept, not a listable path: %s", target.Path)
+	}
+	scoped, err := w.scopeForView(normalized, opts.View)
+	if err != nil {
+		return ListResult{}, err
+	}
+	folders, documents := listEntriesFromScope(normalized, scoped)
+	return w.listResult(normalized, folders, documents, opts)
+}
+
+func listEntriesFromScope(current string, scoped scopedSet) ([]FolderSummary, []DocumentSummary) {
+	seenFolders := map[string]bool{}
+	var folders []FolderSummary
+	addFolder := func(path string) {
+		if seenFolders[path] {
+			return
+		}
+		seenFolders[path] = true
+		folders = append(folders, FolderSummary{Path: path, Title: titleFromPath(path)})
+	}
+	for _, visiblePath := range scoped.Paths {
+		if child, ok := immediateChildPath(current, visiblePath); ok {
+			addFolder(child)
+		}
+	}
+	seenDocuments := map[string]bool{}
+	var documents []DocumentSummary
+	for _, item := range scoped.Concepts {
+		entry, document, ok := immediateConceptEntry(current, item.Concept.Path)
+		if !ok {
+			continue
+		}
+		if !document {
+			addFolder(entry)
+			continue
+		}
+		if seenDocuments[entry] {
+			continue
+		}
+		seenDocuments[entry] = true
+		documents = append(documents, documentSummaryFromConcept(item.Summary))
+	}
+	sortFolderSummaries(folders)
+	sortDocumentSummaries(documents)
+	return folders, documents
+}
+
 func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOptions) (ConceptResult, error) {
 	_, target, err := w.resolve(inputPath)
 	if err != nil {
@@ -134,7 +186,7 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 		return SearchResults{}, errorf(ErrInvalidPath, "Search query must not be empty")
 	}
 	_ = ctx
-	scope, err := w.scope(inputPath, opts.View)
+	scope, err := w.scopeWithView(inputPath, opts.View)
 	if err != nil {
 		return SearchResults{}, err
 	}
@@ -174,7 +226,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	if err != nil {
 		return ContextPack{}, err
 	}
-	scope, err := w.scope(inputPath, opts.View)
+	scope, err := w.scopeWithView(inputPath, opts.View)
 	if err != nil {
 		return ContextPack{}, err
 	}
@@ -236,19 +288,20 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 	if err != nil {
 		return GraphResult{}, err
 	}
-	scope, err := w.scope(inputPath, opts.View)
+	scope, err := w.scopeWithView(inputPath, opts.View)
 	if err != nil {
 		return GraphResult{}, err
 	}
 	var target vfs.Target
 	targetResolved := false
-	_, resolved, err := w.resolveWithView(scope.Path, opts.View)
+	_, resolved, err := w.resolve(scope.Path)
 	if err == nil {
 		target = resolved
 		targetResolved = true
 	}
 	allConcepts := scope.Concepts
-	if targetResolved && target.Kind == TargetConcept {
+	viewID := strings.TrimSpace(opts.View)
+	if viewID == "" && targetResolved && target.Kind == TargetConcept {
 		allConcepts, err = w.scopeForMount(target.Mount, "")
 		if err != nil {
 			return GraphResult{}, err
@@ -285,7 +338,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 				addNode(item.Summary)
 				addNode(target.Summary)
 				edges = append(edges, GraphEdge{From: item.Concept.Path, To: targetPath, Kind: "markdown_link"})
-			} else {
+			} else if viewID == "" {
 				issues = append(issues, ValidationIssue{
 					Severity:  "warning",
 					Code:      "broken_link",
@@ -318,62 +371,72 @@ func normalizeLinkDepth(depth int) (int, error) {
 }
 
 func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts ValidateOptions) (ValidationResult, error) {
-	_, _ = ctx, opts
+	_ = ctx
 	if inputPath == "" {
 		inputPath = "/"
-	}
-	mounts, err := w.mounts()
-	if err != nil {
-		return ValidationResult{}, err
 	}
 	normalized, err := vfs.NormalizePath(inputPath)
 	if err != nil {
 		return ValidationResult{}, NormalizeError(err)
+	}
+	if viewID := strings.TrimSpace(opts.View); viewID != "" {
+		return w.validateViewScope(normalized, viewID)
+	}
+	resultPath, concepts, issues, err := w.validatePathScope(normalized)
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	issues = append(issues, linkIssues(concepts)...)
+	return ValidationResult{Path: resultPath, Valid: !hasErrors(issues), Issues: issues}, nil
+}
+
+func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedConcept, []ValidationIssue, error) {
+	mounts, err := w.mounts()
+	if err != nil {
+		return "", nil, nil, err
 	}
 	issues := []ValidationIssue{}
 	var concepts []scopedConcept
 	if normalized == "/" {
 		for _, mount := range mounts {
 			if err := ensureLocal(mount); err != nil {
-				return ValidationResult{}, err
+				return "", nil, nil, err
 			}
 			items, mountIssues, err := w.validateMountScope(mount, "")
 			if err != nil {
-				return ValidationResult{}, err
+				return "", nil, nil, err
 			}
 			concepts = append(concepts, items...)
 			issues = append(issues, mountIssues...)
 		}
-		issues = append(issues, linkIssues(concepts)...)
-		return ValidationResult{Path: "/", Valid: !hasErrors(issues), Issues: issues}, nil
+		return "/", concepts, issues, nil
 	}
 	target, err := vfs.Resolve(mounts, normalized)
 	if err != nil {
 		selected := mountsForVirtualPath(mounts, normalized)
 		if len(selected) == 0 {
-			return ValidationResult{}, NormalizeError(err)
+			return "", nil, nil, NormalizeError(err)
 		}
 		for _, mount := range selected {
 			if err := ensureLocal(mount); err != nil {
-				return ValidationResult{}, err
+				return "", nil, nil, err
 			}
 			items, mountIssues, err := w.validateMountScope(mount, "")
 			if err != nil {
-				return ValidationResult{}, err
+				return "", nil, nil, err
 			}
 			concepts = append(concepts, items...)
 			issues = append(issues, mountIssues...)
 		}
-		issues = append(issues, linkIssues(concepts)...)
-		return ValidationResult{Path: normalized, Valid: !hasErrors(issues), Issues: issues}, nil
+		return normalized, concepts, issues, nil
 	}
 	if err := ensureLocal(target.Mount); err != nil {
-		return ValidationResult{}, err
+		return "", nil, nil, err
 	}
 	if target.Kind == TargetConcept {
 		item, conceptIssues, err := w.validateConcept(target.Mount, target.ConceptID)
 		if err != nil {
-			return ValidationResult{}, err
+			return "", nil, nil, err
 		}
 		if item != nil {
 			concepts = append(concepts, *item)
@@ -381,17 +444,59 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 		issues = append(issues, conceptIssues...)
 	} else {
 		if target.Kind == TargetPath && !target.Exists {
-			return ValidationResult{}, errorf(ErrMountNotFound, "Path not found: %s", target.Path)
+			return "", nil, nil, errorf(ErrMountNotFound, "Path not found: %s", target.Path)
 		}
 		items, scopeIssues, err := w.validateMountScope(target.Mount, target.ConceptID)
 		if err != nil {
-			return ValidationResult{}, err
+			return "", nil, nil, err
 		}
 		concepts = append(concepts, items...)
 		issues = append(issues, scopeIssues...)
 	}
-	issues = append(issues, linkIssues(concepts)...)
-	return ValidationResult{Path: target.Path, Valid: !hasErrors(issues), Issues: issues}, nil
+	return target.Path, concepts, issues, nil
+}
+
+func (w *LocalWorkspace) validateViewScope(inputPath string, viewID string) (ValidationResult, error) {
+	normalized, selectedPaths, err := w.selectedViewPaths(inputPath, viewID)
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	fullPaths, err := w.localConceptPathSet()
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	seenConcepts := map[string]bool{}
+	seenIssues := map[string]bool{}
+	var concepts []scopedConcept
+	issues := []ValidationIssue{}
+	addIssue := func(issue ValidationIssue) {
+		key := issue.Severity + "\x00" + issue.Code + "\x00" + issue.Path + "\x00" + issue.ConceptID + "\x00" + issue.Message
+		if seenIssues[key] {
+			return
+		}
+		seenIssues[key] = true
+		issues = append(issues, issue)
+	}
+	for _, selectedPath := range selectedPaths {
+		_, items, itemIssues, err := w.validatePathScope(selectedPath)
+		if err != nil {
+			return ValidationResult{}, err
+		}
+		for _, item := range items {
+			if seenConcepts[item.Concept.Path] {
+				continue
+			}
+			seenConcepts[item.Concept.Path] = true
+			concepts = append(concepts, item)
+		}
+		for _, issue := range itemIssues {
+			addIssue(issue)
+		}
+	}
+	for _, issue := range linkIssuesAgainst(concepts, fullPaths) {
+		addIssue(issue)
+	}
+	return ValidationResult{Path: normalized, Valid: !hasErrors(issues), Issues: issues}, nil
 }
 
 func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input CreateConceptInput) (ConceptResult, error) {
@@ -823,11 +928,12 @@ type scopedConcept struct {
 
 type scopedSet struct {
 	Path      string
+	Paths     []string
 	Concepts  []scopedConcept
 	Summaries []ConceptSummary
 }
 
-func (w *LocalWorkspace) scope(inputPath string, view string) (scopedSet, error) {
+func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 	if inputPath == "" {
 		inputPath = "/"
 	}
@@ -835,7 +941,7 @@ func (w *LocalWorkspace) scope(inputPath string, view string) (scopedSet, error)
 	if err != nil {
 		return scopedSet{}, NormalizeError(err)
 	}
-	mounts, err := w.mountsForView(normalized, view)
+	mounts, err := w.mounts()
 	if err != nil {
 		return scopedSet{}, NormalizeError(err)
 	}
@@ -996,6 +1102,32 @@ func immediateChildPath(current string, candidate string) (string, bool) {
 	return current + "/" + first, true
 }
 
+func immediateConceptEntry(current string, candidate string) (string, bool, bool) {
+	if current == "/" {
+		rest := strings.TrimPrefix(candidate, "/")
+		if rest == "" {
+			return "", false, false
+		}
+		if !strings.Contains(rest, "/") {
+			return candidate, true, true
+		}
+		first := strings.Split(rest, "/")[0]
+		return "/" + first, false, true
+	}
+	if !strings.HasPrefix(candidate, current+"/") {
+		return "", false, false
+	}
+	rest := strings.TrimPrefix(candidate, current+"/")
+	if rest == "" {
+		return "", false, false
+	}
+	if !strings.Contains(rest, "/") {
+		return candidate, true, true
+	}
+	first := strings.Split(rest, "/")[0]
+	return current + "/" + first, false, true
+}
+
 func documentSummaryFromConcept(summary ConceptSummary) DocumentSummary {
 	return DocumentSummary{
 		Path:        summary.Path,
@@ -1090,6 +1222,31 @@ func validateScope(scope scopedSet) []ValidationIssue {
 	return issues
 }
 
+func (w *LocalWorkspace) localConceptPathSet() (map[string]bool, error) {
+	mounts, err := w.mounts()
+	if err != nil {
+		return nil, err
+	}
+	paths := map[string]bool{}
+	for _, mount := range mounts {
+		if err := ensureLocal(mount); err != nil {
+			return nil, err
+		}
+		store, err := storage.NewLocal(mount.SourcePath)
+		if err != nil {
+			return nil, NormalizeError(err)
+		}
+		ids, err := store.ListConceptIDs("")
+		if err != nil {
+			return nil, NormalizeError(err)
+		}
+		for _, id := range ids {
+			paths[mount.MountPath+"/"+okf.NormalizeConceptID(id)] = true
+		}
+	}
+	return paths, nil
+}
+
 func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]scopedConcept, []ValidationIssue, error) {
 	store, err := storage.NewLocal(mount.SourcePath)
 	if err != nil {
@@ -1143,6 +1300,10 @@ func linkIssues(concepts []scopedConcept) []ValidationIssue {
 	for _, item := range concepts {
 		byPath[item.Concept.Path] = true
 	}
+	return linkIssuesAgainst(concepts, byPath)
+}
+
+func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []ValidationIssue {
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
@@ -1224,18 +1385,6 @@ func (w *LocalWorkspace) backlinkWarnings(mount vfs.Mount, oldPath string) []Val
 
 func (w *LocalWorkspace) resolve(inputPath string) ([]vfs.Mount, vfs.Target, error) {
 	mounts, err := w.mounts()
-	if err != nil {
-		return nil, vfs.Target{}, NormalizeError(err)
-	}
-	target, err := vfs.Resolve(mounts, inputPath)
-	if err != nil {
-		return nil, vfs.Target{}, NormalizeError(err)
-	}
-	return mounts, target, nil
-}
-
-func (w *LocalWorkspace) resolveWithView(inputPath string, view string) ([]vfs.Mount, vfs.Target, error) {
-	mounts, err := w.mountsForView(inputPath, view)
 	if err != nil {
 		return nil, vfs.Target{}, NormalizeError(err)
 	}

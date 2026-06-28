@@ -1,14 +1,14 @@
 {
   "private": true,
   "name": "factile-npm-packaging",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "NPM packaging workspace for the Factile CLI.",
   "workspaces": [
     "packages/*",
     "platform/*"
   ],
   "scripts": {
-    "prepare:local": "node ./scripts/prepare-packages.mjs --build --out ./dist --version 0.1.0",
+    "prepare:local": "node ./scripts/prepare-packages.mjs --build --out ./dist --version 0.2.0",
     "smoke": "node ./scripts/smoke-test.mjs --root ./dist",
     "publish:prepared": "node ./scripts/publish.mjs --root ./dist"
   }

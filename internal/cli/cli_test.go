@@ -18,7 +18,7 @@ import (
 )
 
 func TestCLIHelpAndReadJSON(t *testing.T) {
-	for _, args := range [][]string{{}, {"--help"}} {
+	for _, args := range [][]string{{"--help"}} {
 		var stdout bytes.Buffer
 		code := Run(context.Background(), args, nil, &stdout, &bytes.Buffer{})
 		if code != 0 {
@@ -31,6 +31,7 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 		for _, expected := range []string{
 			"Start here",
 			"factile init",
+			"factile status",
 			"factile /",
 			"factile list /",
 			"factile context / \"what should I know?\"",
@@ -38,7 +39,6 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			"Reader commands",
 			"stat     <path>",
 			"Curator commands",
-			"kb view delete",
 			"Bundle admin",
 			"Agents and MCP",
 			"Use --json for scripts and agents",
@@ -53,13 +53,24 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			}
 		}
 		for _, expected := range []string{
-			"  kb list                                                   List Knowledge Bases",
-			"  kb inspect     <kb-path>                                  Inspect a Knowledge Base",
-			"  kb create      <kb-path> --title <title>                  Create a Knowledge Base",
-			"  kb link        <kb-path> <source> <bundle-path>           Add a local Bundle",
-			"  kb unlink      <bundle-path>                              Remove a Bundle link",
-			"  kb view set    <kb-path> <view-id> --bundle <id-or-path>  Create or replace a View",
-			"  kb view delete <kb-path> <view-id>                        Delete a View",
+			"kb list",
+			"List Knowledge Bases",
+			"kb inspect",
+			"Inspect a Knowledge Base",
+			"kb create",
+			"Create a Knowledge Base",
+			"kb link",
+			"Add a local Bundle",
+			"kb unlink",
+			"Remove a Bundle link",
+			"view list",
+			"List library views",
+			"view inspect",
+			"Inspect a library view",
+			"view set",
+			"Create or replace a library view",
+			"view delete",
+			"Delete a library view",
 		} {
 			if !strings.Contains(help, expected) {
 				t.Fatalf("help for %v missing aligned curator row %q:\n%s", args, expected, help)
@@ -81,6 +92,44 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"path": "/product-docs/workflows/invoice-import"`) || !strings.Contains(stdout.String(), `"revision": "sha256:`) {
 		t.Fatalf("unexpected read JSON: %s", stdout.String())
+	}
+}
+
+func TestCLIBareWorkspaceSummary(t *testing.T) {
+	workspace := cliCatalogWorkspace(t)
+	t.Chdir(workspace)
+	runCLIJSON[factile.ViewResult](t, "view", "set", "invoice", "--title", "Invoice", "--path", "/engineering/django/workflows/invoice-import", "--path", "/legacy", "--json")
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("bare summary exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{"Factile workspace", "Path: " + workspace, "Version:", "Knowledge:", "/engineering", "Knowledge Views:", "invoice  Invoice", "Sources:", "/legacy ->", "Health:", "Next:", "factile context / \"<task>\" --view invoice"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("bare summary missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Reader commands") || strings.Contains(output, "Usage") {
+		t.Fatalf("bare summary should not print full help:\n%s", output)
+	}
+
+	summary := runCLIJSON[factile.SummaryResult](t, "status", "--json")
+	if summary.Workspace.Path != workspace || len(summary.Knowledge) == 0 || len(summary.Views) != 1 || len(summary.Sources) == 0 || len(summary.NextCommands) == 0 {
+		t.Fatalf("unexpected status JSON summary: %#v", summary)
+	}
+
+	empty := t.TempDir()
+	t.Chdir(empty)
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("empty summary exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "No local knowledge configured.") || !strings.Contains(stdout.String(), "factile init") {
+		t.Fatalf("empty summary missing setup next command:\n%s", stdout.String())
 	}
 }
 
@@ -135,13 +184,16 @@ func TestCLISubcommandHelp(t *testing.T) {
 		want string
 	}{
 		{name: "list", args: []string{"list", "--help"}, want: "factile list [path] [--brief] [--view <id>]"},
+		{name: "status", args: []string{"status", "--help"}, want: "factile status"},
+		{name: "search", args: []string{"search", "--help"}, want: "factile search <path> <query> [--view <id>]"},
 		{name: "create", args: []string{"create", "--help"}, want: "factile create <concept-path> --type <type> --title <title> --body <file>"},
 		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]"},
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
-		{name: "kb group", args: []string{"kb", "--help"}, want: "factile kb list|inspect|create|link|unlink|view"},
+		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]"},
+		{name: "kb group", args: []string{"kb", "--help"}, want: "factile kb list|inspect|create|link|unlink"},
 		{name: "kb leaf", args: []string{"kb", "create", "--help"}, want: "factile kb create <kb-path> --title <title> [--description <text>]"},
-		{name: "kb view", args: []string{"kb", "view", "--help"}, want: "factile kb view set|delete"},
-		{name: "kb view set", args: []string{"kb", "view", "set", "--help"}, want: "factile kb view set <kb-path> <view-id> --bundle <id-or-path> [--title <title>] [--description <text>]"},
+		{name: "view group", args: []string{"view", "--help"}, want: "factile view list|inspect|set|delete"},
+		{name: "view leaf", args: []string{"view", "set", "--help"}, want: "factile view set <id> --title <title> --path <path> [--description <text>]"},
 		{name: "bundle group", args: []string{"bundle", "--help"}, want: "factile bundle find|inspect|mount|unmount|list"},
 		{name: "bundle leaf", args: []string{"bundle", "inspect", "--help"}, want: "factile bundle inspect <source>"},
 		{name: "skill group", args: []string{"skill", "--help"}, want: "factile skill list|inspect|install|uninstall|doctor"},
@@ -484,13 +536,8 @@ func TestCLIJSONKnowledgeBaseAndBundleContracts(t *testing.T) {
 		t.Fatalf("unexpected kb link contract: %#v", linked)
 	}
 
-	view := runCLIJSON[factile.ViewResult](t, "kb", "view", "set", "/engineering", "reader", "--bundle", "/engineering/django", "--title", "Reader", "--json")
-	if view.Action != "created" || view.KnowledgeBase.Path != "/engineering" || view.View.ID != "reader" || view.View.Title != "Reader" || strings.Join(view.View.Bundles, ",") != "engineering-django" {
-		t.Fatalf("unexpected kb view contract: %#v", view)
-	}
-
 	inspected := runCLIJSON[factile.KnowledgeBaseResult](t, "kb", "inspect", "/engineering", "--json")
-	if inspected.KnowledgeBase.Path != "/engineering" || len(inspected.KnowledgeBase.Bundles) != 1 || len(inspected.KnowledgeBase.Views) != 1 {
+	if inspected.KnowledgeBase.Path != "/engineering" || len(inspected.KnowledgeBase.Bundles) != 1 {
 		t.Fatalf("unexpected kb inspect contract: %#v", inspected)
 	}
 
@@ -517,14 +564,78 @@ func TestCLIJSONKnowledgeBaseAndBundleContracts(t *testing.T) {
 		t.Fatalf("unexpected bundle unmount contract: %#v", unmounted)
 	}
 
-	deletedView := runCLIJSON[factile.ViewDeleteResult](t, "kb", "view", "delete", "/engineering", "reader", "--json")
-	if deletedView.KnowledgeBase.Path != "/engineering" || deletedView.ViewID != "reader" || !deletedView.Deleted {
-		t.Fatalf("unexpected kb view delete contract: %#v", deletedView)
-	}
 	unlinked := runCLIJSON[factile.BundleUnlinkResult](t, "kb", "unlink", "/engineering/django", "--json")
 	if unlinked.KnowledgeBase.Path != "/engineering" || unlinked.BundlePath != "/engineering/django" || !unlinked.Removed {
 		t.Fatalf("unexpected kb unlink contract: %#v", unlinked)
 	}
+}
+
+func TestCLIJSONLibraryViewContracts(t *testing.T) {
+	workspace := cliCatalogWorkspace(t)
+	t.Chdir(workspace)
+	workflowPath := "/engineering/django/workflows/invoice-import"
+	runbookPath := "/engineering/django/runbooks/ocr-failure"
+	legacyPath := "/legacy/notes/legacy"
+
+	empty := runCLIJSON[factile.ViewListResult](t, "view", "list", "--json")
+	if len(empty.Views) != 0 {
+		t.Fatalf("unexpected initial view list: %#v", empty)
+	}
+
+	set := runCLIJSON[factile.ViewResult](t,
+		"view", "set", "invoice",
+		"--title", "Invoice",
+		"--description", "Invoice workflow, runbooks, and legacy notes.",
+		"--path", workflowPath,
+		"--path", runbookPath,
+		"--path", "/legacy",
+		"--json",
+	)
+	if set.Action != "created" || set.View.ID != "invoice" || set.View.Title != "Invoice" || strings.Join(set.View.Paths, ",") != workflowPath+","+runbookPath+",/legacy" {
+		t.Fatalf("unexpected view set contract: %#v", set)
+	}
+
+	inspected := runCLIJSON[factile.ViewResult](t, "view", "inspect", "invoice", "--json")
+	if inspected.View.ID != "invoice" || len(inspected.View.Paths) != 3 {
+		t.Fatalf("unexpected view inspect contract: %#v", inspected)
+	}
+	list := runCLIJSON[factile.ViewListResult](t, "view", "list", "--json")
+	if len(list.Views) != 1 || list.Views[0].ID != "invoice" {
+		t.Fatalf("unexpected view list contract: %#v", list)
+	}
+
+	viewList := runCLIJSON[factile.ListResult](t, "list", "/", "--view", "invoice", "--json")
+	if !hasFolderPath(viewList.Folders, "/engineering") || !hasFolderPath(viewList.Folders, "/legacy") || hasFolderPath(viewList.Folders, "/support") {
+		t.Fatalf("unexpected list --view contract: %#v", viewList)
+	}
+
+	search := runCLIJSON[factile.SearchResults](t, "search", "/", "legacy", "--view", "invoice", "--json")
+	if !hasSearchResultPath(search.Results, legacyPath) || hasSearchResultPath(search.Results, "/engineering/common/guides/setup") {
+		t.Fatalf("unexpected search --view contract: %#v", search)
+	}
+
+	contextPack := runCLIJSON[factile.ContextPack](t, "context", "/engineering", "posted", "--view", "invoice", "--json")
+	if !hasConceptPath(contextPack.Concepts, workflowPath) || !hasConceptPath(contextPack.Concepts, runbookPath) || hasConceptPath(contextPack.Concepts, legacyPath) {
+		t.Fatalf("unexpected context --view contract: %#v", contextPack)
+	}
+
+	graph := runCLIJSON[factile.GraphResult](t, "graph", "/engineering", "--view", "invoice", "--json")
+	if !hasGraphNodePath(graph.Nodes, workflowPath) || !hasGraphNodePath(graph.Nodes, runbookPath) || !hasGraphEdge(graph.Edges, workflowPath, runbookPath, "markdown_link") || hasGraphNodePath(graph.Nodes, "/engineering/common/guides/setup") {
+		t.Fatalf("unexpected graph --view contract: %#v", graph)
+	}
+
+	validated := runCLIJSON[factile.ValidationResult](t, "validate", "/engineering", "--view", "invoice", "--json")
+	if !validated.Valid || len(validated.Issues) != 0 {
+		t.Fatalf("unexpected validate --view contract: %#v", validated)
+	}
+
+	deleted := runCLIJSON[factile.ViewDeleteResult](t, "view", "delete", "invoice", "--json")
+	if !deleted.Deleted || deleted.ID != "invoice" {
+		t.Fatalf("unexpected view delete contract: %#v", deleted)
+	}
+
+	assertCLIJSONError(t, 4, factile.ErrMountNotFound, "View not found: missing", "list", "/", "--view", "missing", "--json")
+	assertCLIJSONError(t, 4, factile.ErrMountNotFound, "View not found: missing", "view", "inspect", "missing", "--json")
 }
 
 func TestCLIJSONSkillContracts(t *testing.T) {
@@ -582,7 +693,6 @@ func TestCLIJSONErrorContractShapes(t *testing.T) {
 	t.Chdir(tmp)
 	runCLIJSON[factile.KnowledgeBaseResult](t, "kb", "create", "/engineering", "--title", "Engineering", "--json")
 	assertCLIJSONError(t, 6, factile.ErrUnsupportedSource, "Remote bundle sources are not implemented in Phase 1", "kb", "link", "/engineering", "factile://shared", "/engineering/shared", "--json")
-	assertCLIJSONError(t, 3, factile.ErrValidationFailed, "View references unknown bundle", "kb", "view", "set", "/engineering", "reader", "--bundle", "missing", "--json")
 }
 
 func TestCLITextModeNoJSONFallbackMatrix(t *testing.T) {
@@ -899,7 +1009,7 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(string(skillFile), "Reader mode is installed") ||
 		!strings.Contains(string(skillFile), "Reader commands work on paths") ||
-		!strings.Contains(string(skillFile), "--view <id>") ||
+		!strings.Contains(string(skillFile), "Use a narrower path when the task scope is specific.") ||
 		!strings.Contains(string(skillFile), "factile context / '<task>' --json") ||
 		strings.Contains(string(skillFile), "--format json") {
 		t.Fatalf("reader mode guidance missing:\n%s", string(skillFile))
@@ -1265,16 +1375,6 @@ func TestCLIKnowledgeBaseCommands(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "set", "/engineering", "reader", "--bundle", "/engineering/django", "--title", "Reader", "--format", "json"}, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("kb view set exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), `"id": "reader"`) || !strings.Contains(stdout.String(), `"bundles": [`) || !strings.Contains(stdout.String(), `"engineering-django"`) {
-		t.Fatalf("unexpected kb view set JSON:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
 	code = Run(context.Background(), []string{"kb", "inspect", "/engineering", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("kb inspect exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -1286,10 +1386,6 @@ func TestCLIKnowledgeBaseCommands(t *testing.T) {
 				Path   string `json:"path"`
 				Source string `json:"source"`
 			} `json:"bundles"`
-			Views []struct {
-				ID      string   `json:"id"`
-				Bundles []string `json:"bundles"`
-			} `json:"views"`
 		} `json:"knowledge_base"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &inspected); err != nil {
@@ -1298,28 +1394,15 @@ func TestCLIKnowledgeBaseCommands(t *testing.T) {
 	if inspected.KnowledgeBase.Path != "/engineering" || len(inspected.KnowledgeBase.Bundles) != 1 || inspected.KnowledgeBase.Bundles[0].Path != "/engineering/django" {
 		t.Fatalf("unexpected inspect result: %#v", inspected)
 	}
-	if len(inspected.KnowledgeBase.Views) != 1 || inspected.KnowledgeBase.Views[0].ID != "reader" || strings.Join(inspected.KnowledgeBase.Views[0].Bundles, ",") != "engineering-django" {
-		t.Fatalf("unexpected inspect views: %#v", inspected.KnowledgeBase.Views)
-	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"list", "/engineering", "--view", "reader", "--format", "json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"list", "/engineering", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("reader list via catalog exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"path": "/engineering/django"`) || strings.Contains(stdout.String(), `"source"`) {
 		t.Fatalf("unexpected reader list through kb catalog:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "delete", "/engineering", "reader", "--format", "json"}, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("kb view delete exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), `"view_id": "reader"`) || !strings.Contains(stdout.String(), `"deleted": true`) {
-		t.Fatalf("unexpected kb view delete JSON:\n%s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -1360,20 +1443,6 @@ func TestCLIKnowledgeBaseCommandFailures(t *testing.T) {
 	code = Run(context.Background(), []string{"kb", "link", "/engineering", "factile://shared", "/engineering/shared", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 6 || !strings.Contains(stderr.String(), `"code":"unsupported_source"`) {
 		t.Fatalf("expected unsupported source, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "set", "/engineering", "reader", "--bundle", "missing", "--format", "json"}, nil, &stdout, &stderr)
-	if code != 3 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
-		t.Fatalf("expected missing view bundle failure, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "delete", "/engineering", "reader", "--format", "json"}, nil, &stdout, &stderr)
-	if code != 3 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
-		t.Fatalf("expected missing view delete failure, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
 	conflict := t.TempDir()
@@ -1461,7 +1530,7 @@ func TestCLIReaderTextOutput(t *testing.T) {
 	assertNotJSONText(t, readOutput)
 }
 
-func TestCLIReaderBriefStatAndViewTextOutput(t *testing.T) {
+func TestCLIReaderBriefStatAndKnowledgeBaseTextOutput(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", "testdata", "catalog-workspace"))
 
 	var stdout, stderr bytes.Buffer
@@ -1493,20 +1562,17 @@ func TestCLIReaderBriefStatAndViewTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"list", "/engineering", "--view", "reader", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"list", "/engineering", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("view list text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		t.Fatalf("KB list text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	viewOutput := stdout.String()
-	for _, want := range []string{"/engineering/django", "/engineering/common"} {
-		if !strings.Contains(viewOutput, want) {
-			t.Fatalf("view list text missing %q:\n%s", want, viewOutput)
+	kbOutput := stdout.String()
+	for _, want := range []string{"/engineering/django", "/engineering/common", "/engineering/playbook"} {
+		if !strings.Contains(kbOutput, want) {
+			t.Fatalf("KB list text missing %q:\n%s", want, kbOutput)
 		}
 	}
-	if strings.Contains(viewOutput, "/engineering/playbook") {
-		t.Fatalf("view list text included filtered bundle:\n%s", viewOutput)
-	}
-	assertNotJSONText(t, viewOutput)
+	assertNotJSONText(t, kbOutput)
 }
 
 func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
@@ -1588,32 +1654,28 @@ func TestCLIRejectsUnsupportedDepth(t *testing.T) {
 	}
 }
 
-func TestCLIReaderViewQueryGraphTextOutput(t *testing.T) {
+func TestCLIReaderKnowledgeBaseQueryGraphTextOutput(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", "testdata", "catalog-workspace"))
 
 	cases := []struct {
-		name      string
-		args      []string
-		want      []string
-		forbidden []string
+		name string
+		args []string
+		want []string
 	}{
 		{
-			name:      "search",
-			args:      []string{"search", "/engineering", "invoice", "--view", "reader", "--color", "never"},
-			want:      []string{"Search /engineering", "/engineering/django/workflows/invoice-import"},
-			forbidden: []string{"/engineering/playbook"},
+			name: "search",
+			args: []string{"search", "/engineering", "setup", "--color", "never"},
+			want: []string{"Search /engineering", "/engineering/common/guides/setup", "/engineering/playbook/guides/setup"},
 		},
 		{
-			name:      "context",
-			args:      []string{"context", "/engineering", "invoice import workflow", "--view", "reader", "--color", "never"},
-			want:      []string{"Context /engineering", "/engineering/django/workflows/invoice-import"},
-			forbidden: []string{"/engineering/playbook"},
+			name: "context",
+			args: []string{"context", "/engineering", "setup", "--color", "never"},
+			want: []string{"Context /engineering", "/engineering/common/guides/setup", "/engineering/playbook/guides/setup"},
 		},
 		{
-			name:      "graph",
-			args:      []string{"graph", "/engineering", "--view", "reader", "--color", "never"},
-			want:      []string{"Graph /engineering", "/engineering/django/workflows/invoice-import", "/engineering/common/guides/setup"},
-			forbidden: []string{"/engineering/playbook"},
+			name: "graph",
+			args: []string{"graph", "/engineering", "--color", "never"},
+			want: []string{"Graph /engineering", "/engineering/django/workflows/invoice-import", "/engineering/common/guides/setup", "/engineering/playbook/guides/setup"},
 		},
 	}
 	for _, tc := range cases {
@@ -1627,11 +1689,6 @@ func TestCLIReaderViewQueryGraphTextOutput(t *testing.T) {
 			for _, want := range tc.want {
 				if !strings.Contains(output, want) {
 					t.Fatalf("%s text missing %q:\n%s", tc.name, want, output)
-				}
-			}
-			for _, forbidden := range tc.forbidden {
-				if strings.Contains(output, forbidden) {
-					t.Fatalf("%s text contained filtered path %q:\n%s", tc.name, forbidden, output)
 				}
 			}
 			assertNotJSONText(t, output)
@@ -1759,21 +1816,11 @@ func TestCLICuratorAndBundleTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "set", "/engineering", "reader", "--bundle", "/engineering/django", "--title", "Reader", "--color", "never"}, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("kb view set text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "Created View reader") || !strings.Contains(stdout.String(), "Bundles: engineering-django") {
-		t.Fatalf("kb view set text unexpected:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
 	code = Run(context.Background(), []string{"kb", "inspect", "/engineering", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("kb inspect text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "Knowledge Base /engineering") || !strings.Contains(stdout.String(), "Bundles:") || !strings.Contains(stdout.String(), "/engineering/django -> "+source) || !strings.Contains(stdout.String(), "Views:") {
+	if !strings.Contains(stdout.String(), "Knowledge Base /engineering") || !strings.Contains(stdout.String(), "Bundles:") || !strings.Contains(stdout.String(), "/engineering/django -> "+source) {
 		t.Fatalf("kb inspect text unexpected:\n%s", stdout.String())
 	}
 	assertNotJSONText(t, stdout.String())
@@ -1830,16 +1877,6 @@ func TestCLICuratorAndBundleTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"kb", "view", "delete", "/engineering", "reader", "--color", "never"}, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("kb view delete text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "Deleted View reader") {
-		t.Fatalf("kb view delete text unexpected:\n%s", stdout.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
 	code = Run(context.Background(), []string{"kb", "unlink", "/engineering/django", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("kb unlink text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -1849,88 +1886,78 @@ func TestCLICuratorAndBundleTextOutput(t *testing.T) {
 	}
 }
 
-func TestCLIKnowledgeBaseInspectTextShowsViews(t *testing.T) {
+func TestCLIViewCommandsTextOutput(t *testing.T) {
+	workspace := cliCatalogWorkspace(t)
+	t.Chdir(workspace)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"view", "set", "invoice", "--title", "Invoice", "--description", "Invoice docs", "--path", "/engineering/django/workflows/invoice-import", "--path", "/legacy", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("view set text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"Created Library View invoice", "Title:", "Invoice", "Description:", "Invoice docs", "Paths:", "/engineering/django/workflows/invoice-import", "/legacy"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("view set text missing %q:\n%s", want, stdout.String())
+		}
+	}
+	assertNotJSONText(t, stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"view", "list", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("view list text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Library Views:") || !strings.Contains(stdout.String(), "invoice  Invoice") {
+		t.Fatalf("view list text unexpected:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"view", "inspect", "invoice", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("view inspect text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Library View invoice") || !strings.Contains(stdout.String(), "/legacy") {
+		t.Fatalf("view inspect text unexpected:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"list", "/", "--view", "invoice", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("list --view text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "/engineering") || !strings.Contains(stdout.String(), "/legacy") || strings.Contains(stdout.String(), "/engineering/common") {
+		t.Fatalf("list --view text unexpected:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"view", "delete", "invoice", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("view delete text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Deleted Library View invoice") {
+		t.Fatalf("view delete text unexpected:\n%s", stdout.String())
+	}
+}
+
+func TestCLIKnowledgeBaseInspectTextShowsBundles(t *testing.T) {
 	t.Chdir(filepath.Join("..", "..", "testdata", "catalog-workspace"))
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"kb", "inspect", "/engineering", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("kb inspect views text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		t.Fatalf("kb inspect text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	output := stdout.String()
-	for _, want := range []string{"Knowledge Base /engineering", "Views:", "reader", "Reader", "django"} {
+	for _, want := range []string{"Knowledge Base /engineering", "Bundles:", "/engineering/django", "/engineering/common", "/engineering/playbook"} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("kb inspect views text missing %q:\n%s", want, output)
+			t.Fatalf("kb inspect text missing %q:\n%s", want, output)
 		}
 	}
 	assertNotJSONText(t, output)
-}
-
-func TestCLIViewSelectors(t *testing.T) {
-	t.Chdir(filepath.Join("..", "..", "testdata", "catalog-workspace"))
-
-	cases := []struct {
-		name      string
-		args      []string
-		want      []string
-		forbidden []string
-	}{
-		{
-			name:      "list",
-			args:      []string{"list", "/engineering", "--view", "reader", "--format", "json"},
-			want:      []string{`"path": "/engineering/django"`, `"path": "/engineering/common"`},
-			forbidden: []string{`"path": "/engineering/playbook"`},
-		},
-		{
-			name:      "brief list",
-			args:      []string{"list", "/engineering", "--brief", "--view", "reader", "--format", "json"},
-			want:      []string{`"cards"`, `"path": "/engineering/django"`, `"path": "/engineering/common"`},
-			forbidden: []string{`"folders"`, `"path": "/engineering/playbook"`},
-		},
-		{
-			name:      "search",
-			args:      []string{"search", "/engineering", "invoice", "--view", "reader", "--format", "json"},
-			want:      []string{`"path": "/engineering/django/workflows/invoice-import"`},
-			forbidden: []string{`"path": "/engineering/playbook"`},
-		},
-		{
-			name:      "context",
-			args:      []string{"context", "/engineering", "invoice import workflow", "--view", "reader", "--format", "json"},
-			want:      []string{`"path": "/engineering/django/workflows/invoice-import"`},
-			forbidden: []string{`"path": "/engineering/playbook"`},
-		},
-		{
-			name:      "graph",
-			args:      []string{"graph", "/engineering", "--view", "reader", "--format", "json"},
-			want:      []string{`"path": "/engineering/django/workflows/invoice-import"`, `"path": "/engineering/common/guides/setup"`},
-			forbidden: []string{`"path": "/engineering/playbook"`},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			code := Run(context.Background(), tc.args, nil, &stdout, &stderr)
-			if code != 0 {
-				t.Fatalf("%s exit code = %d stdout=%s stderr=%s", tc.name, code, stdout.String(), stderr.String())
-			}
-			for _, want := range tc.want {
-				if !strings.Contains(stdout.String(), want) {
-					t.Fatalf("%s output missing %s:\n%s", tc.name, want, stdout.String())
-				}
-			}
-			for _, forbidden := range tc.forbidden {
-				if strings.Contains(stdout.String(), forbidden) {
-					t.Fatalf("%s output contained %s:\n%s", tc.name, forbidden, stdout.String())
-				}
-			}
-		})
-	}
-
-	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"list", "/engineering", "--view", "missing", "--format", "json"}, nil, &stdout, &stderr)
-	if code != 3 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
-		t.Fatalf("expected validation_failed for unknown view, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
 }
 
 func TestCLISkillDoctorJSON(t *testing.T) {
@@ -2020,6 +2047,15 @@ writable = true
 		t.Fatal(err)
 	}
 	return mountFile
+}
+
+func cliCatalogWorkspace(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	copyTestDir(t, filepath.Join("..", "..", "testdata", "catalog-workspace"), workspace)
+	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	return workspace
 }
 
 func copyTestDir(t *testing.T, src, dst string) {
@@ -2160,6 +2196,15 @@ func hasGraphNodePath(nodes []factile.GraphNode, path string) bool {
 func hasGraphEdge(edges []factile.GraphEdge, from string, to string, kind string) bool {
 	for _, edge := range edges {
 		if edge.From == from && edge.To == to && edge.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSearchResultPath(results []factile.SearchResult, path string) bool {
+	for _, result := range results {
+		if result.Concept.Path == path {
 			return true
 		}
 	}

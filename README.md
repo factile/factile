@@ -11,7 +11,7 @@ Factile is a local-first command line tool for Open Knowledge Format bundles. It
 mounts local Markdown knowledge, gives it stable virtual paths, and exposes the
 same reader contract through a native Go CLI and a local stdio MCP server.
 
-Status: early local-first v0.1.1. JSON output is intended as the stable
+Status: early local-first v0.2.0. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
@@ -22,15 +22,24 @@ auth, marketplace search, or cloud sync in this repository.
 
 Factile is one Go binary named `factile`.
 
-Install with npm:
+The recommended install method is npm:
 
 ```bash
 npm install -g factile
 factile version
 ```
 
-The npm package also installs `ft` as a shorter alias. It only installs the
-binary; repository setup remains explicit with `factile init`.
+The npm package installs the native binary for your platform and also installs
+`ft` as a shorter alias. It only installs the binary; repository setup remains
+explicit with `factile init`.
+
+If you prefer the scoped package name, it is available as an alias:
+
+```bash
+npm install -g @factile/cli
+```
+
+Other install methods are available when npm is not the right fit.
 
 Build or install from source:
 
@@ -38,14 +47,14 @@ Build or install from source:
 go install github.com/factile/factile/cmd/factile@latest
 ```
 
-Release builds are published as GitHub Release archives with `checksums.txt` for
-Linux, macOS, and Windows. Download the archive for your platform, unpack it,
-and put `factile` on your `PATH`.
+GitHub Release archives are published with `checksums.txt` for Linux, macOS,
+and Windows. Download the archive for your platform, unpack it, and put
+`factile` on your `PATH`.
 
 The installer script supports Linux and macOS. Pin the release tag you want:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.1.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.2.0/install.sh | bash
 ```
 
 From a checkout, build directly:
@@ -61,6 +70,7 @@ Initialize Factile in a repository:
 
 ```bash
 factile init
+factile
 factile list /
 factile list / --brief
 factile stat /project
@@ -71,6 +81,11 @@ By default, `factile init` creates a local knowledge bundle at
 `./.factile/knowledge/`, catalogs it under `./.factile/`, and mounts it at
 `/project`. If `--agent` is not supplied, Factile installs guidance for
 supported agents it detects in the repository.
+
+Bare `factile` prints a concise workspace summary: configured knowledge paths,
+library views, source wiring, shallow health, and useful next commands. Use
+`factile --help` for the full command reference or `factile status --json` for
+the stable structured summary.
 
 Use a custom knowledge location or explicit agent:
 
@@ -109,9 +124,24 @@ factile graph /project
 factile validate /project
 ```
 
-Use `--view <id>` with `list`, `search`, `context`, and `graph` when a Knowledge
-Base defines named Views. Views narrow which bundles are read for that command
-without changing canonical document paths.
+At a Knowledge Base path, reader commands include every linked Bundle. Use a
+deeper bundle or folder path when the task scope is specific.
+
+Use a library view when one task needs a repeatable lens across department-owned
+Knowledge Bases and direct mounts:
+
+```bash
+factile view set invoice-import --title "Invoice Import" \
+  --path /engineering/docs/workflows/invoice-import \
+  --path /support/runbooks/imports
+factile list / --view invoice-import
+factile context / "how should invoice imports handle OCR failure?" --view invoice-import
+factile validate / --view invoice-import
+```
+
+Views live in `.factile/library.toml`, store ordered existing Factile paths, and
+do not create fake folders or change document identity. `read` remains
+path-only.
 
 ## JSON
 
@@ -135,9 +165,11 @@ factile --mount-file ./testdata/mounts.toml mcp serve --stdio --read-only
 
 The MCP adapter uses the same workspace API and JSON models as the CLI. Reader
 mode exposes `factile_list`, `factile_stat`, `factile_read`, `factile_search`,
-`factile_context`, `factile_graph`, `factile_validate`, and read-only Knowledge
-Base inspection tools. Write-capable mode adds catalog and document mutation
-tools; use `--read-only` for default agent reading.
+`factile_context`, `factile_graph`, `factile_validate`, read-only Knowledge Base
+inspection tools, and read-only library view inspection tools. Reader tools
+accept the same view selector as CLI reader commands through a `view` argument.
+Write-capable mode adds catalog, view, and document mutation tools; use
+`--read-only` for default agent reading.
 
 ## Curating Knowledge
 
@@ -148,9 +180,16 @@ factile kb list
 factile kb inspect /project
 factile kb create /engineering --title "Engineering"
 factile kb link /engineering ./testdata/bundles/product-docs /engineering/docs --title "Docs" --read-only
-factile kb view set /engineering reader --bundle /engineering/docs
-factile kb view delete /engineering reader
 factile kb unlink /engineering/docs
+```
+
+Library view commands manage task or audience lenses:
+
+```bash
+factile view list
+factile view inspect invoice-import
+factile view set invoice-import --title "Invoice Import" --path /engineering/docs --path /support/runbooks
+factile view delete invoice-import
 ```
 
 Document write commands require explicit revisions for existing concepts:
@@ -179,7 +218,7 @@ Curator mode installs catalog/write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.1.1; there is no recipe runner or `factile recipe` command.
+v0.2.0; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -194,7 +233,7 @@ Trace logging is local-only and disabled unless the environment variable is set.
 
 ## Known Limitations
 
-Factile v0.1.1 is intentionally local-only:
+Factile v0.2.0 is intentionally local-only:
 
 - There is no hosted service, remote bundle sync, auth, marketplace, billing, or
   cloud MCP in this repository.
@@ -202,11 +241,11 @@ Factile v0.1.1 is intentionally local-only:
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
 - The broader documentation bundle is not published in this repository yet; the
-  README covers the supported v0.1.1 surface.
+  README covers the supported v0.2.0 surface.
 
 ## Supported Platforms
 
-Release archives target:
+npm packages and release archives target:
 
 - Linux amd64 and arm64
 - macOS amd64 and arm64

@@ -1,6 +1,7 @@
 package factile_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/factile/factile/internal/cli/render"
 	"github.com/factile/factile/pkg/factile"
 )
 
@@ -57,7 +59,7 @@ func TestReaderCuratorPerspectiveGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual := assertGoldenJSON(t, inspected, "curator-kb-inspect.json")
-	for _, exposed := range []string{`"source"`, `"kind"`, `"writable"`, `"trust"`, `"views"`} {
+	for _, exposed := range []string{`"source"`, `"kind"`, `"writable"`, `"trust"`} {
 		if !strings.Contains(actual, exposed) {
 			t.Fatalf("curator output did not expose %s:\n%s", exposed, actual)
 		}
@@ -67,196 +69,365 @@ func TestReaderCuratorPerspectiveGoldens(t *testing.T) {
 	}
 }
 
-func TestWorkspaceViewSelectionScopesReaderOperations(t *testing.T) {
+func TestWorkspaceKnowledgeBaseReaderOperationsUseAllBundles(t *testing.T) {
 	workspaceDir := filepath.Join("..", "..", "testdata", "catalog-workspace")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
 	ctx := context.Background()
 
-	defaultList, err := ws.List(ctx, "/engineering", factile.ListOptions{})
+	list, err := ws.List(ctx, "/engineering", factile.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defaultList.Folders) != 3 {
-		t.Fatalf("default view should include all bundles: %#v", defaultList.Folders)
+	wantFolders := []string{"/engineering/common", "/engineering/django", "/engineering/playbook"}
+	if got := folderPaths(list.Folders); strings.Join(got, ",") != strings.Join(wantFolders, ",") {
+		t.Fatalf("KB folders = %#v, want %#v", got, wantFolders)
 	}
 
-	readerList, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "reader"})
+	search, err := ws.Search(ctx, "/engineering", "setup", factile.SearchOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantFolders := []string{"/engineering/django", "/engineering/common"}
-	if got := folderPaths(readerList.Folders); strings.Join(got, ",") != strings.Join(wantFolders, ",") {
-		t.Fatalf("reader view folders = %#v, want %#v", got, wantFolders)
+	if !searchHasPath(search, "/engineering/common/guides/setup") || !searchHasPath(search, "/engineering/playbook/guides/setup") {
+		t.Fatalf("KB search should include both shared bundle paths: %#v", search.Results)
 	}
 
-	defaultSearch, err := ws.Search(ctx, "/engineering", "setup", factile.SearchOptions{})
+	pack, err := ws.Context(ctx, "/engineering", "setup", factile.ContextOptions{MaxTokens: 4000, Depth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !searchHasPath(defaultSearch, "/engineering/common/guides/setup") || !searchHasPath(defaultSearch, "/engineering/playbook/guides/setup") {
-		t.Fatalf("default search should include both shared bundle paths: %#v", defaultSearch.Results)
-	}
-	readerSearch, err := ws.Search(ctx, "/engineering", "setup", factile.SearchOptions{View: "reader"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !searchHasPath(readerSearch, "/engineering/common/guides/setup") || searchHasPath(readerSearch, "/engineering/playbook/guides/setup") {
-		t.Fatalf("reader search should include common and exclude playbook: %#v", readerSearch.Results)
+	if !contextHasPath(pack, "/engineering/common/guides/setup") || !contextHasPath(pack, "/engineering/playbook/guides/setup") {
+		t.Fatalf("KB context should include both shared bundle paths: %#v", pack.Summaries)
 	}
 
-	pack, err := ws.Context(ctx, "/engineering", "setup", factile.ContextOptions{MaxTokens: 4000, Depth: 1, View: "reader"})
+	graph, err := ws.Graph(ctx, "/engineering", factile.GraphOptions{Depth: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contextHasPath(pack, "/engineering/playbook/guides/setup") {
-		t.Fatalf("reader context leaked excluded playbook bundle: %#v", pack.Summaries)
-	}
-
-	graph, err := ws.Graph(ctx, "/engineering", factile.GraphOptions{Depth: 1, View: "reader"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if graphHasPath(graph, "/engineering/playbook/guides/setup") {
-		t.Fatalf("reader graph leaked excluded playbook bundle: %#v", graph.Nodes)
-	}
-
-	defaultView, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "default"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(defaultView.Folders) != 3 {
-		t.Fatalf("implicit default view should include all bundles: %#v", defaultView.Folders)
-	}
-
-	if _, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "missing"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
-		t.Fatalf("expected validation_failed for unknown view, got %v", err)
-	}
-	if _, err := ws.Search(ctx, "/legacy", "setup", factile.SearchOptions{View: "reader"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
-		t.Fatalf("expected validation_failed for view outside KB, got %v", err)
+	if !graphHasPath(graph, "/engineering/common/guides/setup") || !graphHasPath(graph, "/engineering/playbook/guides/setup") {
+		t.Fatalf("KB graph should include both shared bundle paths: %#v", graph.Nodes)
 	}
 }
 
-func TestWorkspaceSetReplaceAndDeleteKnowledgeBaseView(t *testing.T) {
-	workspaceDir := catalogWorkspace(t)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
+func TestWorkspaceLibraryViewManagement(t *testing.T) {
 	ctx := context.Background()
+	tmp := t.TempDir()
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
 
-	created, err := ws.SetKnowledgeBaseView(ctx, "/engineering", "reviewer", factile.ViewInput{
-		Title:     "Reviewer",
-		Bundles:   []string{"engineering-django", "/engineering/common"},
-		WhenToUse: "Use for review work.",
+	list, err := ws.ListViews(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Views) != 0 {
+		t.Fatalf("expected empty missing-library view list: %#v", list.Views)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".factile", "library.toml")); !os.IsNotExist(err) {
+		t.Fatalf("library catalog should not exist before mutation, stat err=%v", err)
+	}
+
+	created, err := ws.SetView(ctx, "invoice-import", factile.ViewInput{
+		Title:       "Invoice Import",
+		Description: "Workflow and runbooks for invoice import.",
+		Paths:       []string{"/project/docs/", "/support/runbooks/imports"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Action != "created" || strings.Join(created.View.Bundles, ",") != "engineering-django,engineering-common" {
+	if created.Action != "created" || created.View.ID != "invoice-import" || strings.Join(created.View.Paths, ",") != "/project/docs,/support/runbooks/imports" {
 		t.Fatalf("unexpected created view: %#v", created)
 	}
+	if _, err := os.Stat(filepath.Join(tmp, ".factile", "library.toml")); err != nil {
+		t.Fatalf("expected SetView to initialize library catalog: %v", err)
+	}
 
-	scoped, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "reviewer"})
+	if _, err := ws.SetView(ctx, "security-review", factile.ViewInput{
+		Title: "Security Review",
+		Paths: []string{"/standards/security"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list, err = ws.ListViews(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := folderPaths(scoped.Folders); strings.Join(got, ",") != "/engineering/django,/engineering/common" {
-		t.Fatalf("reviewer view folders = %#v", got)
+	if len(list.Views) != 2 || list.Views[0].ID != "invoice-import" || list.Views[1].ID != "security-review" {
+		t.Fatalf("expected deterministic view ordering: %#v", list.Views)
 	}
 
-	updated, err := ws.SetKnowledgeBaseView(ctx, "/engineering", "reviewer", factile.ViewInput{
-		Title:   "Reviewer",
-		Bundles: []string{"engineering-playbook"},
+	inspected, err := ws.InspectView(ctx, "invoice-import")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.View.Title != "Invoice Import" || inspected.View.Description == "" {
+		t.Fatalf("unexpected inspected view: %#v", inspected)
+	}
+
+	updated, err := ws.SetView(ctx, "invoice-import", factile.ViewInput{
+		Title:  "Invoice Import Updated",
+		Status: "active",
+		Paths:  []string{"/project/docs/workflows/invoice-import"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Action != "updated" || strings.Join(updated.View.Bundles, ",") != "engineering-playbook" {
+	if updated.Action != "updated" || updated.View.Title != "Invoice Import Updated" || updated.View.Status != "active" {
 		t.Fatalf("unexpected updated view: %#v", updated)
 	}
-	inspected, err := ws.InspectKnowledgeBase(ctx, "/engineering")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if countViews(inspected.KnowledgeBase.Views, "reviewer") != 1 {
-		t.Fatalf("set should replace the existing view, got %#v", inspected.KnowledgeBase.Views)
-	}
-	reviewer, ok := findView(inspected.KnowledgeBase.Views, "reviewer")
-	if !ok || strings.Join(reviewer.Bundles, ",") != "engineering-playbook" {
-		t.Fatalf("inspect did not show updated reviewer view: %#v", inspected.KnowledgeBase.Views)
-	}
 
-	defaultList, err := ws.List(ctx, "/engineering", factile.ListOptions{})
+	deleted, err := ws.DeleteView(ctx, "security-review")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(defaultList.Folders) != 3 {
-		t.Fatalf("view mutation should not change default reader paths: %#v", defaultList.Folders)
-	}
-	if _, err := ws.List(ctx, "/engineering/reviewer", factile.ListOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
-		t.Fatalf("view id should not become a reader path, got %v", err)
-	}
-
-	deleted, err := ws.DeleteKnowledgeBaseView(ctx, "/engineering", "reviewer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !deleted.Deleted || deleted.ViewID != "reviewer" {
+	if !deleted.Deleted || deleted.ID != "security-review" {
 		t.Fatalf("unexpected delete result: %#v", deleted)
 	}
-	inspected, err = ws.InspectKnowledgeBase(ctx, "/engineering")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := findView(inspected.KnowledgeBase.Views, "reviewer"); ok {
-		t.Fatalf("delete should remove reviewer view: %#v", inspected.KnowledgeBase.Views)
-	}
-	if _, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "reviewer"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
-		t.Fatalf("expected validation_failed for deleted view, got %v", err)
+	if _, err := ws.InspectView(ctx, "security-review"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
+		t.Fatalf("expected missing deleted view to be not found, got %v", err)
 	}
 }
 
-func TestWorkspaceKnowledgeBaseViewValidation(t *testing.T) {
+func TestWorkspaceLibraryViewValidation(t *testing.T) {
+	ctx := context.Background()
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: t.TempDir()})
+
+	if _, err := ws.SetView(ctx, "reader", factile.ViewInput{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+		t.Fatalf("expected empty view paths to fail validation, got %v", err)
+	}
+	if _, err := ws.SetView(ctx, "reader", factile.ViewInput{Paths: []string{"relative"}}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrInvalidPath {
+		t.Fatalf("expected relative view path to fail invalid_path, got %v", err)
+	}
+	if _, err := ws.SetView(ctx, "reader", factile.ViewInput{Paths: []string{"/project/docs", "/project/docs/"}}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+		t.Fatalf("expected duplicate view paths to fail validation, got %v", err)
+	}
+	if _, err := ws.InspectView(ctx, "missing"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
+		t.Fatalf("expected missing view to be not found, got %v", err)
+	}
+	if _, err := ws.DeleteView(ctx, "missing"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
+		t.Fatalf("expected deleting missing view to be not found, got %v", err)
+	}
+}
+
+func TestWorkspaceListUsesLibraryView(t *testing.T) {
 	workspaceDir := catalogWorkspace(t)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
 	ctx := context.Background()
-
-	cases := []struct {
-		name string
-		run  func() error
-	}{
-		{
-			name: "invalid view id",
-			run: func() error {
-				_, err := ws.SetKnowledgeBaseView(ctx, "/engineering", "bad/view", factile.ViewInput{Bundles: []string{"engineering-django"}})
-				return err
-			},
-		},
-		{
-			name: "missing bundle reference",
-			run: func() error {
-				_, err := ws.SetKnowledgeBaseView(ctx, "/engineering", "missing-bundle", factile.ViewInput{Bundles: []string{"missing"}})
-				return err
-			},
-		},
-		{
-			name: "duplicate bundle reference",
-			run: func() error {
-				_, err := ws.SetKnowledgeBaseView(ctx, "/engineering", "duplicate-bundle", factile.ViewInput{Bundles: []string{"engineering-django", "/engineering/django"}})
-				return err
-			},
-		},
-		{
-			name: "delete missing view",
-			run: func() error {
-				_, err := ws.DeleteKnowledgeBaseView(ctx, "/engineering", "missing")
-				return err
-			},
-		},
+	if _, err := ws.SetView(ctx, "invoice", factile.ViewInput{Paths: []string{"/engineering/django/runbooks", "/legacy"}}); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.run(); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
-				t.Fatalf("expected validation_failed, got %v", err)
-			}
-		})
+
+	root, err := ws.List(ctx, "/", factile.ListOptions{View: "invoice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := folderPaths(root.Folders); strings.Join(got, ",") != "/engineering,/legacy" || len(root.Documents) != 0 {
+		t.Fatalf("root view list = folders %#v documents %#v", root.Folders, root.Documents)
+	}
+
+	kb, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "invoice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := folderPaths(kb.Folders); strings.Join(got, ",") != "/engineering/django" || len(kb.Documents) != 0 {
+		t.Fatalf("library-view list at KB path = folders %#v documents %#v", kb.Folders, kb.Documents)
+	}
+
+	runbooks, err := ws.List(ctx, "/engineering/django/runbooks", factile.ListOptions{View: "invoice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runbooks.Folders) != 0 || len(runbooks.Documents) != 1 || runbooks.Documents[0].Path != "/engineering/django/runbooks/ocr-failure" {
+		t.Fatalf("folder view list = folders %#v documents %#v", runbooks.Folders, runbooks.Documents)
+	}
+
+	empty, err := ws.List(ctx, "/engineering/common", factile.ListOptions{View: "invoice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Folders) != 0 || len(empty.Documents) != 0 {
+		t.Fatalf("expected empty intersection, got folders %#v documents %#v", empty.Folders, empty.Documents)
+	}
+
+	brief, err := ws.List(ctx, "/engineering", factile.ListOptions{View: "invoice", Brief: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(brief.Cards) != 1 || brief.Cards[0].Path != "/engineering/django" || brief.Cards[0].Description == "" {
+		t.Fatalf("brief view list should return one catalog-backed card: %#v", brief.Cards)
+	}
+
+	r, err := render.New(render.Options{ColorMode: render.ColorNever})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := r.RenderList(&out, kb); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "Folders:") || !strings.Contains(text, "/engineering/django") || strings.Contains(text, "/legacy") {
+		t.Fatalf("unexpected rendered view list:\n%s", text)
+	}
+	out.Reset()
+	if err := r.RenderList(&out, empty); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "No entries.") {
+		t.Fatalf("empty view list should render no entries:\n%s", out.String())
+	}
+}
+
+func TestWorkspaceSearchContextGraphUseLibraryView(t *testing.T) {
+	workspaceDir := catalogWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
+	ctx := context.Background()
+	workflowPath := "/engineering/django/workflows/invoice-import"
+	runbookPath := "/engineering/django/runbooks/ocr-failure"
+	legacyPath := "/legacy/notes/legacy"
+	setupPath := "/engineering/common/guides/setup"
+	playbookPath := "/engineering/playbook/guides/setup"
+
+	if _, err := ws.SetView(ctx, "mixed", factile.ViewInput{Paths: []string{
+		workflowPath,
+		runbookPath,
+		"/legacy",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacySearch, err := ws.Search(ctx, "/", "legacy", factile.SearchOptions{View: "mixed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !searchHasPath(legacySearch, legacyPath) || searchHasPath(legacySearch, setupPath) || searchHasPath(legacySearch, playbookPath) {
+		t.Fatalf("view search should include direct mount only inside view: %#v", legacySearch.Results)
+	}
+
+	setupSearch, err := ws.Search(ctx, "/", "setup", factile.SearchOptions{View: "mixed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searchHasPath(setupSearch, setupPath) || searchHasPath(setupSearch, playbookPath) {
+		t.Fatalf("view search included out-of-view shared setup docs: %#v", setupSearch.Results)
+	}
+
+	pack, err := ws.Context(ctx, "/engineering", "posted", factile.ContextOptions{View: "mixed", MaxTokens: 4000, Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contextHasPath(pack, workflowPath) || !contextHasPath(pack, runbookPath) || contextHasPath(pack, setupPath) || contextHasPath(pack, legacyPath) {
+		t.Fatalf("view context should stay inside the selected engineering scope: %#v", pack.Summaries)
+	}
+
+	graph, err := ws.Graph(ctx, "/engineering", factile.GraphOptions{View: "mixed", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graphHasPath(graph, workflowPath) || !graphHasPath(graph, runbookPath) || graphHasPath(graph, setupPath) || graphHasPath(graph, legacyPath) {
+		t.Fatalf("view graph nodes should be selected-scope only: %#v", graph.Nodes)
+	}
+	if !graphHasEdge(graph, workflowPath, runbookPath) || !graphHasEdge(graph, runbookPath, workflowPath) {
+		t.Fatalf("view graph should include in-view links only: %#v", graph.Edges)
+	}
+
+	if _, err := ws.SetView(ctx, "workflow-only", factile.ViewInput{Paths: []string{workflowPath}}); err != nil {
+		t.Fatal(err)
+	}
+	narrowGraph, err := ws.Graph(ctx, "/engineering", factile.GraphOptions{View: "workflow-only", Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graphHasPath(narrowGraph, workflowPath) || graphHasPath(narrowGraph, runbookPath) || len(narrowGraph.Edges) != 0 || len(narrowGraph.Issues) != 0 {
+		t.Fatalf("single-concept view graph leaked out-of-view links: %#v", narrowGraph)
+	}
+
+	if _, err := ws.SetView(ctx, "overlap", factile.ViewInput{Paths: []string{"/engineering/django", "/engineering/django/runbooks"}}); err != nil {
+		t.Fatal(err)
+	}
+	overlapSearch, err := ws.Search(ctx, "/", "ocr", factile.SearchOptions{View: "overlap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countSearchPath(overlapSearch, runbookPath) != 1 {
+		t.Fatalf("overlapping view paths should deduplicate documents: %#v", overlapSearch.Results)
+	}
+}
+
+func TestWorkspaceValidateUsesLibraryView(t *testing.T) {
+	workspaceDir := catalogWorkspace(t)
+	bundlesDir := filepath.Join(filepath.Dir(workspaceDir), "bundles")
+	workflowPath := "/engineering/django/workflows/invoice-import"
+	runbookPath := "/engineering/django/runbooks/ocr-failure"
+
+	workflowFile := filepath.Join(bundlesDir, "product-docs", "workflows", "invoice-import.md")
+	data, err := os.ReadFile(workflowFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("\n- [Missing Runbook](../runbooks/missing.md)\n")...)
+	if err := os.WriteFile(workflowFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	badYAMLFile := filepath.Join(bundlesDir, "broken-docs", "bad-yaml.md")
+	if err := os.WriteFile(badYAMLFile, []byte("---\ntype: [\n---\n# Bad YAML\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mountsFile := filepath.Join(workspaceDir, ".factile", "mounts.toml")
+	mounts, err := os.ReadFile(mountsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mounts = append(mounts, []byte(`
+
+[mounts."/broken"]
+source = "../../bundles/broken-docs"
+kind = "local"
+writable = true
+`)...)
+	if err := os.WriteFile(mountsFile, mounts, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
+	ctx := context.Background()
+	if _, err := ws.SetView(ctx, "workflow-only", factile.ViewInput{Paths: []string{workflowPath}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.SetView(ctx, "legacy-only", factile.ViewInput{Paths: []string{"/legacy"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.SetView(ctx, "bad-docs", factile.ViewInput{Paths: []string{"/broken/bad-yaml"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	validated, err := ws.Validate(ctx, "/engineering", factile.ValidateOptions{View: "workflow-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.Path != "/engineering" || !validated.Valid {
+		t.Fatalf("view validation with only warnings should stay valid: %#v", validated)
+	}
+	if hasValidationIssue(validated.Issues, "warning", "broken_link", workflowPath, "../runbooks/ocr-failure.md") {
+		t.Fatalf("existing outside-view link should not warn: %#v", validated.Issues)
+	}
+	if !hasValidationIssue(validated.Issues, "warning", "broken_link", workflowPath, "../runbooks/missing.md") {
+		t.Fatalf("missing selected-doc link should warn: %#v", validated.Issues)
+	}
+
+	empty, err := ws.Validate(ctx, "/engineering", factile.ValidateOptions{View: "legacy-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.Path != "/engineering" || !empty.Valid || len(empty.Issues) != 0 {
+		t.Fatalf("empty view intersection should validate cleanly: %#v", empty)
+	}
+
+	bad, err := ws.Validate(ctx, "/", factile.ValidateOptions{View: "bad-docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad.Valid || !hasValidationIssue(bad.Issues, "error", factile.ErrOKFParse, "/broken/bad-yaml", "") || hasValidationIssue(bad.Issues, "error", factile.ErrOKFParse, runbookPath, "") {
+		t.Fatalf("selected malformed concepts should surface scoped errors: %#v", bad.Issues)
 	}
 }
 
@@ -342,6 +513,16 @@ func searchHasPath(results factile.SearchResults, path string) bool {
 	return false
 }
 
+func countSearchPath(results factile.SearchResults, path string) int {
+	count := 0
+	for _, result := range results.Results {
+		if result.Concept.Path == path {
+			count++
+		}
+	}
+	return count
+}
+
 func contextHasPath(pack factile.ContextPack, path string) bool {
 	for _, summary := range pack.Summaries {
 		if summary.Path == path {
@@ -369,23 +550,13 @@ func graphHasEdge(graph factile.GraphResult, from string, to string) bool {
 	return false
 }
 
-func findView(views []factile.View, id string) (factile.View, bool) {
-	for _, view := range views {
-		if view.ID == id {
-			return view, true
+func hasValidationIssue(issues []factile.ValidationIssue, severity string, code string, path string, target string) bool {
+	for _, issue := range issues {
+		if issue.Severity == severity && issue.Code == code && issue.Path == path && (target == "" || strings.Contains(issue.Message, target)) {
+			return true
 		}
 	}
-	return factile.View{}, false
-}
-
-func countViews(views []factile.View, id string) int {
-	count := 0
-	for _, view := range views {
-		if view.ID == id {
-			count++
-		}
-	}
-	return count
+	return false
 }
 
 func TestWorkspaceReadSearchContextGraphAndValidate(t *testing.T) {

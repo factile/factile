@@ -67,7 +67,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 		traceCLI(rest, code, started)
 		return code
 	}
-	if global.Help || len(rest) == 0 {
+	if global.Help {
 		if err := writeHelp(stdout, global); err != nil {
 			code := writeError(stderr, global, err)
 			traceCLI(rest, code, started)
@@ -80,6 +80,22 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 		global.Format = formatText
 	}
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile})
+	if len(rest) == 0 {
+		result, err := ws.Summary(ctx)
+		if err != nil {
+			code := writeError(stderr, global, err)
+			traceCLI(rest, code, started)
+			return code
+		}
+		code, err := writeSummaryResult(stdout, global, result)
+		if err != nil {
+			code = writeError(stderr, global, err)
+			traceCLI(rest, code, started)
+			return code
+		}
+		traceCLI(rest, code, started)
+		return code
+	}
 	code, err := runCommand(ctx, ws, rest, global, stdin, stdout, stderr)
 	if err != nil {
 		code = writeError(stderr, global, err)
@@ -103,6 +119,18 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 			return usage(global, stdout, "factile version")
 		}
 		return writeVersionResult(stdout, global)
+	case "status":
+		if hasHelp(args) {
+			return showUsage(stdout, "factile status")
+		}
+		if len(args) != 1 {
+			return usage(global, stdout, "factile status")
+		}
+		result, err := ws.Summary(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return writeSummaryResult(stdout, global, result)
 	case "init":
 		return runInit(ctx, args, global, stdout)
 	case "list":
@@ -184,12 +212,22 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runGraph(ctx, ws, args, global, stdout)
 	case "validate":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile validate <path>")
+			return showUsage(stdout, "factile validate <path> [--view <id>]")
 		}
-		if len(args) != 2 {
-			return usage(global, stdout, "factile validate <path>")
+		fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		view := fs.String("view", "", "")
+		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--view": true})
+		if orderErr != nil {
+			return 2, orderErr
 		}
-		result, err := ws.Validate(ctx, args[1], factile.ValidateOptions{})
+		if err := fs.Parse(ordered); err != nil {
+			return 2, err
+		}
+		if fs.NArg() != 1 {
+			return usage(global, stdout, "factile validate <path> [--view <id>]")
+		}
+		result, err := ws.Validate(ctx, fs.Arg(0), factile.ValidateOptions{View: *view})
 		if err != nil {
 			return 0, err
 		}
@@ -216,6 +254,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runBundle(ctx, ws, args[1:], global, stdout)
 	case "kb":
 		return runKB(ctx, ws, args[1:], global, stdout)
+	case "view":
+		return runView(ctx, ws, args[1:], global, stdout)
 	case "skill":
 		return runSkill(ctx, args[1:], global, stdout)
 	case "mcp":
@@ -624,10 +664,10 @@ func runBundle(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runKB(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if len(args) == 1 && isHelpArg(args[0]) {
-		return showUsage(stdout, "factile kb list|inspect|create|link|unlink|view")
+		return showUsage(stdout, "factile kb list|inspect|create|link|unlink")
 	}
 	if len(args) == 0 {
-		return usage(global, stdout, "factile kb list|inspect|create|link|unlink|view")
+		return usage(global, stdout, "factile kb list|inspect|create|link|unlink")
 	}
 	switch args[0] {
 	case "list":
@@ -718,64 +758,88 @@ func runKB(ctx context.Context, ws factile.Workspace, args []string, global glob
 			return 0, err
 		}
 		return writeBundleUnlink(stdout, global, result)
-	case "view":
-		return runKBView(ctx, ws, args[1:], global, stdout)
 	default:
 		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported kb command: "+args[0])
 	}
 }
 
-func runKBView(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+func runView(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if len(args) == 1 && isHelpArg(args[0]) {
-		return showUsage(stdout, "factile kb view set|delete")
+		return showUsage(stdout, "factile view list|inspect|set|delete")
 	}
 	if len(args) == 0 {
-		return usage(global, stdout, "factile kb view set|delete")
+		return usage(global, stdout, "factile view list|inspect|set|delete")
 	}
 	switch args[0] {
+	case "list":
+		if hasHelp(args) {
+			return showUsage(stdout, "factile view list")
+		}
+		if len(args) != 1 {
+			return usage(global, stdout, "factile view list")
+		}
+		result, err := ws.ListViews(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return writeViewList(stdout, global, result)
+	case "inspect":
+		if hasHelp(args) {
+			return showUsage(stdout, "factile view inspect <id>")
+		}
+		if len(args) != 2 {
+			return usage(global, stdout, "factile view inspect <id>")
+		}
+		result, err := ws.InspectView(ctx, args[1])
+		if err != nil {
+			return 0, err
+		}
+		return writeView(stdout, global, result)
 	case "set":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile kb view set <kb-path> <view-id> --bundle <id-or-path> [--title <title>] [--description <text>]")
+			return showUsage(stdout, "factile view set <id> --title <title> --path <path> [--description <text>]")
 		}
-		fs := flag.NewFlagSet("kb view set", flag.ContinueOnError)
+		fs := flag.NewFlagSet("view set", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		title := fs.String("title", "", "")
 		description := fs.String("description", "", "")
-		var bundles stringListFlag
-		fs.Var(&bundles, "bundle", "")
-		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--bundle": true, "--title": true, "--description": true})
+		status := fs.String("status", "", "")
+		var paths stringListFlag
+		fs.Var(&paths, "path", "")
+		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--title": true, "--description": true, "--status": true, "--path": true})
 		if orderErr != nil {
 			return 2, orderErr
 		}
 		if err := fs.Parse(ordered); err != nil {
 			return 2, err
 		}
-		if fs.NArg() != 2 || len(bundles) == 0 {
-			return usage(global, stdout, "factile kb view set <kb-path> <view-id> --bundle <id-or-path> [--title <title>] [--description <text>]")
+		if fs.NArg() != 1 || len(paths) == 0 {
+			return usage(global, stdout, "factile view set <id> --title <title> --path <path> [--description <text>]")
 		}
-		result, err := ws.SetKnowledgeBaseView(ctx, fs.Arg(0), fs.Arg(1), factile.ViewInput{
+		result, err := ws.SetView(ctx, fs.Arg(0), factile.ViewInput{
 			Title:       *title,
 			Description: *description,
-			Bundles:     []string(bundles),
+			Status:      *status,
+			Paths:       []string(paths),
 		})
 		if err != nil {
 			return 0, err
 		}
-		return writeViewResult(stdout, global, result)
+		return writeView(stdout, global, result)
 	case "delete":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile kb view delete <kb-path> <view-id>")
+			return showUsage(stdout, "factile view delete <id>")
 		}
-		if len(args) != 3 {
-			return usage(global, stdout, "factile kb view delete <kb-path> <view-id>")
+		if len(args) != 2 {
+			return usage(global, stdout, "factile view delete <id>")
 		}
-		result, err := ws.DeleteKnowledgeBaseView(ctx, args[1], args[2])
+		result, err := ws.DeleteView(ctx, args[1])
 		if err != nil {
 			return 0, err
 		}
 		return writeViewDelete(stdout, global, result)
 	default:
-		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported kb view command: "+args[0])
+		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported view command: "+args[0])
 	}
 }
 
@@ -1040,6 +1104,15 @@ func writeInitResult(stdout io.Writer, global globals, result bootstrap.Result) 
 	})
 }
 
+func writeSummaryResult(stdout io.Writer, global globals, result factile.SummaryResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderSummary(stdout, result)
+	})
+}
+
 func writeListResult(stdout io.Writer, global globals, result factile.ListResult) (int, error) {
 	if global.structuredOutput() {
 		return writeResult(stdout, global, result)
@@ -1148,6 +1221,33 @@ func writeKnowledgeBase(stdout io.Writer, global globals, result factile.Knowled
 	})
 }
 
+func writeViewList(stdout io.Writer, global globals, result factile.ViewListResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderViewList(stdout, result)
+	})
+}
+
+func writeView(stdout io.Writer, global globals, result factile.ViewResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderView(stdout, result)
+	})
+}
+
+func writeViewDelete(stdout io.Writer, global globals, result factile.ViewDeleteResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderViewDelete(stdout, result)
+	})
+}
+
 func writeBundleLink(stdout io.Writer, global globals, result factile.BundleLinkResult) (int, error) {
 	if global.structuredOutput() {
 		return writeResult(stdout, global, result)
@@ -1163,24 +1263,6 @@ func writeBundleUnlink(stdout io.Writer, global globals, result factile.BundleUn
 	}
 	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
 		return renderer.RenderBundleUnlink(stdout, result)
-	})
-}
-
-func writeViewResult(stdout io.Writer, global globals, result factile.ViewResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderView(stdout, result)
-	})
-}
-
-func writeViewDelete(stdout io.Writer, global globals, result factile.ViewDeleteResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderViewDelete(stdout, result)
 	})
 }
 
@@ -1360,10 +1442,6 @@ func printResult(stdout io.Writer, global globals, value any) (int, error) {
 		_, _ = fmt.Fprintln(stdout, v.Bundle.Path)
 	case factile.BundleUnlinkResult:
 		_, _ = fmt.Fprintf(stdout, "removed %s\n", v.BundlePath)
-	case factile.ViewResult:
-		_, _ = fmt.Fprintln(stdout, v.View.ID)
-	case factile.ViewDeleteResult:
-		_, _ = fmt.Fprintf(stdout, "deleted %s\n", v.ViewID)
 	case factile.SearchResults:
 		for _, result := range v.Results {
 			_, _ = fmt.Fprintf(stdout, "%.1f %s\n", result.Score, result.Concept.Path)
@@ -1444,13 +1522,6 @@ func traceCLIArgs(args []string) (string, string, string) {
 			return command, args[len(args)-1], ""
 		}
 	case "kb":
-		if len(args) > 2 && args[1] == "view" {
-			command = "kb view " + args[2]
-			if len(args) > 3 {
-				return command, args[3], ""
-			}
-			return command, "", ""
-		}
 		if len(args) > 1 {
 			command = "kb " + args[1]
 		}

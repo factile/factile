@@ -1,0 +1,11 @@
+{
+    "schema_version": 1,
+    "commit": "fd3bafc5b38825279608ce5433bda669901fc5e5",
+    "indexed_at": "2026-06-28T11:15:19Z",
+    "project": "srv-factile-factile-cli",
+    "nodes": 1248,
+    "edges": 4288,
+    "original_size": 4128768,
+    "compressed_size": 738285,
+    "compression_level": 9
+}

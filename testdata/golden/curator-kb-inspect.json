@@ -39,29 +39,6 @@
         "description": "The same shared guides linked at another path.",
         "trust": "shared"
       }
-    ],
-    "views": [
-      {
-        "id": "engineering",
-        "title": "Engineering",
-        "description": "Full engineering navigation.",
-        "bundles": [
-          "engineering-common",
-          "engineering-django",
-          "engineering-playbook"
-        ],
-        "when_to_use": "Use for engineering work that needs all local and shared guides."
-      },
-      {
-        "id": "reader",
-        "title": "Reader",
-        "description": "Focused reader navigation.",
-        "bundles": [
-          "engineering-django",
-          "engineering-common"
-        ],
-        "when_to_use": "Use for product workflow and runbook questions."
-      }
     ]
   },
   "catalog": "knowledge-bases/engineering.toml"

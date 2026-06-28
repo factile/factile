@@ -31,16 +31,19 @@ func TestToolsRespectReadOnly(t *testing.T) {
 	if descriptions["factile_context"] != "Retrieve focused local OKF context for a task or question." {
 		t.Fatalf("unexpected context description: %q", descriptions["factile_context"])
 	}
-	if descriptions["factile_stat"] == "" || descriptions["factile_kb_list"] == "" || descriptions["factile_kb_inspect"] == "" {
+	if descriptions["factile_stat"] == "" || descriptions["factile_kb_list"] == "" || descriptions["factile_kb_inspect"] == "" || descriptions["factile_view_list"] == "" || descriptions["factile_view_inspect"] == "" {
 		t.Fatalf("read-only tools missing reader or catalog inspection tools: %#v", descriptions)
 	}
-	if descriptions["factile_kb_view_set"] != "" || descriptions["factile_kb_view_delete"] != "" {
-		t.Fatalf("read-only tools should hide View mutation tools: %#v", descriptions)
+	if descriptions["factile_kb_create"] != "" || descriptions["factile_kb_link"] != "" || descriptions["factile_view_set"] != "" || descriptions["factile_view_delete"] != "" {
+		t.Fatalf("read-only tools should hide write catalog tools: %#v", descriptions)
 	}
-	for _, name := range []string{"factile_list", "factile_search", "factile_context", "factile_graph"} {
+	for _, name := range []string{"factile_list", "factile_search", "factile_context", "factile_graph", "factile_validate"} {
 		properties, ok := schemas[name]["properties"].(map[string]any)
-		if !ok || properties["view"] == nil {
-			t.Fatalf("%s schema missing optional view argument: %#v", name, schemas[name])
+		if !ok {
+			t.Fatalf("%s schema missing properties: %#v", name, schemas[name])
+		}
+		if properties["view"] == nil || schemas[name]["additionalProperties"] != false {
+			t.Fatalf("%s schema missing view or closed-shape contract: %#v", name, schemas[name])
 		}
 	}
 	readWrite := New(ws, Options{})
@@ -51,22 +54,28 @@ func TestToolsRespectReadOnly(t *testing.T) {
 	for _, tool := range readWrite.Tools() {
 		readWriteSchemas[tool.Name] = tool.InputSchema
 	}
-	properties, ok := readWriteSchemas["factile_kb_view_set"]["properties"].(map[string]any)
-	if !ok || properties["bundles"] == nil {
-		t.Fatalf("write tools missing View set schema: %#v", readWriteSchemas["factile_kb_view_set"])
+	properties, ok := readWriteSchemas["factile_kb_link"]["properties"].(map[string]any)
+	if !ok || properties["bundle_path"] == nil {
+		t.Fatalf("write tools missing KB link schema: %#v", readWriteSchemas["factile_kb_link"])
+	}
+	properties, ok = readWriteSchemas["factile_view_set"]["properties"].(map[string]any)
+	if !ok || properties["paths"] == nil || readWriteSchemas["factile_view_set"]["additionalProperties"] != false {
+		t.Fatalf("write tools missing view set schema: %#v", readWriteSchemas["factile_view_set"])
 	}
 }
 
 func TestReadOnlyRejectsHiddenWriteToolCalls(t *testing.T) {
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: t.TempDir()})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_kb_create","arguments":{"path":"/engineering","title":"Engineering"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_kb_view_set","arguments":{"knowledge_base_path":"/engineering","view_id":"reader","bundles":["docs"]}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_create","arguments":{"path":"/engineering/note","type":"Note","title":"Note","markdown":"Body"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_view_set","arguments":{"id":"reader","paths":["/engineering"]}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_view_delete","arguments":{"id":"reader"}}}
 `)
 	var out bytes.Buffer
 	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), `"code":"source_read_only"`) != 2 {
+	if strings.Count(out.String(), `"code":"source_read_only"`) != 4 {
 		t.Fatalf("expected source_read_only error, got:\n%s", out.String())
 	}
 }
@@ -110,11 +119,9 @@ func TestServeReaderCardsAndKBCatalogTools(t *testing.T) {
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_kb_create","arguments":{"path":"/engineering","title":"Engineering"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_kb_link","arguments":{"knowledge_base_path":"/engineering","source":"` + product + `","bundle_path":"/engineering/docs","title":"Product Docs","read_only":true}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_kb_view_set","arguments":{"knowledge_base_path":"/engineering","view_id":"reader","bundles":["/engineering/docs"],"title":"Reader"}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_kb_inspect","arguments":{"path":"/engineering"}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true,"view":"reader"}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_stat","arguments":{"path":"/engineering/docs"}}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"factile_kb_view_delete","arguments":{"knowledge_base_path":"/engineering","view_id":"reader"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_kb_inspect","arguments":{"path":"/engineering"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_stat","arguments":{"path":"/engineering/docs"}}}
 `)
 	var out bytes.Buffer
 	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
@@ -127,10 +134,6 @@ func TestServeReaderCardsAndKBCatalogTools(t *testing.T) {
 		`"cards"`,
 		`"card"`,
 		`"writable":false`,
-		`"view":{"id":"reader"`,
-		`"bundles":["engineering-docs"]`,
-		`"view_id":"reader"`,
-		`"deleted":true`,
 	} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("MCP output missing %s:\n%s", expected, text)
@@ -138,13 +141,13 @@ func TestServeReaderCardsAndKBCatalogTools(t *testing.T) {
 	}
 }
 
-func TestServeViewScopedReaderTools(t *testing.T) {
+func TestServeKnowledgeBaseReaderToolsUseAllBundles(t *testing.T) {
 	workspaceDir := filepath.Join("..", "..", "testdata", "catalog-workspace")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
-	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true,"view":"reader"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/engineering","query":"invoice","view":"reader"}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_context","arguments":{"path":"/engineering","query":"invoice import workflow","view":"reader"}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_graph","arguments":{"path":"/engineering","view":"reader"}}}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/engineering","query":"setup"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_context","arguments":{"path":"/engineering","query":"setup"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_graph","arguments":{"path":"/engineering"}}}
 `)
 	var out bytes.Buffer
 	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
@@ -154,15 +157,86 @@ func TestServeViewScopedReaderTools(t *testing.T) {
 	for _, expected := range []string{
 		`"path":"/engineering/django"`,
 		`"path":"/engineering/common"`,
-		`"path":"/engineering/django/workflows/invoice-import"`,
+		`"path":"/engineering/playbook"`,
 		`"path":"/engineering/common/guides/setup"`,
+		`"path":"/engineering/playbook/guides/setup"`,
 	} {
 		if !strings.Contains(text, expected) {
-			t.Fatalf("view-scoped MCP output missing %s:\n%s", expected, text)
+			t.Fatalf("KB reader MCP output missing %s:\n%s", expected, text)
 		}
 	}
-	if strings.Contains(text, `"path":"/engineering/playbook`) {
-		t.Fatalf("view-scoped MCP output leaked excluded playbook bundle:\n%s", text)
+}
+
+func TestServeLibraryViewToolsAndReaderFilters(t *testing.T) {
+	workspaceDir := mcpCatalogWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
+	workflowPath := "/engineering/django/workflows/invoice-import"
+	runbookPath := "/engineering/django/runbooks/ocr-failure"
+	legacyPath := "/legacy/notes/legacy"
+
+	var writeOut bytes.Buffer
+	setInput := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_view_set","arguments":{"id":"invoice","title":"Invoice","description":"Invoice workflow and support notes.","paths":["` + workflowPath + `","` + runbookPath + `","/legacy"]}}}
+`)
+	if err := Serve(context.Background(), ws, setInput, &writeOut, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	setResponses := mcpResponses(t, writeOut.String())
+	set := mcpStructured[factile.ViewResult](t, setResponses[1])
+	if set.Action != "created" || set.View.ID != "invoice" || len(set.View.Paths) != 3 {
+		t.Fatalf("unexpected MCP view set: %#v", set)
+	}
+
+	readOnlyInput := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_view_list","arguments":{}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_view_inspect","arguments":{"id":"invoice"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/","view":"invoice"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/","query":"setup","view":"invoice"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_context","arguments":{"path":"/engineering","query":"posted","view":"invoice"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_graph","arguments":{"path":"/engineering","view":"invoice"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"factile_validate","arguments":{"path":"/engineering","view":"invoice"}}}
+`)
+	var readOnlyOut bytes.Buffer
+	if err := Serve(context.Background(), ws, readOnlyInput, &readOnlyOut, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, readOnlyOut.String())
+	views := mcpStructured[factile.ViewListResult](t, responses[1])
+	if len(views.Views) != 1 || views.Views[0].ID != "invoice" {
+		t.Fatalf("unexpected MCP view list: %#v", views)
+	}
+	inspected := mcpStructured[factile.ViewResult](t, responses[2])
+	if inspected.View.ID != "invoice" || inspected.View.Title != "Invoice" {
+		t.Fatalf("unexpected MCP view inspect: %#v", inspected)
+	}
+	list := mcpStructured[factile.ListResult](t, responses[3])
+	if !mcpHasFolderPath(list.Folders, "/engineering") || !mcpHasFolderPath(list.Folders, "/legacy") {
+		t.Fatalf("unexpected MCP list --view: %#v", list)
+	}
+	search := mcpStructured[factile.SearchResults](t, responses[4])
+	if mcpHasSearchResultPath(search.Results, "/engineering/common/guides/setup") || mcpHasSearchResultPath(search.Results, "/engineering/playbook/guides/setup") {
+		t.Fatalf("MCP search --view leaked out-of-view setup docs: %#v", search.Results)
+	}
+	contextPack := mcpStructured[factile.ContextPack](t, responses[5])
+	if !mcpHasConceptPath(contextPack.Concepts, workflowPath) || !mcpHasConceptPath(contextPack.Concepts, runbookPath) || mcpHasConceptPath(contextPack.Concepts, legacyPath) {
+		t.Fatalf("unexpected MCP context --view: %#v", contextPack)
+	}
+	graph := mcpStructured[factile.GraphResult](t, responses[6])
+	if !mcpHasGraphNodePath(graph.Nodes, workflowPath) || !mcpHasGraphNodePath(graph.Nodes, runbookPath) || !mcpHasGraphEdge(graph.Edges, workflowPath, runbookPath, "markdown_link") || mcpHasGraphNodePath(graph.Nodes, "/engineering/common/guides/setup") {
+		t.Fatalf("unexpected MCP graph --view: %#v", graph)
+	}
+	validated := mcpStructured[factile.ValidationResult](t, responses[7])
+	if !validated.Valid || len(validated.Issues) != 0 {
+		t.Fatalf("unexpected MCP validate --view: %#v", validated)
+	}
+
+	writeOut.Reset()
+	deleteInput := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_view_delete","arguments":{"id":"invoice"}}}
+`)
+	if err := Serve(context.Background(), ws, deleteInput, &writeOut, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	deleted := mcpStructured[factile.ViewDeleteResult](t, mcpResponses(t, writeOut.String())[1])
+	if !deleted.Deleted || deleted.ID != "invoice" {
+		t.Fatalf("unexpected MCP view delete: %#v", deleted)
 	}
 }
 
@@ -270,6 +344,15 @@ writable = true
 		t.Fatal(err)
 	}
 	return mountFile
+}
+
+func mcpCatalogWorkspace(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	copyMCPDir(t, filepath.Join("..", "..", "testdata", "catalog-workspace"), workspace)
+	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	return workspace
 }
 
 func copyMCPDir(t *testing.T, src, dst string) {
@@ -383,6 +466,24 @@ func mcpHasFolderPath(folders []factile.FolderSummary, path string) bool {
 func mcpHasConceptPath(concepts []factile.Concept, path string) bool {
 	for _, concept := range concepts {
 		if concept.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasSearchResultPath(results []factile.SearchResult, path string) bool {
+	for _, result := range results {
+		if result.Concept.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasGraphNodePath(nodes []factile.GraphNode, path string) bool {
+	for _, node := range nodes {
+		if node.Concept.Path == path {
 			return true
 		}
 	}

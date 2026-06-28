@@ -376,15 +376,16 @@ func skillModeSection(mode string) string {
 	switch mode {
 	case ModeCurator:
 		b.WriteString("Curator mode is installed. Use Factile to manage local knowledge catalogs and OKF documents when the user asks for curation work.\n\n")
-		b.WriteString("- Use `factile kb list`, `factile kb inspect`, `factile kb create`, `factile kb link`, `factile kb unlink`, and `factile kb view ...` for Knowledge Base catalog work.\n")
+		b.WriteString("- Use `factile kb list`, `factile kb inspect`, `factile kb create`, `factile kb link`, and `factile kb unlink` for Knowledge Base catalog work.\n")
+		b.WriteString("- Use `factile view list`, `factile view inspect`, `factile view set`, and `factile view delete` for library view catalog work.\n")
 		b.WriteString("- Use `factile list --brief`, `factile stat`, `factile validate`, and `factile context` before changing knowledge.\n")
-		b.WriteString("- Use `--view <id>` on reader commands when a named Knowledge Base View is relevant.\n")
+		b.WriteString("- Use narrower paths or `--view <id>` when the task needs a smaller reader scope.\n")
 		b.WriteString("- Use write commands only with required revisions and only when the user asked to change knowledge.\n")
 		b.WriteString("- Validate the affected path after catalog or content changes.\n")
 	default:
 		b.WriteString("Reader mode is installed. Use Factile to discover and consume local knowledge without mutating catalogs or OKF documents.\n\n")
 		b.WriteString("- Prefer `factile list / --brief --json`, `factile stat <path> --json`, and `factile context / '<task>' --json`.\n")
-		b.WriteString("- Use `--view <id>` with `list`, `search`, `context`, or `graph` when a named Knowledge Base View is relevant.\n")
+		b.WriteString("- Use a narrower path or `--view <id>` when the task scope is specific.\n")
 		b.WriteString("- Do not use `factile create`, `write`, `patch`, `rename`, `delete`, `deprecate`, `kb`, `bundle mount`, or `bundle unmount` commands unless the user explicitly asks to curate knowledge.\n")
 		b.WriteString("- Treat the configured MCP server as read-only.\n")
 	}
@@ -409,7 +410,7 @@ func agentsManagedBlock(mode string, profile string) string {
 
 func agentsModeBlock(mode string) string {
 	if mode == ModeCurator {
-		return "Mode: curator. Catalog curation may use `factile kb ...`, including `factile kb view set` and `factile kb view delete`, low-level `factile bundle ...`, and revision-aware write commands when the user asks to change knowledge. Validate affected paths after changes."
+		return "Mode: curator. Catalog curation may use `factile kb ...`, `factile view ...`, low-level `factile bundle ...`, and revision-aware write commands when the user asks to change knowledge. Validate affected paths after changes."
 	}
 	return "Mode: reader. Do not edit Factile/OKF knowledge or catalog state unless the user explicitly asks to curate knowledge."
 }

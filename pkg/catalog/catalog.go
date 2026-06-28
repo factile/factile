@@ -18,6 +18,7 @@ type Library struct {
 	Scope          string             `json:"scope,omitempty"`
 	Status         string             `json:"status,omitempty"`
 	KnowledgeBases []KnowledgeBaseRef `json:"knowledge_bases,omitempty"`
+	Views          []LibraryView      `json:"views,omitempty"`
 }
 
 type KnowledgeBaseRef struct {
@@ -27,6 +28,14 @@ type KnowledgeBaseRef struct {
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Status      string `json:"status,omitempty"`
+}
+
+type LibraryView struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
 }
 
 type KnowledgeBase struct {
@@ -41,17 +50,6 @@ type KnowledgeBase struct {
 	DefaultWritable bool         `json:"default_writable,omitempty"`
 	Status          string       `json:"status,omitempty"`
 	Bundles         []BundleLink `json:"bundles,omitempty"`
-	Views           []View       `json:"views,omitempty"`
-}
-
-type View struct {
-	ID           string   `json:"id"`
-	Title        string   `json:"title,omitempty"`
-	Description  string   `json:"description,omitempty"`
-	Bundles      []string `json:"bundles,omitempty"`
-	WhenToUse    string   `json:"when_to_use,omitempty"`
-	WhenNotToUse string   `json:"when_not_to_use,omitempty"`
-	Status       string   `json:"status,omitempty"`
 }
 
 type BundleLink struct {
@@ -91,6 +89,13 @@ func LoadLibraryFile(filename string) (Library, error) {
 			if err := assignKnowledgeBaseRef(&library.KnowledgeBases[len(library.KnowledgeBases)-1], record.key, record.value); err != nil {
 				return Library{}, recordError(record, err)
 			}
+		case "views":
+			if len(library.Views) == 0 || record.start {
+				library.Views = append(library.Views, LibraryView{})
+			}
+			if err := assignLibraryView(&library.Views[len(library.Views)-1], record.key, record.value); err != nil {
+				return Library{}, recordError(record, err)
+			}
 		default:
 			return Library{}, fmt.Errorf("unsupported catalog table %q", record.table)
 		}
@@ -125,13 +130,6 @@ func LoadKnowledgeBaseFile(filename string) (KnowledgeBase, error) {
 				kb.Bundles = append(kb.Bundles, BundleLink{Kind: "local"})
 			}
 			if err := assignBundleLink(&kb.Bundles[len(kb.Bundles)-1], record.key, record.value); err != nil {
-				return KnowledgeBase{}, recordError(record, err)
-			}
-		case "views":
-			if len(kb.Views) == 0 || record.start {
-				kb.Views = append(kb.Views, View{})
-			}
-			if err := assignView(&kb.Views[len(kb.Views)-1], record.key, record.value); err != nil {
 				return KnowledgeBase{}, recordError(record, err)
 			}
 		default:
@@ -175,6 +173,30 @@ func ValidateLibrary(library Library) error {
 		paths[p] = true
 		if strings.TrimSpace(ref.Catalog) == "" {
 			return fmt.Errorf("knowledge base catalog is required: %s", ref.ID)
+		}
+	}
+	viewIDs := map[string]bool{}
+	for _, view := range library.Views {
+		if strings.TrimSpace(view.ID) == "" {
+			return fmt.Errorf("view id is required")
+		}
+		if viewIDs[view.ID] {
+			return fmt.Errorf("duplicate view id: %s", view.ID)
+		}
+		viewIDs[view.ID] = true
+		if len(view.Paths) == 0 {
+			return fmt.Errorf("view paths are required: %s", view.ID)
+		}
+		viewPaths := map[string]bool{}
+		for _, viewPath := range view.Paths {
+			p, err := normalizeCatalogPath(viewPath)
+			if err != nil || p == "/" {
+				return fmt.Errorf("invalid view path: %s", viewPath)
+			}
+			if viewPaths[p] {
+				return fmt.Errorf("duplicate view path: %s in %s", p, view.ID)
+			}
+			viewPaths[p] = true
 		}
 	}
 	return nil
@@ -223,57 +245,7 @@ func ValidateKnowledgeBase(kb KnowledgeBase) error {
 			return fmt.Errorf("remote bundle links must be read-only: %s", bundle.ID)
 		}
 	}
-	viewIDs := map[string]bool{}
-	for _, view := range kb.Views {
-		if strings.TrimSpace(view.ID) == "" {
-			return fmt.Errorf("view id is required")
-		}
-		if viewIDs[view.ID] {
-			return fmt.Errorf("duplicate view id: %s", view.ID)
-		}
-		viewIDs[view.ID] = true
-		refs := map[string]bool{}
-		for _, bundleID := range view.Bundles {
-			if strings.TrimSpace(bundleID) == "" {
-				return fmt.Errorf("view bundle id is required: %s", view.ID)
-			}
-			if refs[bundleID] {
-				return fmt.Errorf("duplicate view bundle reference: %s in %s", bundleID, view.ID)
-			}
-			refs[bundleID] = true
-			if !ids[bundleID] {
-				return fmt.Errorf("view references unknown bundle: %s in %s", bundleID, view.ID)
-			}
-		}
-	}
 	return nil
-}
-
-// SetView creates or replaces a View in a Knowledge Base catalog.
-func SetView(kb *KnowledgeBase, view View) string {
-	for i := range kb.Views {
-		if kb.Views[i].ID == view.ID {
-			kb.Views[i] = view
-			return "updated"
-		}
-	}
-	kb.Views = append(kb.Views, view)
-	return "created"
-}
-
-// DeleteView removes a View from a Knowledge Base catalog.
-func DeleteView(kb *KnowledgeBase, viewID string) bool {
-	next := kb.Views[:0]
-	deleted := false
-	for _, view := range kb.Views {
-		if view.ID == viewID {
-			deleted = true
-			continue
-		}
-		next = append(next, view)
-	}
-	kb.Views = next
-	return deleted
 }
 
 type record struct {
@@ -494,6 +466,34 @@ func assignKnowledgeBaseRef(ref *KnowledgeBaseRef, key string, v value) error {
 	return nil
 }
 
+func assignLibraryView(view *LibraryView, key string, v value) error {
+	switch key {
+	case "id", "title", "description", "status":
+		if err := requireKind(v, "string"); err != nil {
+			return err
+		}
+	case "paths":
+		if err := requireKind(v, "strings"); err != nil {
+			return err
+		}
+	}
+	switch key {
+	case "id":
+		view.ID = v.text
+	case "title":
+		view.Title = v.text
+	case "description":
+		view.Description = v.text
+	case "status":
+		view.Status = v.text
+	case "paths":
+		view.Paths = append([]string(nil), v.strings...)
+	default:
+		return fmt.Errorf("unsupported catalog key")
+	}
+	return nil
+}
+
 func assignKnowledgeBase(kb *KnowledgeBase, key string, v value) error {
 	switch key {
 	case "id", "path", "title", "description", "purpose", "audience", "profile", "default_trust", "status":
@@ -525,38 +525,6 @@ func assignKnowledgeBase(kb *KnowledgeBase, key string, v value) error {
 		kb.DefaultWritable = v.text == "true"
 	case "status":
 		kb.Status = v.text
-	default:
-		return fmt.Errorf("unsupported catalog key")
-	}
-	return nil
-}
-
-func assignView(view *View, key string, v value) error {
-	switch key {
-	case "id", "title", "description", "when_to_use", "when_not_to_use", "status":
-		if err := requireKind(v, "string"); err != nil {
-			return err
-		}
-	case "bundles":
-		if err := requireKind(v, "strings"); err != nil {
-			return err
-		}
-	}
-	switch key {
-	case "id":
-		view.ID = v.text
-	case "title":
-		view.Title = v.text
-	case "description":
-		view.Description = v.text
-	case "bundles":
-		view.Bundles = append([]string(nil), v.strings...)
-	case "when_to_use":
-		view.WhenToUse = v.text
-	case "when_not_to_use":
-		view.WhenNotToUse = v.text
-	case "status":
-		view.Status = v.text
 	default:
 		return fmt.Errorf("unsupported catalog key")
 	}
@@ -633,6 +601,16 @@ func formatLibrary(library Library) string {
 		writeOptionalString(&b, "description", ref.Description)
 		writeOptionalString(&b, "status", ref.Status)
 	}
+	views := append([]LibraryView(nil), library.Views...)
+	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
+	for _, view := range views {
+		b.WriteString("\n[[views]]\n")
+		writeString(&b, "id", view.ID)
+		writeOptionalString(&b, "title", view.Title)
+		writeOptionalString(&b, "description", view.Description)
+		writeOptionalString(&b, "status", view.Status)
+		writeStringArray(&b, "paths", view.Paths)
+	}
 	return b.String()
 }
 
@@ -671,18 +649,6 @@ func formatKnowledgeBase(kb KnowledgeBase) string {
 		}
 		writeOptionalString(&b, "when_to_use", link.WhenToUse)
 		writeOptionalString(&b, "when_not_to_use", link.WhenNotToUse)
-	}
-	views := append([]View(nil), kb.Views...)
-	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
-	for _, view := range views {
-		b.WriteString("\n[[views]]\n")
-		writeString(&b, "id", view.ID)
-		writeOptionalString(&b, "title", view.Title)
-		writeOptionalString(&b, "description", view.Description)
-		writeStringArray(&b, "bundles", view.Bundles)
-		writeOptionalString(&b, "when_to_use", view.WhenToUse)
-		writeOptionalString(&b, "when_not_to_use", view.WhenNotToUse)
-		writeOptionalString(&b, "status", view.Status)
 	}
 	return b.String()
 }

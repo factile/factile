@@ -38,7 +38,7 @@ func (s *Server) Tools() []Tool {
 		tool("factile_list", "List local knowledge paths, optionally as compact reader cards.", objectSchema(map[string]any{
 			"path":  stringSchema("Virtual Factile path to list. Defaults to /."),
 			"brief": boolSchema("Return compact reader cards instead of folder and document details."),
-			"view":  stringSchema("Knowledge Base View to use for this reader operation."),
+			"view":  stringSchema("Library view id used to narrow the listed scope."),
 		})),
 		tool("factile_stat", "Return one compact reader card for a path.", objectSchema(map[string]any{
 			"path": stringSchema("Virtual Factile path to inspect."),
@@ -48,31 +48,46 @@ func (s *Server) Tools() []Tool {
 			"query":      stringSchema("Task or question to retrieve context for."),
 			"max_tokens": integerSchema("Approximate maximum context size."),
 			"depth":      integerSchema("Related-link traversal depth: 0 disables expansion, 1 adds one-hop links and backlinks."),
-			"view":       stringSchema("Knowledge Base View to use for this reader operation."),
+			"view":       stringSchema("Library view id used to narrow context selection."),
 		}, "path", "query")),
 		tool("factile_search", "Search mounted local OKF knowledge.", objectSchema(map[string]any{
 			"path":  stringSchema("Virtual Factile path to search from."),
 			"query": stringSchema("Search query."),
-			"view":  stringSchema("Knowledge Base View to use for this reader operation."),
+			"view":  stringSchema("Library view id used to narrow search candidates."),
 		}, "path", "query")),
 		tool("factile_read", "Read a specific OKF concept.", objectSchema(map[string]any{
 			"path": stringSchema("Virtual Factile concept path."),
 		}, "path")),
 		tool("factile_validate", "Validate a mounted bundle or concept.", objectSchema(map[string]any{
 			"path": stringSchema("Virtual Factile path to validate."),
+			"view": stringSchema("Library view id used to narrow validation scope."),
 		}, "path")),
 		tool("factile_graph", "Build a Markdown link graph.", objectSchema(map[string]any{
 			"path":  stringSchema("Virtual Factile path to graph."),
 			"depth": integerSchema("Related-link traversal depth: 0 disables expansion, 1 adds one-hop links and backlinks."),
-			"view":  stringSchema("Knowledge Base View to use for this reader operation."),
+			"view":  stringSchema("Library view id used to narrow graph nodes and edges."),
 		}, "path")),
 		tool("factile_kb_list", "List Knowledge Bases for catalog curation.", objectSchema(map[string]any{})),
 		tool("factile_kb_inspect", "Inspect one Knowledge Base catalog.", objectSchema(map[string]any{
 			"path": stringSchema("Knowledge Base path."),
 		}, "path")),
+		tool("factile_view_list", "List library views.", objectSchema(map[string]any{})),
+		tool("factile_view_inspect", "Inspect one library view.", objectSchema(map[string]any{
+			"id": stringSchema("Library view id."),
+		}, "id")),
 	}
 	if !s.opts.ReadOnly {
 		tools = append(tools,
+			tool("factile_view_set", "Create or replace a library view.", objectSchema(map[string]any{
+				"id":          stringSchema("Library view id."),
+				"title":       stringSchema("Library view title."),
+				"description": stringSchema("Library view description."),
+				"status":      stringSchema("Library view status."),
+				"paths":       stringArraySchema("Ordered Factile paths in the view."),
+			}, "id", "paths")),
+			tool("factile_view_delete", "Delete one library view.", objectSchema(map[string]any{
+				"id": stringSchema("Library view id."),
+			}, "id")),
 			tool("factile_kb_create", "Create a Knowledge Base catalog entry.", objectSchema(map[string]any{
 				"path":        stringSchema("Knowledge Base path."),
 				"title":       stringSchema("Knowledge Base title."),
@@ -89,17 +104,6 @@ func (s *Server) Tools() []Tool {
 			tool("factile_kb_unlink", "Remove a bundle link from a Knowledge Base catalog.", objectSchema(map[string]any{
 				"bundle_path": stringSchema("Public Factile path for the linked bundle."),
 			}, "bundle_path")),
-			tool("factile_kb_view_set", "Create or replace a Knowledge Base View.", objectSchema(map[string]any{
-				"knowledge_base_path": stringSchema("Knowledge Base path."),
-				"view_id":             stringSchema("View id."),
-				"bundles":             stringArraySchema("Bundle ids or paths to include in the View."),
-				"title":               stringSchema("View title."),
-				"description":         stringSchema("View description."),
-			}, "knowledge_base_path", "view_id", "bundles")),
-			tool("factile_kb_view_delete", "Delete a Knowledge Base View.", objectSchema(map[string]any{
-				"knowledge_base_path": stringSchema("Knowledge Base path."),
-				"view_id":             stringSchema("View id."),
-			}, "knowledge_base_path", "view_id")),
 			tool("factile_create", "Create a concept.", objectSchema(map[string]any{
 				"path":     stringSchema("Virtual Factile concept path."),
 				"type":     stringSchema("OKF type value."),
@@ -317,11 +321,30 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 	case "factile_graph":
 		return s.workspace.Graph(ctx, stringArg(args, "path"), factile.GraphOptions{Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view")})
 	case "factile_validate":
-		return s.workspace.Validate(ctx, stringArg(args, "path"), factile.ValidateOptions{})
+		return s.workspace.Validate(ctx, stringArg(args, "path"), factile.ValidateOptions{View: stringArg(args, "view")})
 	case "factile_kb_list":
 		return s.workspace.ListKnowledgeBases(ctx)
 	case "factile_kb_inspect":
 		return s.workspace.InspectKnowledgeBase(ctx, stringArg(args, "path"))
+	case "factile_view_list":
+		return s.workspace.ListViews(ctx)
+	case "factile_view_inspect":
+		return s.workspace.InspectView(ctx, stringArg(args, "id"))
+	case "factile_view_set":
+		if s.opts.ReadOnly {
+			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
+		}
+		return s.workspace.SetView(ctx, stringArg(args, "id"), factile.ViewInput{
+			Title:       stringArg(args, "title"),
+			Description: stringArg(args, "description"),
+			Status:      stringArg(args, "status"),
+			Paths:       stringSliceArg(args, "paths"),
+		})
+	case "factile_view_delete":
+		if s.opts.ReadOnly {
+			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
+		}
+		return s.workspace.DeleteView(ctx, stringArg(args, "id"))
 	case "factile_kb_create":
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
@@ -342,20 +365,6 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
 		}
 		return s.workspace.UnlinkBundle(ctx, stringArg(args, "bundle_path"))
-	case "factile_kb_view_set":
-		if s.opts.ReadOnly {
-			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
-		}
-		return s.workspace.SetKnowledgeBaseView(ctx, stringArg(args, "knowledge_base_path"), stringArg(args, "view_id"), factile.ViewInput{
-			Title:       stringArg(args, "title"),
-			Description: stringArg(args, "description"),
-			Bundles:     stringSliceArg(args, "bundles"),
-		})
-	case "factile_kb_view_delete":
-		if s.opts.ReadOnly {
-			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
-		}
-		return s.workspace.DeleteKnowledgeBaseView(ctx, stringArg(args, "knowledge_base_path"), stringArg(args, "view_id"))
 	case "factile_create":
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
@@ -453,6 +462,18 @@ func resultCount(value any) int {
 		return len(v.Nodes)
 	case factile.ValidationResult:
 		return len(v.Issues)
+	case factile.ViewListResult:
+		return len(v.Views)
+	case factile.ViewResult:
+		if v.View.ID != "" {
+			return 1
+		}
+		return 0
+	case factile.ViewDeleteResult:
+		if v.ID != "" {
+			return 1
+		}
+		return 0
 	case factile.MountListResult:
 		return len(v.Mounts)
 	case factile.KnowledgeBaseListResult:
@@ -469,16 +490,6 @@ func resultCount(value any) int {
 		return 0
 	case factile.BundleUnlinkResult:
 		if v.BundlePath != "" {
-			return 1
-		}
-		return 0
-	case factile.ViewResult:
-		if v.View.ID != "" {
-			return 1
-		}
-		return 0
-	case factile.ViewDeleteResult:
-		if v.ViewID != "" {
 			return 1
 		}
 		return 0
