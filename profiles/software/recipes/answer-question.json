@@ -7,15 +7,15 @@
   "steps": [
     {
       "title": "Discover relevant scopes",
-      "command": "factile list / --brief --format json"
+      "command": "factile list / --brief --json"
     },
     {
       "title": "Retrieve focused context",
-      "command": "factile context <scope> <question> --format json"
+      "command": "factile context <scope> <question> --json"
     },
     {
       "title": "Read cited documents",
-      "command": "factile read <path> --format json"
+      "command": "factile read <path> --json"
     }
   ]
 }

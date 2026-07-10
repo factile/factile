@@ -7,7 +7,7 @@
   "steps": [
     {
       "title": "Find existing feature docs",
-      "command": "factile search <kb-path> <feature name> --format json"
+      "command": "factile search <scope> <feature name> --json"
     },
     {
       "title": "Choose a template",
@@ -19,7 +19,7 @@
     },
     {
       "title": "Validate links and frontmatter",
-      "command": "factile validate <kb-path> --format json"
+      "command": "factile validate <scope> --json"
     }
   ]
 }

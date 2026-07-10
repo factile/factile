@@ -7,7 +7,7 @@
   "steps": [
     {
       "title": "Gather incident or operation context",
-      "command": "factile context <kb-path> <operation summary> --format json"
+      "command": "factile context <scope> <operation summary> --json"
     },
     {
       "title": "Use the runbook template",
@@ -19,7 +19,7 @@
     },
     {
       "title": "Validate the runbook scope",
-      "command": "factile validate <scope> --format json"
+      "command": "factile validate <scope> --json"
     }
   ]
 }

@@ -14,9 +14,11 @@ import (
 const (
 	ErrInvalidPath         = "invalid_path"
 	ErrMountNotFound       = "mount_not_found"
+	ErrNoActiveRoot        = "no_active_root"
 	ErrAmbiguousTarget     = "ambiguous_target"
 	ErrConceptNotFound     = "concept_not_found"
 	ErrConceptAlreadyExist = "concept_already_exists"
+	ErrPathAlreadyExists   = "path_already_exists"
 	ErrPathIsNotConcept    = "path_is_not_concept"
 	ErrPathIsNotBundle     = "path_is_not_bundle"
 	ErrRevisionRequired    = "revision_required"

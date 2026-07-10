@@ -2,11 +2,7 @@ package factile
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
 
-	"github.com/factile/factile/pkg/catalog"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -61,11 +57,6 @@ func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
 		return w.rootCard()
 	}
 	card := CardSummary{Path: normalized, Title: titleFromPath(normalized)}
-	if catalogCard, ok, err := w.catalogCard(normalized); err != nil {
-		return CardSummary{}, err
-	} else if ok {
-		card = mergeCard(card, catalogCard)
-	}
 	mounts, err := w.mounts()
 	if err != nil {
 		return CardSummary{}, NormalizeError(err)
@@ -76,6 +67,9 @@ func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
 			return card, nil
 		}
 		return CardSummary{}, NormalizeError(err)
+	}
+	if target.Mount.MountPath == normalized {
+		card = mergeCard(card, cardFromMount(target.Mount))
 	}
 	if target.Kind == TargetConcept {
 		concept, err := w.readConcept(target.Mount, target.ConceptID)
@@ -102,65 +96,32 @@ func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
 }
 
 func (w *LocalWorkspace) rootCard() (CardSummary, error) {
-	paths, err := w.catalogPaths()
+	if w.opts.MountFile != "" {
+		return CardSummary{Path: "/", Title: "Factile Root"}, nil
+	}
+	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
 	if err != nil {
 		return CardSummary{}, err
 	}
-	library, err := loadLibraryAllowMissing(paths.libraryPath)
+	metadata, err := vfs.LoadRootConfig(root)
 	if err != nil {
-		return CardSummary{}, catalogLoadError(err)
+		return CardSummary{}, NormalizeError(err)
 	}
-	title := library.Title
+	title := metadata.Title
 	if title == "" {
-		title = "Library"
+		title = "Factile Root"
 	}
-	return CardSummary{Path: "/", Title: title, Description: library.Description}, nil
+	return CardSummary{Path: "/", Title: title, Description: metadata.Description, WhenToUse: metadata.WhenToUse}, nil
 }
 
-func (w *LocalWorkspace) catalogCard(normalized string) (CardSummary, bool, error) {
-	paths, err := w.catalogPaths()
-	if err != nil {
-		return CardSummary{}, false, err
+func cardFromMount(mount vfs.Mount) CardSummary {
+	return CardSummary{
+		Path:        mount.MountPath,
+		Title:       mount.Title,
+		Description: mount.Description,
+		WhenToUse:   mount.WhenToUse,
+		Writable:    writablePtr(mount.Writable),
 	}
-	library, err := catalog.LoadLibraryFile(paths.libraryPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return CardSummary{}, false, nil
-		}
-		return CardSummary{}, false, catalogLoadError(err)
-	}
-	var candidate CardSummary
-	found := false
-	for _, ref := range library.KnowledgeBases {
-		if sameFactilePath(ref.Path, normalized) {
-			candidate = CardSummary{
-				Path:        normalized,
-				Title:       ref.Title,
-				Description: ref.Description,
-			}
-			found = true
-		}
-		filename := ref.Catalog
-		if !filepath.IsAbs(filename) {
-			filename = filepath.Join(filepath.Dir(paths.libraryPath), filename)
-		}
-		kb, err := catalog.LoadKnowledgeBaseFile(filename)
-		if err != nil {
-			return CardSummary{}, false, catalogLoadError(err)
-		}
-		for _, link := range kb.Bundles {
-			if sameFactilePath(link.Path, normalized) {
-				return CardSummary{
-					Path:        normalized,
-					Title:       link.Title,
-					Description: link.Description,
-					WhenToUse:   link.WhenToUse,
-					Writable:    writablePtr(link.Writable && !w.opts.ReadOnly),
-				}, true, nil
-			}
-		}
-	}
-	return candidate, found, nil
 }
 
 func mergeCard(base CardSummary, overlay CardSummary) CardSummary {

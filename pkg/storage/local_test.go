@@ -39,6 +39,25 @@ func TestListAndReadRejectSymlinkConcept(t *testing.T) {
 	}
 }
 
+func TestListConceptIDsScansHiddenKnowledgeDirsButSkipsToolPrivateDirs(t *testing.T) {
+	root := t.TempDir()
+	mustWriteStorageTestFile(t, filepath.Join(root, ".well-known", "source.md"), []byte("---\ntype: Reference\n---\n\n# Source\n"))
+	mustWriteStorageTestFile(t, filepath.Join(root, ".factile", "private.md"), []byte("# Tool metadata\n"))
+	mustWriteStorageTestFile(t, filepath.Join(root, ".git", "ignored.md"), []byte("# Git internals\n"))
+
+	store, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.ListConceptIDs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != ".well-known/source" {
+		t.Fatalf("unexpected concept IDs: %#v", ids)
+	}
+}
+
 func TestLocalWriteRenameAndDeletePrimitives(t *testing.T) {
 	store, err := NewLocal(t.TempDir())
 	if err != nil {
@@ -215,4 +234,14 @@ func setFileLockTiming(t *testing.T, timeout time.Duration, retryInterval time.D
 		fileLockTimeout = oldTimeout
 		fileLockRetryInterval = oldRetryInterval
 	})
+}
+
+func mustWriteStorageTestFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

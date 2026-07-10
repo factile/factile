@@ -7,7 +7,7 @@
   "steps": [
     {
       "title": "Find related decisions",
-      "command": "factile search <kb-path> <decision topic> --format json"
+      "command": "factile search <scope> <decision topic> --json"
     },
     {
       "title": "Use the ADR template",
@@ -19,7 +19,7 @@
     },
     {
       "title": "Validate the decision scope",
-      "command": "factile validate <scope> --format json"
+      "command": "factile validate <scope> --json"
     }
   ]
 }

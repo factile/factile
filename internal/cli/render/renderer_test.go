@@ -97,6 +97,17 @@ func TestRendererColorAlwaysStylesText(t *testing.T) {
 	}
 }
 
+func TestPathStyleIsBrightBoldWhite(t *testing.T) {
+	style := NewStyles(true).Path
+	if !style.GetBold() {
+		t.Fatal("path style should be bold")
+	}
+	red, green, blue, _ := style.GetForeground().RGBA()
+	if red != 0xffff || green != 0xffff || blue != 0xffff {
+		t.Fatalf("path foreground should be white, got %#x %#x %#x", red, green, blue)
+	}
+}
+
 func containsANSI(value string) bool {
 	return strings.Contains(value, "\x1b")
 }

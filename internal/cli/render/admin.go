@@ -19,6 +19,24 @@ func (r *Renderer) RenderConceptConfirmation(w io.Writer, verb string, result fa
 	return nil
 }
 
+func (r *Renderer) RenderMkdir(w io.Writer, result factile.DirectoryResult) error {
+	if _, err := fmt.Fprintln(w, "Created directory "+result.Directory.Path); err != nil {
+		return err
+	}
+	if len(result.Directory.Files) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "Files:"); err != nil {
+		return err
+	}
+	for _, file := range result.Directory.Files {
+		if _, err := fmt.Fprintln(w, "  "+file); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Renderer) RenderRename(w io.Writer, result factile.RenameResult) error {
 	if _, err := fmt.Fprintln(w, "Renamed "+result.Concept.Path); err != nil {
 		return err
@@ -43,77 +61,12 @@ func (r *Renderer) RenderDelete(w io.Writer, result factile.DeleteResult) error 
 	return err
 }
 
-func (r *Renderer) RenderKnowledgeBaseList(w io.Writer, result factile.KnowledgeBaseListResult) error {
-	if len(result.KnowledgeBases) == 0 {
-		_, err := fmt.Fprintln(w, "No Knowledge Bases.")
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "Knowledge Bases:"); err != nil {
-		return err
-	}
-	for _, kb := range result.KnowledgeBases {
-		if _, err := fmt.Fprintln(w, "  "+summaryLine(kb.Path, kb.Title, kb.Description)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *Renderer) RenderKnowledgeBase(w io.Writer, result factile.KnowledgeBaseResult) error {
-	kb := result.KnowledgeBase
-	if result.Action != "" {
-		if _, err := fmt.Fprintln(w, actionTitle(result.Action)+" Knowledge Base "+kb.Path); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintln(w, "Knowledge Base "+kb.Path); err != nil {
-		return err
-	}
-	metadata := map[string]any{
-		"title":            kb.Title,
-		"description":      kb.Description,
-		"catalog":          result.Catalog,
-		"audience":         kb.Audience,
-		"profile":          kb.Profile,
-		"default_trust":    kb.DefaultTrust,
-		"default_writable": kb.DefaultWritable,
-		"status":           kb.Status,
-	}
-	if rendered := r.RenderMetadata(metadata); rendered != "" {
-		if _, err := fmt.Fprintln(w, rendered); err != nil {
-			return err
-		}
-	}
-	if len(kb.Bundles) > 0 {
-		if _, err := fmt.Fprintln(w, "\nBundles:"); err != nil {
-			return err
-		}
-		for _, bundle := range kb.Bundles {
-			line := fmt.Sprintf("  %s -> %s", bundle.Path, bundle.Source)
-			if bundle.Kind != "" {
-				line += " (" + bundle.Kind + ")"
-			}
-			if bundle.Writable {
-				line += " writable"
-			} else {
-				line += " read-only"
-			}
-			if bundle.Title != "" {
-				line += " - " + bundle.Title
-			}
-			if _, err := fmt.Fprintln(w, line); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func (r *Renderer) RenderViewList(w io.Writer, result factile.ViewListResult) error {
 	if len(result.Views) == 0 {
-		_, err := fmt.Fprintln(w, "No Library Views.")
+		_, err := fmt.Fprintln(w, "No Views.")
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Library Views:"); err != nil {
+	if _, err := fmt.Fprintln(w, "Views:"); err != nil {
 		return err
 	}
 	for _, view := range result.Views {
@@ -127,10 +80,10 @@ func (r *Renderer) RenderViewList(w io.Writer, result factile.ViewListResult) er
 func (r *Renderer) RenderView(w io.Writer, result factile.ViewResult) error {
 	view := result.View
 	if result.Action != "" {
-		if _, err := fmt.Fprintln(w, actionTitle(result.Action)+" Library View "+view.ID); err != nil {
+		if _, err := fmt.Fprintln(w, actionTitle(result.Action)+" View "+view.ID); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintln(w, "Library View "+view.ID); err != nil {
+	} else if _, err := fmt.Fprintln(w, "View "+view.ID); err != nil {
 		return err
 	}
 	metadata := map[string]any{
@@ -159,31 +112,10 @@ func (r *Renderer) RenderView(w io.Writer, result factile.ViewResult) error {
 
 func (r *Renderer) RenderViewDelete(w io.Writer, result factile.ViewDeleteResult) error {
 	if result.Deleted {
-		_, err := fmt.Fprintln(w, "Deleted Library View "+result.ID)
+		_, err := fmt.Fprintln(w, "Deleted View "+result.ID)
 		return err
 	}
-	_, err := fmt.Fprintln(w, "Library View not deleted "+result.ID)
-	return err
-}
-
-func (r *Renderer) RenderBundleLink(w io.Writer, result factile.BundleLinkResult) error {
-	action := actionTitle(defaultText(result.Action, "linked"))
-	if _, err := fmt.Fprintf(w, "%s %s -> %s\n", action, result.Bundle.Path, result.Bundle.Source); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(w, "Knowledge Base: "+result.KnowledgeBase.Path)
-	return err
-}
-
-func (r *Renderer) RenderBundleUnlink(w io.Writer, result factile.BundleUnlinkResult) error {
-	if result.Removed {
-		if _, err := fmt.Fprintln(w, "Unlinked "+result.BundlePath); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintln(w, "Bundle not linked "+result.BundlePath); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintln(w, "Knowledge Base: "+result.KnowledgeBase.Path)
+	_, err := fmt.Fprintln(w, "View not deleted "+result.ID)
 	return err
 }
 
@@ -203,10 +135,10 @@ func (r *Renderer) RenderUnmount(w io.Writer, result factile.UnmountResult) erro
 
 func (r *Renderer) RenderMountList(w io.Writer, result factile.MountListResult) error {
 	if len(result.Mounts) == 0 {
-		_, err := fmt.Fprintln(w, "No bundles mounted.")
+		_, err := fmt.Fprintln(w, "No mounts configured.")
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Mounted bundles:"); err != nil {
+	if _, err := fmt.Fprintln(w, "Mounts:"); err != nil {
 		return err
 	}
 	for _, mount := range result.Mounts {

@@ -5,22 +5,21 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/factile/factile/pkg/catalog"
 	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/vfs"
 )
 
 func (w *LocalWorkspace) ListViews(ctx context.Context) (ViewListResult, error) {
 	_ = ctx
-	paths, err := w.catalogPaths()
+	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return ViewListResult{}, err
 	}
-	library, err := loadLibraryAllowMissing(paths.libraryPath)
+	views, err := loadViewsAllowMissing(viewsPath)
 	if err != nil {
-		return ViewListResult{}, catalogLoadError(err)
+		return ViewListResult{}, err
 	}
-	return ViewListResult{Views: sortedViews(library.Views)}, nil
+	return ViewListResult{Views: sortedViews(views)}, nil
 }
 
 func (w *LocalWorkspace) InspectView(ctx context.Context, id string) (ViewResult, error) {
@@ -29,15 +28,15 @@ func (w *LocalWorkspace) InspectView(ctx context.Context, id string) (ViewResult
 	if viewID == "" {
 		return ViewResult{}, errorf(ErrValidationFailed, "View id is required")
 	}
-	paths, err := w.catalogPaths()
+	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return ViewResult{}, err
 	}
-	library, err := loadLibraryAllowMissing(paths.libraryPath)
+	views, err := loadViewsAllowMissing(viewsPath)
 	if err != nil {
-		return ViewResult{}, catalogLoadError(err)
+		return ViewResult{}, err
 	}
-	view, ok := findView(library.Views, viewID)
+	view, ok := findView(views, viewID)
 	if !ok {
 		return ViewResult{}, viewNotFound(viewID)
 	}
@@ -54,32 +53,32 @@ func (w *LocalWorkspace) SetView(ctx context.Context, id string, input ViewInput
 	if err != nil {
 		return ViewResult{}, NormalizeError(err)
 	}
-	view := catalog.LibraryView{
+	view := View{
 		ID:          viewID,
 		Title:       input.Title,
 		Description: input.Description,
 		Status:      input.Status,
 		Paths:       paths,
 	}
-	catalogPaths, err := w.catalogPaths()
+	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return ViewResult{}, err
 	}
 	action := "created"
-	err = storage.WithFileLock(catalogPaths.libraryPath, func() error {
-		library, err := loadLibraryAllowMissing(catalogPaths.libraryPath)
+	err = storage.WithFileLock(viewsPath, func() error {
+		views, err := loadViewsAllowMissing(viewsPath)
 		if err != nil {
-			return catalogLoadError(err)
+			return err
 		}
-		for i := range library.Views {
-			if library.Views[i].ID == view.ID {
-				library.Views[i] = view
+		for i := range views {
+			if views[i].ID == view.ID {
+				views[i] = view
 				action = "updated"
-				return catalog.WriteLibraryFile(catalogPaths.libraryPath, library)
+				return writeViewsFile(viewsPath, views)
 			}
 		}
-		library.Views = append(library.Views, view)
-		return catalog.WriteLibraryFile(catalogPaths.libraryPath, library)
+		views = append(views, view)
+		return writeViewsFile(viewsPath, views)
 	})
 	if err != nil {
 		return ViewResult{}, NormalizeError(err)
@@ -93,18 +92,18 @@ func (w *LocalWorkspace) DeleteView(ctx context.Context, id string) (ViewDeleteR
 	if viewID == "" {
 		return ViewDeleteResult{}, errorf(ErrValidationFailed, "View id is required")
 	}
-	paths, err := w.catalogPaths()
+	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return ViewDeleteResult{}, err
 	}
-	err = storage.WithFileLock(paths.libraryPath, func() error {
-		library, err := loadLibraryAllowMissing(paths.libraryPath)
+	err = storage.WithFileLock(viewsPath, func() error {
+		views, err := loadViewsAllowMissing(viewsPath)
 		if err != nil {
-			return catalogLoadError(err)
+			return err
 		}
-		next := library.Views[:0]
+		next := views[:0]
 		removed := false
-		for _, view := range library.Views {
+		for _, view := range views {
 			if view.ID == viewID {
 				removed = true
 				continue
@@ -114,8 +113,7 @@ func (w *LocalWorkspace) DeleteView(ctx context.Context, id string) (ViewDeleteR
 		if !removed {
 			return viewNotFound(viewID)
 		}
-		library.Views = next
-		return catalog.WriteLibraryFile(paths.libraryPath, library)
+		return writeViewsFile(viewsPath, next)
 	})
 	if err != nil {
 		return ViewDeleteResult{}, NormalizeError(err)
@@ -160,15 +158,15 @@ func (w *LocalWorkspace) selectedViewPaths(inputPath string, viewID string) (str
 	if err != nil {
 		return "", nil, NormalizeError(err)
 	}
-	paths, err := w.catalogPaths()
+	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return "", nil, err
 	}
-	library, err := loadLibraryAllowMissing(paths.libraryPath)
+	views, err := loadViewsAllowMissing(viewsPath)
 	if err != nil {
-		return "", nil, catalogLoadError(err)
+		return "", nil, err
 	}
-	view, ok := findView(library.Views, viewID)
+	view, ok := findView(views, viewID)
 	if !ok {
 		return "", nil, viewNotFound(viewID)
 	}
@@ -229,20 +227,20 @@ func normalizeViewPaths(inputs []string) ([]string, error) {
 	return paths, nil
 }
 
-func sortedViews(views []catalog.LibraryView) []catalog.LibraryView {
-	out := append([]catalog.LibraryView(nil), views...)
+func sortedViews(views []View) []View {
+	out := append([]View(nil), views...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-func findView(views []catalog.LibraryView, id string) (catalog.LibraryView, bool) {
+func findView(views []View, id string) (View, bool) {
 	viewID := strings.TrimSpace(id)
 	for _, view := range views {
 		if view.ID == viewID {
 			return view, true
 		}
 	}
-	return catalog.LibraryView{}, false
+	return View{}, false
 }
 
 func viewNotFound(id string) error {

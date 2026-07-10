@@ -1,4 +1,0 @@
-[mounts."/legacy"]
-source = "../../bundles/legacy-notes"
-kind = "local"
-writable = true

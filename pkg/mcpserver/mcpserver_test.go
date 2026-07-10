@@ -24,18 +24,18 @@ func TestToolsRespectReadOnly(t *testing.T) {
 		if tool.InputSchema == nil {
 			t.Fatalf("tool missing input schema: %s", tool.Name)
 		}
-		if strings.Contains(tool.Name, "write") || strings.Contains(tool.Name, "create") || strings.Contains(tool.Name, "delete") || strings.Contains(tool.Name, "link") {
+		if strings.Contains(tool.Name, "write") || strings.Contains(tool.Name, "create") || strings.Contains(tool.Name, "delete") || strings.Contains(tool.Name, "link") || strings.Contains(tool.Name, "mkdir") {
 			t.Fatalf("read-only tools include write tool: %s", tool.Name)
 		}
 	}
-	if descriptions["factile_context"] != "Retrieve focused local OKF context for a task or question." {
+	if descriptions["factile_context"] != "Retrieve focused OKF context for a task or question." {
 		t.Fatalf("unexpected context description: %q", descriptions["factile_context"])
 	}
-	if descriptions["factile_stat"] == "" || descriptions["factile_kb_list"] == "" || descriptions["factile_kb_inspect"] == "" || descriptions["factile_view_list"] == "" || descriptions["factile_view_inspect"] == "" {
-		t.Fatalf("read-only tools missing reader or catalog inspection tools: %#v", descriptions)
+	if descriptions["factile_stat"] == "" || descriptions["factile_mounts"] == "" || descriptions["factile_view_list"] == "" || descriptions["factile_view_inspect"] == "" {
+		t.Fatalf("read-only tools missing reader, mount, or view inspection tools: %#v", descriptions)
 	}
-	if descriptions["factile_kb_create"] != "" || descriptions["factile_kb_link"] != "" || descriptions["factile_view_set"] != "" || descriptions["factile_view_delete"] != "" {
-		t.Fatalf("read-only tools should hide write catalog tools: %#v", descriptions)
+	if descriptions["factile_kb_list"] != "" || descriptions["factile_kb_inspect"] != "" || descriptions["factile_mount"] != "" || descriptions["factile_unmount"] != "" || descriptions["factile_view_set"] != "" || descriptions["factile_view_delete"] != "" || descriptions["factile_mkdir"] != "" {
+		t.Fatalf("read-only tools should hide catalog and write tools: %#v", descriptions)
 	}
 	for _, name := range []string{"factile_list", "factile_search", "factile_context", "factile_graph", "factile_validate"} {
 		properties, ok := schemas[name]["properties"].(map[string]any)
@@ -54,28 +54,41 @@ func TestToolsRespectReadOnly(t *testing.T) {
 	for _, tool := range readWrite.Tools() {
 		readWriteSchemas[tool.Name] = tool.InputSchema
 	}
-	properties, ok := readWriteSchemas["factile_kb_link"]["properties"].(map[string]any)
-	if !ok || properties["bundle_path"] == nil {
-		t.Fatalf("write tools missing KB link schema: %#v", readWriteSchemas["factile_kb_link"])
+	properties, ok := readWriteSchemas["factile_mount"]["properties"].(map[string]any)
+	if !ok || properties["mount_path"] == nil || properties["source"] == nil || readWriteSchemas["factile_mount"]["additionalProperties"] != false {
+		t.Fatalf("write tools missing mount schema: %#v", readWriteSchemas["factile_mount"])
+	}
+	properties, ok = readWriteSchemas["factile_unmount"]["properties"].(map[string]any)
+	if !ok || properties["mount_path"] == nil || readWriteSchemas["factile_unmount"]["additionalProperties"] != false {
+		t.Fatalf("write tools missing unmount schema: %#v", readWriteSchemas["factile_unmount"])
 	}
 	properties, ok = readWriteSchemas["factile_view_set"]["properties"].(map[string]any)
 	if !ok || properties["paths"] == nil || readWriteSchemas["factile_view_set"]["additionalProperties"] != false {
 		t.Fatalf("write tools missing view set schema: %#v", readWriteSchemas["factile_view_set"])
 	}
+	properties, ok = readWriteSchemas["factile_mkdir"]["properties"].(map[string]any)
+	if !ok || properties["path"] == nil || properties["title"] == nil || properties["log"] == nil || properties["overview"] == nil || properties["bundle"] == nil || readWriteSchemas["factile_mkdir"]["additionalProperties"] != false {
+		t.Fatalf("write tools missing mkdir schema: %#v", readWriteSchemas["factile_mkdir"])
+	}
+	if readWriteSchemas["factile_kb_create"] != nil || readWriteSchemas["factile_kb_link"] != nil || readWriteSchemas["factile_kb_unlink"] != nil {
+		t.Fatalf("MCP should not expose KB catalog write tools: %#v", readWriteSchemas)
+	}
 }
 
 func TestReadOnlyRejectsHiddenWriteToolCalls(t *testing.T) {
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: t.TempDir()})
-	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_kb_create","arguments":{"path":"/engineering","title":"Engineering"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_create","arguments":{"path":"/engineering/note","type":"Note","title":"Note","markdown":"Body"}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_view_set","arguments":{"id":"reader","paths":["/engineering"]}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_view_delete","arguments":{"id":"reader"}}}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"./docs","mount_path":"/docs"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_unmount","arguments":{"mount_path":"/docs"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_create","arguments":{"path":"/engineering/note","type":"Note","title":"Note","markdown":"Body"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_view_set","arguments":{"id":"reader","paths":["/engineering"]}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_view_delete","arguments":{"id":"reader"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_mkdir","arguments":{"path":"/engineering/guides","bundle":true}}}
 `)
 	var out bytes.Buffer
 	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(out.String(), `"code":"source_read_only"`) != 4 {
+	if strings.Count(out.String(), `"code":"source_read_only"`) != 6 {
 		t.Fatalf("expected source_read_only error, got:\n%s", out.String())
 	}
 }
@@ -112,37 +125,82 @@ func TestServeToolsListAndReadCall(t *testing.T) {
 	}
 }
 
-func TestServeReaderCardsAndKBCatalogTools(t *testing.T) {
+func TestServeV2MountToolsAndReaderCards(t *testing.T) {
 	tmp := t.TempDir()
+	writeMCPRootConfig(t, tmp)
+	writeMCPConceptFile(t, filepath.Join(tmp, "overview.md"), "Guide", "Overview", "# Overview\n\nRoot-local docs are readable.\n")
 	product := filepath.Join(tmp, "product-docs")
 	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
-	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_kb_create","arguments":{"path":"/engineering","title":"Engineering"}}}
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_kb_link","arguments":{"knowledge_base_path":"/engineering","source":"` + product + `","bundle_path":"/engineering/docs","title":"Product Docs","read_only":true}}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_kb_inspect","arguments":{"path":"/engineering"}}}
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + product + `","mount_path":"/engineering/docs","title":"Product Docs","read_only":true}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mounts","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/overview"}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_stat","arguments":{"path":"/engineering/docs"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_unmount","arguments":{"mount_path":"/engineering/docs"}}}
 `)
 	var out bytes.Buffer
 	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
 		t.Fatal(err)
 	}
-	text := out.String()
-	for _, expected := range []string{
-		`"path":"/engineering"`,
-		`"path":"/engineering/docs"`,
-		`"cards"`,
-		`"card"`,
-		`"writable":false`,
-	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("MCP output missing %s:\n%s", expected, text)
+	responses := mcpResponses(t, out.String())
+	mounted := mcpStructured[factile.MountResult](t, responses[1])
+	if mounted.Mount.MountPath != "/engineering/docs" || mounted.Mount.Title != "Product Docs" || mounted.Mount.Writable {
+		t.Fatalf("unexpected MCP mount result: %#v", mounted)
+	}
+	mounts := mcpStructured[factile.MountListResult](t, responses[2])
+	if !mcpHasMount(mounts.Mounts, "/engineering/docs", product) {
+		t.Fatalf("unexpected MCP mounts result: %#v", mounts)
+	}
+	read := mcpStructured[factile.ConceptResult](t, responses[3])
+	if read.Concept.Path != "/overview" || read.Concept.Frontmatter["title"] != "Overview" {
+		t.Fatalf("unexpected MCP root-local read: %#v", read.Concept)
+	}
+	list := mcpStructured[factile.ListResult](t, responses[4])
+	if !mcpHasCardPath(list.Cards, "/engineering/docs") {
+		t.Fatalf("unexpected MCP mounted cards: %#v", list.Cards)
+	}
+	stat := mcpStructured[factile.StatResult](t, responses[5])
+	if stat.Card.Path != "/engineering/docs" || stat.Card.Title != "Product Docs" || stat.Card.Writable == nil || *stat.Card.Writable {
+		t.Fatalf("unexpected MCP mounted stat: %#v", stat.Card)
+	}
+	unmounted := mcpStructured[factile.UnmountResult](t, responses[6])
+	if !unmounted.Removed || unmounted.MountPath != "/engineering/docs" {
+		t.Fatalf("unexpected MCP unmount result: %#v", unmounted)
+	}
+	for _, stale := range []string{filepath.Join(tmp, ".factile", "library.toml"), filepath.Join(tmp, ".factile", "mounts.toml"), filepath.Join(tmp, ".factile", "knowledge-bases")} {
+		if _, err := os.Stat(stale); !os.IsNotExist(err) {
+			t.Fatalf("v2 MCP mount should not create stale catalog file %s, err=%v", stale, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "engineering", "docs.mount.toml")); !os.IsNotExist(err) {
+		t.Fatalf("expected MCP unmount to remove descriptor, err=%v", err)
 	}
 }
 
-func TestServeKnowledgeBaseReaderToolsUseAllBundles(t *testing.T) {
-	workspaceDir := filepath.Join("..", "..", "testdata", "catalog-workspace")
+func TestServeMkdirTool(t *testing.T) {
+	mountFile := mcpMountFile(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mkdir","arguments":{"path":"/product-docs/guides","title":"Guides","bundle":true}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/product-docs/guides/overview"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	made := mcpStructured[factile.DirectoryResult](t, responses[1])
+	if made.Directory.Path != "/product-docs/guides" || !made.Directory.Created || !mcpHasString(made.Directory.Files, "/product-docs/guides/index.md") || !mcpHasString(made.Directory.Files, "/product-docs/guides/log.md") || !mcpHasString(made.Directory.Files, "/product-docs/guides/overview.md") {
+		t.Fatalf("unexpected MCP mkdir result: %#v", made.Directory)
+	}
+	overview := mcpStructured[factile.ConceptResult](t, responses[2])
+	if overview.Concept.Path != "/product-docs/guides/overview" || overview.Concept.Frontmatter["title"] != "Guides Overview" {
+		t.Fatalf("unexpected MCP mkdir overview: %#v", overview.Concept)
+	}
+}
+
+func TestServeMountedSourceReaderToolsUseAllSources(t *testing.T) {
+	workspaceDir := mcpV2Workspace(t)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/engineering","brief":true}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/engineering","query":"setup"}}}
@@ -162,13 +220,26 @@ func TestServeKnowledgeBaseReaderToolsUseAllBundles(t *testing.T) {
 		`"path":"/engineering/playbook/guides/setup"`,
 	} {
 		if !strings.Contains(text, expected) {
-			t.Fatalf("KB reader MCP output missing %s:\n%s", expected, text)
+			t.Fatalf("mounted source reader MCP output missing %s:\n%s", expected, text)
 		}
 	}
 }
 
-func TestServeLibraryViewToolsAndReaderFilters(t *testing.T) {
-	workspaceDir := mcpCatalogWorkspace(t)
+func TestServeViewToolsAndReaderFilters(t *testing.T) {
+	workspaceDir := t.TempDir()
+	writeMCPRootConfig(t, workspaceDir)
+	product := filepath.Join(workspaceDir, "product-docs")
+	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
+	if err := os.MkdirAll(filepath.Join(workspaceDir, "engineering"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "engineering", "django.mount.toml"), []byte(`source = "`+product+`"
+writable = true
+title = "Django"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMCPConceptFile(t, filepath.Join(workspaceDir, "legacy", "notes", "legacy.md"), "Guide", "Legacy", "# Legacy\n\nLegacy note.\n")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspaceDir})
 	workflowPath := "/engineering/django/workflows/invoice-import"
 	runbookPath := "/engineering/django/runbooks/ocr-failure"
@@ -184,6 +255,12 @@ func TestServeLibraryViewToolsAndReaderFilters(t *testing.T) {
 	set := mcpStructured[factile.ViewResult](t, setResponses[1])
 	if set.Action != "created" || set.View.ID != "invoice" || len(set.View.Paths) != 3 {
 		t.Fatalf("unexpected MCP view set: %#v", set)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, ".factile", "views.toml")); err != nil {
+		t.Fatalf("expected MCP view set to write views.toml: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceDir, ".factile", "library.toml")); !os.IsNotExist(err) {
+		t.Fatalf("MCP view set should not create library.toml, err=%v", err)
 	}
 
 	readOnlyInput := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_view_list","arguments":{}}}
@@ -212,15 +289,17 @@ func TestServeLibraryViewToolsAndReaderFilters(t *testing.T) {
 		t.Fatalf("unexpected MCP list --view: %#v", list)
 	}
 	search := mcpStructured[factile.SearchResults](t, responses[4])
-	if mcpHasSearchResultPath(search.Results, "/engineering/common/guides/setup") || mcpHasSearchResultPath(search.Results, "/engineering/playbook/guides/setup") {
-		t.Fatalf("MCP search --view leaked out-of-view setup docs: %#v", search.Results)
+	for _, result := range search.Results {
+		if result.Concept.Path != workflowPath && result.Concept.Path != runbookPath && result.Concept.Path != legacyPath {
+			t.Fatalf("MCP search --view leaked out-of-view docs: %#v", search.Results)
+		}
 	}
 	contextPack := mcpStructured[factile.ContextPack](t, responses[5])
 	if !mcpHasConceptPath(contextPack.Concepts, workflowPath) || !mcpHasConceptPath(contextPack.Concepts, runbookPath) || mcpHasConceptPath(contextPack.Concepts, legacyPath) {
 		t.Fatalf("unexpected MCP context --view: %#v", contextPack)
 	}
 	graph := mcpStructured[factile.GraphResult](t, responses[6])
-	if !mcpHasGraphNodePath(graph.Nodes, workflowPath) || !mcpHasGraphNodePath(graph.Nodes, runbookPath) || !mcpHasGraphEdge(graph.Edges, workflowPath, runbookPath, "markdown_link") || mcpHasGraphNodePath(graph.Nodes, "/engineering/common/guides/setup") {
+	if !mcpHasGraphNodePath(graph.Nodes, workflowPath) || !mcpHasGraphNodePath(graph.Nodes, runbookPath) || !mcpHasGraphEdge(graph.Edges, workflowPath, runbookPath, "markdown_link") {
 		t.Fatalf("unexpected MCP graph --view: %#v", graph)
 	}
 	validated := mcpStructured[factile.ValidationResult](t, responses[7])
@@ -335,7 +414,7 @@ func mcpMountFile(t *testing.T) string {
 	tmp := t.TempDir()
 	product := filepath.Join(tmp, "product-docs")
 	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
-	mountFile := filepath.Join(tmp, "mounts.toml")
+	mountFile := filepath.Join(tmp, "mount-registry.toml")
 	if err := os.WriteFile(mountFile, []byte(`[mounts."/product-docs"]
 source = "`+product+`"
 kind = "local"
@@ -346,13 +425,76 @@ writable = true
 	return mountFile
 }
 
-func mcpCatalogWorkspace(t *testing.T) string {
+func mcpV2Workspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "catalog-workspace"), workspace)
+	writeMCPRootConfig(t, workspace)
 	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	writeMCPFile(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
+writable = false
+title = "Common Engineering Guides"
+description = "Shared setup and operating guides."
+trust = "shared"
+`)
+	writeMCPFile(t, filepath.Join(workspace, "engineering", "django.mount.toml"), `source = "../../bundles/product-docs"
+writable = true
+title = "Django Product Docs"
+description = "Product workflow and runbook examples."
+when_to_use = "Use when working on invoice import workflows or runbooks."
+trust = "local"
+`)
+	writeMCPFile(t, filepath.Join(workspace, "engineering", "playbook.mount.toml"), `source = "../../bundles/shared-guides"
+writable = false
+title = "Engineering Playbook"
+description = "The same shared guides mounted at another path."
+trust = "shared"
+`)
+	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "legacy-notes"), filepath.Join(workspace, "legacy"))
 	return workspace
+}
+
+func writeMCPFile(t *testing.T, filename string, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeMCPRootConfig(t *testing.T, root string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, ".factile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte(`version = 1
+
+name = "test"
+title = "Test"
+
+[defaults]
+format = "okf"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeMCPConceptFile(t *testing.T, filename string, typ string, title string, markdown string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `---
+type: ` + typ + `
+title: ` + title + `
+---
+
+` + markdown
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func copyMCPDir(t *testing.T, src, dst string) {
@@ -457,6 +599,33 @@ func mcpStructured[T any](t *testing.T, response mcpTestResponse) T {
 func mcpHasFolderPath(folders []factile.FolderSummary, path string) bool {
 	for _, folder := range folders {
 		if folder.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasCardPath(cards []factile.CardSummary, path string) bool {
+	for _, card := range cards {
+		if card.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasMount(mounts []factile.Mount, mountPath string, source string) bool {
+	for _, mount := range mounts {
+		if mount.MountPath == mountPath && mount.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

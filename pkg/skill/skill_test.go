@@ -17,14 +17,23 @@ func TestCodexAssetsRenderGeneratedContent(t *testing.T) {
 
 	readerSkill := skillMarkdown(ModeReader, "")
 	if !strings.Contains(readerSkill, "Reader mode is installed") ||
-		!strings.Contains(readerSkill, "`bundle unmount`") ||
+		!strings.Contains(readerSkill, ".factile/config.toml") ||
+		!strings.Contains(readerSkill, "<name>.mount.toml") ||
+		!strings.Contains(readerSkill, ".factile/views.toml") ||
 		strings.Contains(readerSkill, "{{") {
 		t.Fatalf("reader skill rendered incorrectly:\n%s", readerSkill)
+	}
+	for _, stale := range []string{"Knowledge Base", "bundle link", ".factile/mounts.toml", "`factile kb"} {
+		if strings.Contains(readerSkill, stale) {
+			t.Fatalf("reader skill contains stale local catalog guidance %q:\n%s", stale, readerSkill)
+		}
 	}
 
 	curatorAgents := agentsManagedBlock(ModeCurator, "software")
 	if !strings.Contains(curatorAgents, "Mode: curator") ||
 		!strings.Contains(curatorAgents, "Profile: `software`") ||
+		!strings.Contains(curatorAgents, "factile mount") ||
+		!strings.Contains(curatorAgents, ".factile/views.toml") ||
 		strings.Contains(curatorAgents, "{{") {
 		t.Fatalf("curator AGENTS block rendered incorrectly:\n%s", curatorAgents)
 	}

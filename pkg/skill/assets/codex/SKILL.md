@@ -7,9 +7,9 @@ description: Use local Factile OKF knowledge for architecture, design, documenta
 # Factile local knowledge workflow
 
 Factile exposes local OKF knowledge as a virtual filesystem.
-Reader commands work on paths such as `/`, `/engineering`, and `/engineering/django`; do not stop to classify a path as a Library, Knowledge Base, bundle link, or OKF folder before navigating it.
-At a Knowledge Base path, reader commands include every linked Bundle. Use a narrower path when the task scope is specific.
-Use `--view <id>` on reader commands when a named library view matches the task; views narrow scope without changing document paths.
+Reader commands work on paths such as `/`, `/engineering`, and `/engineering/django`; a path may be backed by root-local Markdown files or mounted sources.
+A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
+Use `--view <id>` on reader commands when a named view matches the task; views narrow scope without changing document paths.
 
 Use Factile when the task may depend on repository-specific:
 
@@ -41,7 +41,7 @@ Do not use Factile for mechanical renames, formatting, syntax fixes, or obvious 
    factile stat <path> --json
    ```
 
-3. When a named library view appears relevant, inspect it and use it to narrow reader commands:
+3. When a named view appears relevant, inspect it and use it to narrow reader commands:
 
    ```bash
    factile view inspect <view-id> --json
@@ -57,7 +57,7 @@ Do not use Factile for mechanical renames, formatting, syntax fixes, or obvious 
 5. If the context references a specific concept that matters, read it:
 
    ```bash
-   factile read <concept-path> --json
+   factile read <document-path> --json
    ```
 
 6. Use the retrieved knowledge to guide the work.
@@ -67,7 +67,7 @@ Do not use Factile for mechanical renames, formatting, syntax fixes, or obvious 
 ## Rules
 
 - Use `factile context / '<task>' --json` after initial path and card discovery.
-- Navigate progressively by Factile path; treat path boundaries as folders unless the user explicitly asks for catalog curation.
+- Navigate progressively by Factile path; treat path boundaries as folders unless the user explicitly asks for curation.
 - Use narrower paths when obvious, for example `factile context /project-docs '<task>' --json`.
 - Do not edit OKF files unless the user explicitly asks to update knowledge.
 - If Factile commands fail, continue normally and briefly note the issue.

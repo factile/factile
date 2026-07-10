@@ -29,7 +29,7 @@ mkdir -p "$tmpdir/bundles"
 cp -R ./testdata/bundles/product-docs "$tmpdir/bundles/product-docs"
 cp -R ./testdata/bundles/broken-docs "$tmpdir/bundles/broken-docs"
 
-cat > "$tmpdir/mounts.toml" <<EOF2
+cat > "$tmpdir/mount-registry.toml" <<EOF2
 [mounts."/product-docs"]
 source = "$tmpdir/bundles/product-docs"
 kind = "local"
@@ -68,19 +68,17 @@ mkdir -p "$init_workspace/.codex"
   PATH="$tmpdir:$PATH" "$factile_bin" init --json >/dev/null
   "$factile_bin" list / --json >/dev/null
   "$factile_bin" list / --brief --json >/dev/null
-  "$factile_bin" stat /project --json >/dev/null
-  "$factile_bin" kb list --json >/dev/null
-  "$factile_bin" kb inspect /project --json >/dev/null
-  "$factile_bin" read /project/overview --json >/dev/null
+  "$factile_bin" stat /overview --json >/dev/null
+  "$factile_bin" read /overview --json >/dev/null
 )
 
-catalog_workspace="$tmpdir/catalog-workspace"
-mkdir -p "$catalog_workspace"
+descriptor_workspace="$tmpdir/descriptor-workspace"
+mkdir -p "$descriptor_workspace"
 (
-  cd "$catalog_workspace"
-  "$factile_bin" kb create /engineering --title "Engineering" --json >/dev/null
-  "$factile_bin" kb link /engineering "$tmpdir/bundles/product-docs" /engineering/docs --title "Product Docs" --description "Fixture product documentation" --read-only --json >/dev/null
-  "$factile_bin" kb inspect /engineering --json >/dev/null
+  cd "$descriptor_workspace"
+  "$factile_bin" init --here --json >/dev/null
+  "$factile_bin" mount "$tmpdir/bundles/product-docs" /engineering/docs --title "Product Docs" --description "Fixture product documentation" --read-only --json >/dev/null
+  "$factile_bin" mounts --json >/dev/null
   "$factile_bin" list /engineering --json >/dev/null
   "$factile_bin" list /engineering --brief --json >/dev/null
   "$factile_bin" search /engineering 'invoice' --json >/dev/null
@@ -88,24 +86,28 @@ mkdir -p "$catalog_workspace"
   "$factile_bin" graph /engineering --json >/dev/null
   "$factile_bin" stat /engineering/docs --json >/dev/null
   "$factile_bin" validate /engineering/docs --json >/dev/null
-  "$factile_bin" kb unlink /engineering/docs --json >/dev/null
+  "$factile_bin" view set invoice --title "Invoice" --path /engineering/docs/workflows/invoice-import --json >/dev/null
+  "$factile_bin" view list --json >/dev/null
+  "$factile_bin" context /engineering 'invoice import workflow' --view invoice --json >/dev/null
+  "$factile_bin" view delete invoice --json >/dev/null
+  "$factile_bin" unmount /engineering/docs --json >/dev/null
 )
 
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" bundle list --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" bundle inspect "$tmpdir/bundles/product-docs" --json >/dev/null
+"$factile_bin" bundle inspect "$tmpdir/bundles/product-docs" --json >/dev/null
+"$factile_bin" bundle find "$tmpdir/bundles" --json >/dev/null
 
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" list / --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" list / --brief --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" list /product-docs --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" stat /product-docs --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" read /product-docs/workflows/invoice-import --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" read /product-docs/workflows/invoice-import.md --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" search /product-docs 'invoice' --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" context /product-docs 'invoice import workflow' --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" graph /product-docs/workflows/invoice-import --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" validate /product-docs --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list / --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list / --brief --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list /product-docs --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" stat /product-docs --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/invoice-import --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/invoice-import.md --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" search /product-docs 'invoice' --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" context /product-docs 'invoice import workflow' --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" graph /product-docs/workflows/invoice-import --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" validate /product-docs --json >/dev/null
 
-if "$factile_bin" --mount-file "$tmpdir/mounts.toml" validate /broken-docs --json >/dev/null; then
+if "$factile_bin" --mount-file "$tmpdir/mount-registry.toml" validate /broken-docs --json >/dev/null; then
   echo 'expected validation failure for /broken-docs' >&2
   exit 1
 fi
@@ -116,8 +118,8 @@ cat > "$tmpdir/new-workflow.md" <<'EOF3'
 Payment imports are loaded, validated, and reconciled.
 EOF3
 
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" create /product-docs/workflows/payment-import --type Workflow --title 'Payment Import Workflow' --body "$tmpdir/new-workflow.md" --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mounts.toml" read /product-docs/workflows/payment-import --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" create /product-docs/workflows/payment-import --type Workflow --title 'Payment Import Workflow' --body "$tmpdir/new-workflow.md" --json >/dev/null
+"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/payment-import --json >/dev/null
 
 npm_stage="$tmpdir/npm"
 node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.2.0 >/dev/null

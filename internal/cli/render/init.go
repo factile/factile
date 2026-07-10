@@ -28,17 +28,17 @@ func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
 		return err
 	}
 	rows := []row{
-		{label: "Knowledge Base", value: defaultText(result.MountPath, "/project")},
-		{label: "Bundle", value: annotateAction(defaultText(result.BundlePath, ".factile/knowledge"), bundleAction(result))},
-		{label: "Library", value: annotateAction(filePath(result.Files, ".factile/library.toml"), fileAction(result.Files, ".factile/library.toml"))},
-		{label: "Catalog", value: annotateAction(filePath(result.Files, ".factile/knowledge-bases/project.toml"), fileAction(result.Files, ".factile/knowledge-bases/project.toml"))},
-		{label: "Mounts", value: annotateAction(".factile/mounts.toml", result.Mount.Action)},
+		{label: "Root", value: defaultText(result.RootPath, ".")},
+		{label: "Config", value: annotateAction(filePath(result.Files, ".factile/config.toml"), fileAction(result.Files, ".factile/config.toml"))},
+		{label: "Index", value: annotateAction(filePath(result.Files, "index.md"), fileAction(result.Files, "index.md"))},
+		{label: "Log", value: annotateAction(filePath(result.Files, "log.md"), fileAction(result.Files, "log.md"))},
+		{label: "Overview", value: annotateAction(filePath(result.Files, "overview.md"), fileAction(result.Files, "overview.md"))},
 		{label: "Agent guidance", value: agentSummary(result.Agents)},
 	}
 	if err := r.renderRows(w, rows); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "\nNext:\n  factile list /\n  factile read %s/overview\n  factile context %s \"what should I know?\"\n", defaultText(result.MountPath, "/project"), defaultText(result.MountPath, "/project"))
+	_, err := fmt.Fprint(w, "\nNext:\n  factile list /\n  factile read /overview\n  factile context / \"what should I know?\"\n")
 	return err
 }
 
@@ -64,9 +64,6 @@ func (r *Renderer) renderRows(w io.Writer, rows []row) error {
 }
 
 func initChanged(result bootstrap.Result) bool {
-	if isChangingAction(result.Mount.Action) {
-		return true
-	}
 	for _, file := range result.Files {
 		if isChangingAction(file.Action) {
 			return true
@@ -80,23 +77,6 @@ func initChanged(result bootstrap.Result) bool {
 		}
 	}
 	return false
-}
-
-func bundleAction(result bootstrap.Result) string {
-	prefix := strings.TrimSuffix(defaultText(result.BundlePath, ".factile/knowledge"), "/") + "/"
-	changed := "unchanged"
-	for _, file := range result.Files {
-		if !strings.HasPrefix(file.Path, prefix) {
-			continue
-		}
-		if file.Action == "created" {
-			return "created"
-		}
-		if isChangingAction(file.Action) {
-			changed = file.Action
-		}
-	}
-	return changed
 }
 
 func fileAction(files []bootstrap.FileChange, suffix string) string {

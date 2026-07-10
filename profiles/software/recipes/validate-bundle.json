@@ -7,11 +7,11 @@
   "steps": [
     {
       "title": "Run validation",
-      "command": "factile validate <path> --format json"
+      "command": "factile validate <path> --json"
     },
     {
       "title": "Inspect graph issues",
-      "command": "factile graph <path> --format json"
+      "command": "factile graph <path> --json"
     },
     {
       "title": "Fix invalid documents with revisions",

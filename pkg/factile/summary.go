@@ -5,16 +5,17 @@ import (
 	"fmt"
 
 	"github.com/factile/factile/pkg/version"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
-	paths, err := w.catalogPaths()
+	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
 	if err != nil {
 		return SummaryResult{}, err
 	}
 	result := SummaryResult{
 		Workspace: WorkspaceSummary{
-			Path:    paths.workDir,
+			Path:    root,
 			Version: version.Current().Version,
 		},
 	}
@@ -37,7 +38,7 @@ func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
 	if len(health) == 0 {
 		health = append(health, HealthSummary{
 			Status:  "ok",
-			Message: fmt.Sprintf("%d knowledge entries, %d library views, %d sources.", len(result.Knowledge), len(result.Views), len(result.Sources)),
+			Message: fmt.Sprintf("%d knowledge entries, %d views, %d sources.", len(result.Knowledge), len(result.Views), len(result.Sources)),
 		})
 	}
 	result.Health = health
@@ -49,7 +50,7 @@ func summaryNextCommands(result SummaryResult) []string {
 	if len(result.Knowledge) == 0 && len(result.Sources) == 0 {
 		return []string{
 			"factile init",
-			"factile bundle mount <source> <path>",
+			"factile mount <source> <path>",
 			"factile --help",
 		}
 	}

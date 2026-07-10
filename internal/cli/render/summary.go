@@ -9,16 +9,15 @@ import (
 )
 
 func (r *Renderer) RenderSummary(w io.Writer, result factile.SummaryResult) error {
-	if _, err := fmt.Fprintln(w, r.helpTitle("Factile workspace")); err != nil {
+	if _, err := fmt.Fprintln(w, r.summaryHeading("Factile Workspace:")); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Path: "+result.Workspace.Path); err != nil {
-		return err
-	}
+	workspace := "  " + r.summaryPath(result.Workspace.Path)
 	if result.Workspace.Version != "" {
-		if _, err := fmt.Fprintln(w, "Version: "+result.Workspace.Version); err != nil {
-			return err
-		}
+		workspace += " (" + result.Workspace.Version + ")"
+	}
+	if _, err := fmt.Fprintln(w, workspace); err != nil {
+		return err
 	}
 	if err := r.renderSummaryKnowledge(w, result.Knowledge); err != nil {
 		return err
@@ -36,7 +35,7 @@ func (r *Renderer) RenderSummary(w io.Writer, result factile.SummaryResult) erro
 }
 
 func (r *Renderer) renderSummaryKnowledge(w io.Writer, cards []factile.CardSummary) error {
-	if _, err := fmt.Fprintln(w, "\nKnowledge:"); err != nil {
+	if _, err := fmt.Fprintln(w, "\n"+r.summaryHeading("Knowledge:")); err != nil {
 		return err
 	}
 	if len(cards) == 0 {
@@ -44,19 +43,19 @@ func (r *Renderer) renderSummaryKnowledge(w io.Writer, cards []factile.CardSumma
 		return err
 	}
 	for _, card := range cards {
-		if _, err := fmt.Fprintln(w, "  "+summaryLine(card.Path, card.Title, card.Description)); err != nil {
+		if _, err := fmt.Fprintln(w, "  "+r.summaryLine(card.Path, card.Title, card.Description)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *Renderer) renderSummaryViews(w io.Writer, views []factile.LibraryView) error {
-	if _, err := fmt.Fprintln(w, "\nKnowledge Views:"); err != nil {
+func (r *Renderer) renderSummaryViews(w io.Writer, views []factile.View) error {
+	if _, err := fmt.Fprintln(w, "\n"+r.summaryHeading("Views:")); err != nil {
 		return err
 	}
 	if len(views) == 0 {
-		_, err := fmt.Fprintln(w, "  No library views configured.")
+		_, err := fmt.Fprintln(w, "  No views configured.")
 		return err
 	}
 	for _, view := range views {
@@ -64,7 +63,7 @@ func (r *Renderer) renderSummaryViews(w io.Writer, views []factile.LibraryView) 
 			return err
 		}
 		if len(view.Paths) > 0 {
-			if _, err := fmt.Fprintln(w, "    paths: "+strings.Join(view.Paths, ", ")); err != nil {
+			if _, err := fmt.Fprintln(w, "    paths: "+strings.Join(r.summaryPaths(view.Paths), ", ")); err != nil {
 				return err
 			}
 		}
@@ -72,8 +71,38 @@ func (r *Renderer) renderSummaryViews(w io.Writer, views []factile.LibraryView) 
 	return nil
 }
 
+func (r *Renderer) summaryHeading(value string) string {
+	return r.helpTitle(value)
+}
+
+func (r *Renderer) summaryPath(value string) string {
+	if !r.colorEnabled {
+		return value
+	}
+	return r.styles.Path.Render(value)
+}
+
+func (r *Renderer) summaryPaths(paths []string) []string {
+	styled := make([]string, len(paths))
+	for i, path := range paths {
+		styled[i] = r.summaryPath(path)
+	}
+	return styled
+}
+
+func (r *Renderer) summaryLine(path string, title string, description string) string {
+	line := r.summaryPath(path)
+	if title != "" {
+		line += "  " + title
+	}
+	if description != "" {
+		line += " - " + description
+	}
+	return line
+}
+
 func (r *Renderer) renderSummarySources(w io.Writer, sources []factile.Mount) error {
-	if _, err := fmt.Fprintln(w, "\nSources:"); err != nil {
+	if _, err := fmt.Fprintln(w, "\n"+r.summaryHeading("Sources:")); err != nil {
 		return err
 	}
 	if len(sources) == 0 {
@@ -81,7 +110,7 @@ func (r *Renderer) renderSummarySources(w io.Writer, sources []factile.Mount) er
 		return err
 	}
 	for _, source := range sources {
-		line := fmt.Sprintf("  %s -> %s", source.MountPath, source.Source)
+		line := fmt.Sprintf("  %s -> %s", r.summaryPath(source.MountPath), source.Source)
 		if source.Kind != "" {
 			line += " (" + source.Kind + ")"
 		}
@@ -98,7 +127,7 @@ func (r *Renderer) renderSummarySources(w io.Writer, sources []factile.Mount) er
 }
 
 func (r *Renderer) renderSummaryHealth(w io.Writer, health []factile.HealthSummary) error {
-	if _, err := fmt.Fprintln(w, "\nHealth:"); err != nil {
+	if _, err := fmt.Fprintln(w, "\n"+r.summaryHeading("Health:")); err != nil {
 		return err
 	}
 	if len(health) == 0 {
@@ -118,13 +147,26 @@ func (r *Renderer) renderSummaryHealth(w io.Writer, health []factile.HealthSumma
 }
 
 func (r *Renderer) renderSummaryNext(w io.Writer, commands []string) error {
-	if _, err := fmt.Fprintln(w, "\nNext:"); err != nil {
+	if _, err := fmt.Fprintln(w, "\n"+r.summaryHeading("Next:")); err != nil {
 		return err
 	}
 	for _, command := range commands {
-		if _, err := fmt.Fprintln(w, "  "+command); err != nil {
+		if _, err := fmt.Fprintln(w, "  "+r.summaryCommand(command)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Renderer) summaryCommand(command string) string {
+	if !r.colorEnabled {
+		return command
+	}
+	parts := strings.Fields(command)
+	for i, part := range parts {
+		if strings.HasPrefix(part, "/") {
+			parts[i] = r.summaryPath(part)
+		}
+	}
+	return strings.Join(parts, " ")
 }

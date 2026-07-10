@@ -9,8 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/factile/factile/pkg/catalog"
 )
 
 type TargetKind string
@@ -36,12 +34,21 @@ type Mount struct {
 	Source       string `json:"source"`
 	Kind         string `json:"kind"`
 	Writable     bool   `json:"writable"`
+	Title        string `json:"title,omitempty"`
+	Description  string `json:"description,omitempty"`
+	WhenToUse    string `json:"when_to_use,omitempty"`
+	WhenNotToUse string `json:"when_not_to_use,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Ref          string `json:"ref,omitempty"`
+	Revision     string `json:"revision,omitempty"`
+	Trust        string `json:"trust,omitempty"`
 	RegistryPath string `json:"-"`
 	SourcePath   string `json:"-"`
 }
 
 type LoadOptions struct {
 	MountFile string
+	Root      string
 	WorkDir   string
 }
 
@@ -86,105 +93,30 @@ func ValidateMountPath(input string) (string, error) {
 }
 
 func LoadMounts(opts LoadOptions) ([]Mount, error) {
-	workDir := opts.WorkDir
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return nil, err
-		}
-	}
 	if opts.MountFile != "" {
 		return LoadRegistryFile(opts.MountFile)
 	}
-	var merged []Mount
-	userPath := UserRegistryPath()
-	if userPath != "" {
-		if fileExists(userPath) {
-			mounts, err := LoadRegistryFile(userPath)
-			if err != nil {
-				return nil, err
-			}
-			merged = append(merged, mounts...)
-		}
-	}
-	catalogMounts, err := LoadCatalogMounts(LoadOptions{WorkDir: workDir})
+	workDir, ok, err := FindRoot(opts)
 	if err != nil {
 		return nil, err
 	}
-	if len(catalogMounts) > 0 {
-		merged = overlayMounts(merged, catalogMounts)
+	if !ok {
+		return nil, NoActiveRootError()
 	}
-	projectPath := filepath.Join(workDir, ".factile", "mounts.toml")
-	if fileExists(projectPath) {
-		mounts, err := LoadRegistryFile(projectPath)
-		if err != nil {
-			return nil, err
-		}
-		merged = overlayMounts(merged, mounts)
+	var merged []Mount
+	descriptorMounts, err := LoadDescriptorMounts(workDir)
+	if err != nil {
+		return nil, err
 	}
+	if len(descriptorMounts) > 0 {
+		merged = overlayMounts(merged, descriptorMounts)
+	}
+	if err := validateRootMountConflicts(workDir, merged); err != nil {
+		return nil, err
+	}
+	merged = append(merged, rootMount(workDir))
 	sortMounts(merged)
 	return merged, nil
-}
-
-func LoadCatalogMounts(opts LoadOptions) ([]Mount, error) {
-	workDir := opts.WorkDir
-	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return nil, err
-		}
-	}
-	libraryPath := filepath.Join(workDir, ".factile", "library.toml")
-	if !fileExists(libraryPath) {
-		return nil, nil
-	}
-	library, err := catalog.LoadLibraryFile(libraryPath)
-	if err != nil {
-		return nil, err
-	}
-	libraryDir := filepath.Dir(libraryPath)
-	var mounts []Mount
-	seen := map[string]bool{}
-	for _, ref := range library.KnowledgeBases {
-		kbPath := ref.Catalog
-		if !filepath.IsAbs(kbPath) {
-			kbPath = filepath.Join(libraryDir, kbPath)
-		}
-		kb, err := catalog.LoadKnowledgeBaseFile(kbPath)
-		if err != nil {
-			return nil, err
-		}
-		kbDir := filepath.Dir(kbPath)
-		for _, link := range kb.Bundles {
-			mountPath, err := ValidateMountPath(link.Path)
-			if err != nil {
-				return nil, err
-			}
-			if seen[mountPath] {
-				return nil, &Error{Code: "validation_failed", Message: "Duplicate catalog mount path: " + mountPath}
-			}
-			seen[mountPath] = true
-			kind := link.Kind
-			if kind == "" {
-				kind = "local"
-			}
-			mount := Mount{
-				MountPath:    mountPath,
-				Source:       link.Source,
-				Kind:         kind,
-				Writable:     link.Writable,
-				RegistryPath: kbPath,
-			}
-			if kind == "local" {
-				mount.SourcePath = resolveLocalSource(link.Source, kbDir, workDir)
-			}
-			mounts = append(mounts, mount)
-		}
-	}
-	sortMounts(mounts)
-	return mounts, nil
 }
 
 func overlayMounts(base []Mount, overlay []Mount) []Mount {
@@ -225,19 +157,26 @@ func resolveLocalSource(source string, baseDir string, workDir string) string {
 	return filepath.Clean(candidate)
 }
 
-func UserRegistryPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil || dir == "" {
-		return ""
+func defaultWorkDir(workDir string) (string, error) {
+	if workDir == "" {
+		return os.Getwd()
 	}
-	return filepath.Join(dir, "factile", "mounts.toml")
+	return filepath.Abs(workDir)
 }
 
-func ProjectRegistryPath(workDir string) string {
-	if workDir == "" {
-		workDir, _ = os.Getwd()
+func RequireRoot(opts LoadOptions) (string, error) {
+	root, ok, err := FindRoot(opts)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(workDir, ".factile", "mounts.toml")
+	if !ok {
+		return "", NoActiveRootError()
+	}
+	return root, nil
+}
+
+func NoActiveRootError() error {
+	return &Error{Code: "no_active_root", Message: "No active Factile root found. Run factile init to create one."}
 }
 
 func LoadRegistryFile(filename string) ([]Mount, error) {
@@ -377,7 +316,7 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 	var selected *Mount
 	for i := range mounts {
 		mount := mounts[i]
-		if normalized == mount.MountPath || strings.HasPrefix(normalized, mount.MountPath+"/") {
+		if mountMatchesPath(mount.MountPath, normalized) {
 			if selected == nil || len(mount.MountPath) > len(selected.MountPath) {
 				selected = &mounts[i]
 			}
@@ -390,7 +329,7 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 	if normalized == selected.MountPath {
 		return target, nil
 	}
-	rel := strings.TrimPrefix(normalized, selected.MountPath+"/")
+	rel := mountRelativePath(*selected, normalized)
 	target.RelPath = rel
 	target.ConceptID = rel
 	if selected.Kind != "local" {
@@ -413,6 +352,9 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 		target.Kind = TargetPath
 		target.Exists = true
 		return target, nil
+	}
+	if selected.MountPath == "/" && hasDescendantMount(mounts, normalized) {
+		return Target{}, &Error{Code: "mount_not_found", Message: "Mount not found for path: " + normalized}
 	}
 	target.Kind = TargetPath
 	target.Exists = false
@@ -438,6 +380,51 @@ func sortMounts(mounts []Mount) {
 	})
 }
 
+func rootMount(root string) Mount {
+	return Mount{MountPath: "/", Source: ".", Kind: "local", Writable: true, SourcePath: root}
+}
+
+func validateRootMountConflicts(root string, mounts []Mount) error {
+	for _, mount := range mounts {
+		if mount.MountPath == "/" {
+			continue
+		}
+		rel := strings.TrimPrefix(mount.MountPath, "/")
+		file := filepath.Join(root, filepath.FromSlash(rel)+".md")
+		dir := filepath.Join(root, filepath.FromSlash(rel))
+		if regularFileExists(file) || dirExists(dir) {
+			return &Error{Code: "ambiguous_target", Message: "Path is both root path and mount: " + mount.MountPath}
+		}
+	}
+	return nil
+}
+
+func mountMatchesPath(mountPath string, normalized string) bool {
+	if mountPath == "/" {
+		return normalized != "/"
+	}
+	return normalized == mountPath || strings.HasPrefix(normalized, mountPath+"/")
+}
+
+func mountRelativePath(mount Mount, normalized string) string {
+	if mount.MountPath == "/" {
+		return strings.TrimPrefix(normalized, "/")
+	}
+	return strings.TrimPrefix(normalized, mount.MountPath+"/")
+}
+
+func hasDescendantMount(mounts []Mount, normalized string) bool {
+	for _, mount := range mounts {
+		if mount.MountPath == "/" {
+			continue
+		}
+		if strings.HasPrefix(mount.MountPath, normalized+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -453,11 +440,11 @@ func dirExists(path string) bool {
 	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.IsDir()
 }
 
-func RegistryPathForWrite(opts LoadOptions) string {
+func RegistryPathForWrite(opts LoadOptions) (string, error) {
 	if opts.MountFile != "" {
-		return opts.MountFile
+		return opts.MountFile, nil
 	}
-	return ProjectRegistryPath(opts.WorkDir)
+	return "", &Error{Code: "unsupported_command", Message: "Mount registry writes require --mount-file"}
 }
 
 func WriteRegistryFile(filename string, mounts []Mount) error {

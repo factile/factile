@@ -7,16 +7,23 @@
 
 Factile turns docs you own into structured context agents can trust.
 
-Factile is a local-first command line tool for Open Knowledge Format bundles. It
-mounts local Markdown knowledge, gives it stable virtual paths, and exposes the
-same reader contract through a native Go CLI and a local stdio MCP server.
+Factile is a local-first command line tool for Open Knowledge Format
+directories. It exposes Markdown documents through stable Factile paths and
+serves the same reader contract through a native Go CLI and a local stdio MCP
+server.
 
 Status: early local-first v0.2.0. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
-Factile does not implement remote bundles, hosted MCP, subscriptions, billing,
-auth, marketplace search, or cloud sync in this repository.
+Factile does not implement remote sources, hosted MCP, subscriptions, billing,
+auth, marketplace search, publisher portals, remote caches, or cloud sync in
+this repository.
+
+Public interoperability contracts for OKF bundles, roots and sources, reader
+operations, and local writer operations live under [`contracts/`](contracts/),
+with human documentation under
+[`docs/architecture/contracts/`](docs/architecture/contracts/).
 
 ## Install
 
@@ -64,6 +71,32 @@ go build -o factile ./cmd/factile
 ./factile version
 ```
 
+The local browser reader is embedded in the binary. To refresh the embedded
+snapshot from a sibling `factile-ui` checkout:
+
+```bash
+cd ../factile-ui
+npm run build
+cd ../factile-cli
+make ui-assets
+go build -o factile ./cmd/factile
+./factile ui --no-open
+```
+
+`factile ui --dev-assets http://127.0.0.1:5173` keeps using Vite assets during
+UI development. Release binaries do not require Node or npm at runtime.
+
+To smoke-test the embedded UI bridge from a checkout:
+
+```bash
+make ui-assets
+make smoke-ui
+```
+
+The smoke builds the binary, serves the embedded app on loopback in curator
+mode, checks the SPA route, verifies writer capabilities, and reads a fixture
+document through `/api/local/v1`.
+
 ## Quickstart
 
 Initialize Factile in a repository:
@@ -73,82 +106,126 @@ factile init
 factile
 factile list /
 factile list / --brief
-factile stat /project
-factile context /project "project overview"
+factile stat /overview
+factile context / "project overview"
 ```
 
-By default, `factile init` creates a local knowledge bundle at
-`./.factile/knowledge/`, catalogs it under `./.factile/`, and mounts it at
-`/project`. If `--agent` is not supplied, Factile installs guidance for
-supported agents it detects in the repository.
+By default, `factile init` creates a docs-rooted Factile tree:
 
-Bare `factile` prints a concise workspace summary: configured knowledge paths,
-library views, source wiring, shallow health, and useful next commands. Use
-`factile --help` for the full command reference or `factile status --json` for
-the stable structured summary.
-
-Use a custom knowledge location or explicit agent:
-
-```bash
-factile init --knowledge-base ./knowledge --agent codex
+```text
+docs/
+  .factile/
+    config.toml
+  index.md
+  overview.md
 ```
 
-Try the bundled fixtures without changing your repository:
+The directory containing `.factile/config.toml` is the active Factile root. A
+repository can keep Factile content in `docs/` without making the repository
+root itself part of the knowledge tree. Use `factile init --here` when the
+current directory should be the root.
+
+Bare `factile` prints a concise workspace summary: the active root, visible
+paths, shallow health, and useful next commands. Use `factile --help` for the
+full command reference or `factile status --json` for the stable structured
+summary.
+
+Use an explicit agent install when needed:
 
 ```bash
-factile --mount-file ./testdata/mounts.toml list /
-factile --mount-file ./testdata/mounts.toml list /product-docs
-factile --mount-file ./testdata/mounts.toml read /product-docs/workflows/invoice-import
-factile --mount-file ./testdata/mounts.toml search /product-docs invoice
-factile --mount-file ./testdata/mounts.toml context /product-docs "invoice import workflow"
-factile --mount-file ./testdata/mounts.toml graph /product-docs/workflows/invoice-import
-factile --mount-file ./testdata/mounts.toml validate /product-docs
+factile init --agent codex
+factile skill install codex --scope repo
 ```
 
 ## Paths
 
-Reader commands use Factile paths instead of filesystem paths. A reader can
-navigate `/`, `/project`, `/engineering`, and deeper folders without knowing
-whether each path is a catalog, bundle link, folder, or concept.
+Factile paths are logical paths, not filesystem paths. Public document paths
+omit `.md`:
 
-Common reader commands:
+```text
+/                         active root
+/overview                 docs/overview.md
+/runbooks                 docs/runbooks/ or docs/runbooks/index.md
+/runbooks/release         docs/runbooks/release.md
+```
+
+Reader commands use paths without requiring the caller to classify a path:
 
 ```bash
 factile list /
 factile list / --brief
-factile stat /project
-factile read /project/overview
-factile search /project "deployment checklist"
-factile context /project "what should I know before editing?"
-factile graph /project
-factile validate /project
+factile stat /overview
+factile read /overview
+factile search / "deployment checklist"
+factile context / "what should I know before editing?"
+factile graph /
+factile validate /
 ```
 
-At a Knowledge Base path, reader commands include every linked Bundle. Use a
-deeper bundle or folder path when the task scope is specific.
+## Mounts
 
-Use a library view when one task needs a repeatable lens across department-owned
-Knowledge Bases and direct mounts:
+A mount attaches another source as a child path. `factile mount` writes a
+descriptor beside the logical child path:
 
 ```bash
-factile view set invoice-import --title "Invoice Import" \
-  --path /engineering/docs/workflows/invoice-import \
-  --path /support/runbooks/imports
-factile list / --view invoice-import
-factile context / "how should invoice imports handle OCR failure?" --view invoice-import
-factile validate / --view invoice-import
+factile mount ./reference /reference --title "Reference"
+factile mounts
+factile list /reference
 ```
 
-Views live in `.factile/library.toml`, store ordered existing Factile paths, and
-do not create fake folders or change document identity. `read` remains
-path-only.
+Descriptor filenames use `<name>.mount.toml` and are named after the mounted
+child:
+
+```text
+docs/
+  reference.mount.toml
+```
+
+Example descriptor:
+
+```toml
+source = "./reference"
+writable = false
+title = "Reference"
+description = "Shared project reference material."
+```
+
+The mount path comes from the descriptor location. `docs/reference.mount.toml`
+creates `/reference`; `docs/engineering/django.mount.toml` creates
+`/engineering/django`. Local relative sources resolve from the descriptor file's
+directory.
+
+Remove a descriptor-backed mount with:
+
+```bash
+factile unmount /reference
+```
+
+## Views
+
+Views are named lenses over existing paths. They live in `.factile/views.toml`
+and only narrow reader commands when selected:
+
+```bash
+factile view set onboarding --title "Onboarding" \
+  --path /overview \
+  --path /runbooks
+factile list / --view onboarding
+factile context / "how do I get started?" --view onboarding
+factile validate / --view onboarding
+```
+
+Views do not create folders, grant access, change document identity, or change
+source writability. `read` remains path-only.
 
 ## JSON
 
 Every data-returning command supports stable JSON:
 
 ```bash
-factile --mount-file ./testdata/mounts.toml read /product-docs/workflows/invoice-import --json
+factile read /overview --json
+factile list / --brief --json
+factile mounts --json
 ```
 
 `--format json` remains accepted as a compatibility alias for existing scripts.
@@ -159,47 +236,40 @@ Text output is for humans.
 Run the local stdio MCP server:
 
 ```bash
-factile --mount-file ./testdata/mounts.toml mcp serve --stdio
-factile --mount-file ./testdata/mounts.toml mcp serve --stdio --read-only
+factile mcp serve --stdio --read-only
+factile mcp serve --stdio
 ```
 
-The MCP adapter uses the same workspace API and JSON models as the CLI. Reader
-mode exposes `factile_list`, `factile_stat`, `factile_read`, `factile_search`,
-`factile_context`, `factile_graph`, `factile_validate`, read-only Knowledge Base
-inspection tools, and read-only library view inspection tools. Reader tools
-accept the same view selector as CLI reader commands through a `view` argument.
-Write-capable mode adds catalog, view, and document mutation tools; use
-`--read-only` for default agent reading.
+The MCP adapter uses the same workspace API and JSON models as the CLI.
+Read-only mode exposes reader tools such as `factile_list`, `factile_stat`,
+`factile_read`, `factile_search`, `factile_context`, `factile_graph`,
+`factile_validate`, and `factile_mounts`. Write-capable mode adds document,
+mount, unmount, and view mutation tools. Use `--read-only` for default agent
+reading.
 
 ## Curating Knowledge
 
-Catalog commands manage local Knowledge Bases:
+Curator workflows manage local paths, descriptors, views, and documents:
 
 ```bash
-factile kb list
-factile kb inspect /project
-factile kb create /engineering --title "Engineering"
-factile kb link /engineering ./testdata/bundles/product-docs /engineering/docs --title "Docs" --read-only
-factile kb unlink /engineering/docs
-```
+factile mount ./reference /reference --title "Reference"
+factile mounts
+factile unmount /reference
 
-Library view commands manage task or audience lenses:
-
-```bash
 factile view list
-factile view inspect invoice-import
-factile view set invoice-import --title "Invoice Import" --path /engineering/docs --path /support/runbooks
-factile view delete invoice-import
+factile view inspect onboarding
+factile view set onboarding --title "Onboarding" --path /overview --path /runbooks
+factile view delete onboarding
 ```
 
-Document write commands require explicit revisions for existing concepts:
+Document write commands require explicit revisions for existing documents:
 
 ```bash
-factile create /project/runbooks/example --type Runbook --title "Example" --body ./body.md
-factile write /project/runbooks/example --rev <rev> --body ./body.md
-factile patch /project/runbooks/example --rev <rev> --set title="Updated title"
-factile rename /project/runbooks/example /project/runbooks/new-example --rev <rev>
-factile delete /project/runbooks/new-example --rev <rev>
+factile create /runbooks/example --type Runbook --title "Example" --body ./body.md
+factile write /runbooks/example --rev <rev> --body ./body.md
+factile patch /runbooks/example --rev <rev> --set title="Updated title"
+factile rename /runbooks/example /runbooks/new-example --rev <rev>
+factile delete /runbooks/new-example --rev <rev>
 ```
 
 ## Agent Guidance
@@ -214,7 +284,7 @@ factile skill doctor codex --json
 
 Repo-scope install creates local agent guidance and MCP configuration in that
 repository. Reader mode is the default and configures MCP with `--read-only`.
-Curator mode installs catalog/write guidance and a write-capable MCP command.
+Curator mode installs write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
@@ -229,19 +299,24 @@ calls:
 FACTILE_TRACE_FILE=.factile/usage.jsonl factile context / "invoice import" --json
 ```
 
-Trace logging is local-only and disabled unless the environment variable is set.
+Trace logging is local-only and disabled unless the environment variable is
+set. These records are opt-in diagnostics; they are not the Factile Server
+append-only Event Ledger. Future local trace output may reuse Event Ledger
+vocabulary when useful, but server event payload semantics are defined in
+`docs/architecture/contracts/event-ledger-contract.md`.
 
 ## Known Limitations
 
 Factile v0.2.0 is intentionally local-only:
 
-- There is no hosted service, remote bundle sync, auth, marketplace, billing, or
-  cloud MCP in this repository.
+- There is no hosted service, remote source sync, auth, marketplace, billing,
+  or cloud MCP in this repository.
+- Remote-looking source strings are reserved for future adapters.
 - Recipes are seed guidance data, not executable workflows.
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
-- The broader documentation bundle is not published in this repository yet; the
-  README covers the supported v0.2.0 surface.
+- Legacy compatibility code remains during the v2 cleanup window, but new local
+  workflows should use roots, descriptor mounts, and views.
 
 ## Supported Platforms
 

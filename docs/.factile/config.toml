@@ -1,0 +1,9 @@
+version = 1
+
+name = "factile"
+title = "Factile"
+description = "Public Factile documentation and interoperability contracts."
+when_to_use = "Use for Factile CLI behavior, open contracts, local knowledge workflows, and public integration guidance."
+
+[defaults]
+format = "okf"

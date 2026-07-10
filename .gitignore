@@ -4,11 +4,10 @@ TASKS.md
 .agents/
 .beads/
 .codex/
-.factile/
+/.factile/
 !testdata/catalog-workspace/.factile/
 !testdata/catalog-workspace/.factile/**
 .idea/
-docs/
 demo/
 test/refinement/
 tmp/

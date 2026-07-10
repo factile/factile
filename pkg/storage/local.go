@@ -28,6 +28,11 @@ type Local struct {
 	Root string
 }
 
+type ScaffoldFile struct {
+	Name string
+	Data []byte
+}
+
 func NewLocal(root string) (Local, error) {
 	if root == "" {
 		return Local{}, fmt.Errorf("%w: empty root", ErrUnsafePath)
@@ -95,7 +100,7 @@ func (s Local) ListConceptIDs(prefix string) ([]string, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") && p != root {
+			if p != root && (name == ".factile" || name == ".git") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -172,6 +177,53 @@ func (s Local) CreateExclusive(conceptID string, data []byte) error {
 		return err
 	}
 	return f.Close()
+}
+
+func (s Local) CreateDirectoryScaffold(rel string, files []ScaffoldFile) error {
+	dir, err := s.safeJoin(rel)
+	if err != nil {
+		return err
+	}
+	fullFiles := make([]string, 0, len(files))
+	for _, file := range files {
+		if file.Name == "" || file.Name != filepath.Base(file.Name) || strings.ContainsAny(file.Name, `/\`) {
+			return fmt.Errorf("%w: %s", ErrUnsafePath, file.Name)
+		}
+		fullFiles = append(fullFiles, filepath.Join(dir, file.Name))
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return err
+	}
+	created := make([]string, 0, len(fullFiles))
+	cleanup := func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = os.Remove(created[i])
+		}
+		_ = os.Remove(dir)
+	}
+	for i, file := range files {
+		f, err := os.OpenFile(fullFiles[i], os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			cleanup()
+			return err
+		}
+		created = append(created, fullFiles[i])
+		if _, err := f.Write(file.Data); err != nil {
+			f.Close()
+			cleanup()
+			return err
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			cleanup()
+			return err
+		}
+		if err := f.Close(); err != nil {
+			cleanup()
+			return err
+		}
+	}
+	return nil
 }
 
 func (s Local) DeleteConcept(conceptID string) error {

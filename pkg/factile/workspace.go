@@ -22,6 +22,7 @@ import (
 
 type WorkspaceOptions struct {
 	MountFile string
+	Root      string
 	WorkDir   string
 	ReadOnly  bool
 }
@@ -52,6 +53,19 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	}
 	folders := immediateMountFolders(mounts, normalized)
 	if normalized == "/" {
+		if mount, ok := mountByPath(mounts, "/"); ok {
+			if err := ensureLocal(mount); err != nil {
+				return ListResult{}, err
+			}
+			var documents []DocumentSummary
+			folders, documents, err = w.listLocalEntries(mount, "", folders)
+			if err != nil {
+				return ListResult{}, err
+			}
+			sortFolderSummaries(folders)
+			sortDocumentSummaries(documents)
+			return w.listResult(normalized, folders, documents, opts)
+		}
 		return w.listResult(normalized, folders, nil, opts)
 	}
 
@@ -71,15 +85,25 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	if target.Kind == TargetPath && !target.Exists {
 		return ListResult{}, errorf(ErrMountNotFound, "Path not found: %s", target.Path)
 	}
-	store, err := storage.NewLocal(target.Mount.SourcePath)
+	folders, documents, err := w.listLocalEntries(target.Mount, target.ConceptID, folders)
 	if err != nil {
-		return ListResult{}, NormalizeError(err)
+		return ListResult{}, err
 	}
-	ids, err := store.ListConceptIDs(target.ConceptID)
+	sortFolderSummaries(folders)
+	sortDocumentSummaries(documents)
+	return w.listResult(target.Path, folders, documents, opts)
+}
+
+func (w *LocalWorkspace) listLocalEntries(mount vfs.Mount, prefix string, folders []FolderSummary) ([]FolderSummary, []DocumentSummary, error) {
+	store, err := storage.NewLocal(mount.SourcePath)
 	if err != nil {
-		return ListResult{}, NormalizeError(err)
+		return nil, nil, NormalizeError(err)
 	}
-	prefix := strings.Trim(target.ConceptID, "/")
+	ids, err := store.ListConceptIDs(prefix)
+	if err != nil {
+		return nil, nil, NormalizeError(err)
+	}
+	prefix = strings.Trim(prefix, "/")
 	seenFolders := map[string]bool{}
 	for _, folder := range folders {
 		seenFolders[folder.Path] = true
@@ -92,25 +116,23 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 		}
 		if strings.Contains(rest, "/") {
 			first := strings.Split(rest, "/")[0]
-			child := target.Mount.MountPath
+			child := mount.MountPath
 			if prefix != "" {
-				child += "/" + prefix
+				child = cleanVirtualJoin(child, prefix)
 			}
-			child += "/" + first
+			child = cleanVirtualJoin(child, first)
 			if !seenFolders[child] {
 				seenFolders[child] = true
 				folders = append(folders, FolderSummary{Path: child, Title: titleFromPath(child)})
 			}
 			continue
 		}
-		summary, err := w.summaryForID(store, target.Mount, id)
+		summary, err := w.summaryForID(store, mount, id)
 		if err == nil {
 			documents = append(documents, documentSummaryFromConcept(summary))
 		}
 	}
-	sortFolderSummaries(folders)
-	sortDocumentSummaries(documents)
-	return w.listResult(target.Path, folders, documents, opts)
+	return folders, documents, nil
 }
 
 func (w *LocalWorkspace) listForView(normalized string, opts ListOptions) (ListResult, error) {
@@ -382,12 +404,55 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 	if viewID := strings.TrimSpace(opts.View); viewID != "" {
 		return w.validateViewScope(normalized, viewID)
 	}
+	metadataIssues, metadataBlocking, err := w.validateRootMetadata()
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	if metadataBlocking {
+		return ValidationResult{Path: normalized, Valid: false, Issues: metadataIssues}, nil
+	}
 	resultPath, concepts, issues, err := w.validatePathScope(normalized)
 	if err != nil {
 		return ValidationResult{}, err
 	}
+	issues = append(metadataIssues, issues...)
 	issues = append(issues, linkIssues(concepts)...)
 	return ValidationResult{Path: resultPath, Valid: !hasErrors(issues), Issues: issues}, nil
+}
+
+func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error) {
+	if w.opts.MountFile != "" {
+		return nil, false, nil
+	}
+	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	if err != nil {
+		return nil, false, NormalizeError(err)
+	}
+
+	var issues []ValidationIssue
+	blocking := false
+	if _, err := vfs.LoadDescriptorMounts(root); err != nil {
+		issues = append(issues, ValidationIssue{
+			Severity: "error",
+			Code:     ErrValidationFailed,
+			Message:  "Invalid mount descriptor: " + err.Error(),
+			Path:     "/",
+		})
+		blocking = true
+	}
+
+	viewsFile := filepath.Join(root, ".factile", "views.toml")
+	if fileExists(viewsFile) {
+		if _, err := loadViewsFile(viewsFile); err != nil {
+			issues = append(issues, ValidationIssue{
+				Severity: "error",
+				Code:     ErrValidationFailed,
+				Message:  "Invalid views file: " + err.Error(),
+				Path:     "/.factile/views.toml",
+			})
+		}
+	}
+	return issues, blocking, nil
 }
 
 func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedConcept, []ValidationIssue, error) {
@@ -452,6 +517,17 @@ func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedC
 		}
 		concepts = append(concepts, items...)
 		issues = append(issues, scopeIssues...)
+		for _, mount := range mountsForVirtualPath(mounts, normalized) {
+			if err := ensureLocal(mount); err != nil {
+				return "", nil, nil, err
+			}
+			items, mountIssues, err := w.validateMountScope(mount, "")
+			if err != nil {
+				return "", nil, nil, err
+			}
+			concepts = append(concepts, items...)
+			issues = append(issues, mountIssues...)
+		}
 	}
 	return target.Path, concepts, issues, nil
 }
@@ -555,6 +631,35 @@ func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input Cre
 		return ConceptResult{}, err
 	}
 	return ConceptResult{Concept: concept}, nil
+}
+
+func (w *LocalWorkspace) Mkdir(ctx context.Context, inputPath string, opts MkdirOptions) (DirectoryResult, error) {
+	_ = ctx
+	mounts, target, err := w.resolveForDirectoryWrite(inputPath)
+	if err != nil {
+		return DirectoryResult{}, err
+	}
+	if err := w.ensureWritable(target.Mount); err != nil {
+		return DirectoryResult{}, err
+	}
+	if err := w.ensureDirectoryParent(mounts, target); err != nil {
+		return DirectoryResult{}, err
+	}
+	store, err := storage.NewLocal(target.Mount.SourcePath)
+	if err != nil {
+		return DirectoryResult{}, NormalizeError(err)
+	}
+	files := mkdirScaffoldFiles(target.Path, target.RelPath, opts)
+	if err := store.CreateDirectoryScaffold(target.RelPath, files.storage); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return DirectoryResult{}, NewError(ErrPathAlreadyExists, "Path already exists: "+target.Path)
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return DirectoryResult{}, errorf(ErrMountNotFound, "Parent path not found: %s", path.Dir(target.Path))
+		}
+		return DirectoryResult{}, NormalizeError(err)
+	}
+	return DirectoryResult{Directory: Directory{Path: target.Path, Created: true, Files: files.logical}}, nil
 }
 
 func (w *LocalWorkspace) Write(ctx context.Context, inputPath string, input WriteConceptInput) (ConceptResult, error) {
@@ -789,14 +894,56 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
 	}
-	if strings.HasPrefix(source, "factile://") || opts.Kind == "remote" {
+	if unsupportedMountSource(source, opts.Kind) {
 		return MountResult{}, NewError(ErrUnsupportedSource, "Remote sources are not implemented in Phase 1")
+	}
+	if w.opts.MountFile == "" {
+		root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+		if err != nil {
+			return MountResult{}, NormalizeError(err)
+		}
+		descriptorPath, err := vfs.MountDescriptorPath(root, normalized)
+		if err != nil {
+			return MountResult{}, NormalizeError(err)
+		}
+		mount := vfs.Mount{
+			MountPath:    normalized,
+			Source:       source,
+			Writable:     opts.Writable,
+			Title:        opts.Title,
+			Description:  opts.Description,
+			WhenToUse:    opts.WhenToUse,
+			WhenNotToUse: opts.WhenNotToUse,
+			Version:      opts.Version,
+			Ref:          opts.Ref,
+			Revision:     opts.Revision,
+			Trust:        opts.Trust,
+		}
+		var result MountResult
+		err = storage.WithFileLock(descriptorPath, func() error {
+			if err := ensureRootMountTargetAvailable(root, normalized); err != nil {
+				return err
+			}
+			written, err := vfs.WriteMountDescriptorFile(root, mount)
+			if err != nil {
+				return err
+			}
+			result = MountResult{Mount: written}
+			return nil
+		})
+		if err != nil {
+			return MountResult{}, NormalizeError(err)
+		}
+		return result, nil
 	}
 	kind := opts.Kind
 	if kind == "" {
 		kind = "local"
 	}
-	registryPath := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, WorkDir: w.opts.WorkDir})
+	registryPath, err := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	if err != nil {
+		return MountResult{}, NormalizeError(err)
+	}
 	var result MountResult
 	err = storage.WithFileLock(registryPath, func() error {
 		mounts, err := loadRegistryForMutation(registryPath)
@@ -821,13 +968,48 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 	return result, nil
 }
 
+func unsupportedMountSource(source, kind string) bool {
+	if kind != "" && kind != "local" {
+		return true
+	}
+	return strings.HasPrefix(source, "factile://") || strings.HasPrefix(source, "git+")
+}
+
 func (w *LocalWorkspace) Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error) {
 	_ = ctx
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
 		return UnmountResult{}, NormalizeError(err)
 	}
-	registryPath := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, WorkDir: w.opts.WorkDir})
+	if w.opts.MountFile == "" {
+		root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+		if err != nil {
+			return UnmountResult{}, NormalizeError(err)
+		}
+		descriptorPath, err := vfs.MountDescriptorPath(root, normalized)
+		if err != nil {
+			return UnmountResult{}, NormalizeError(err)
+		}
+		result := UnmountResult{MountPath: normalized}
+		err = storage.WithFileLock(descriptorPath, func() error {
+			if err := os.Remove(descriptorPath); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				return err
+			}
+			result.Removed = true
+			return nil
+		})
+		if err != nil {
+			return UnmountResult{}, NormalizeError(err)
+		}
+		return result, nil
+	}
+	registryPath, err := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	if err != nil {
+		return UnmountResult{}, NormalizeError(err)
+	}
 	var result UnmountResult
 	err = storage.WithFileLock(registryPath, func() error {
 		mounts, err := loadRegistryForMutation(registryPath)
@@ -858,7 +1040,14 @@ func (w *LocalWorkspace) ListMounts(ctx context.Context) (MountListResult, error
 	if err != nil {
 		return MountListResult{}, NormalizeError(err)
 	}
-	return MountListResult{Mounts: mounts}, nil
+	out := make([]vfs.Mount, 0, len(mounts))
+	for _, mount := range mounts {
+		if mount.MountPath == "/" {
+			continue
+		}
+		out = append(out, mount)
+	}
+	return MountListResult{Mounts: out}, nil
 }
 
 func (w *LocalWorkspace) InspectBundle(ctx context.Context, source string) (BundleInspectResult, error) {
@@ -994,6 +1183,16 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 			return scopedSet{}, err
 		}
 		scoped.Concepts = append(scoped.Concepts, items...)
+		for _, mount := range mountsForVirtualPath(mounts, normalized) {
+			if err := ensureLocal(mount); err != nil {
+				return scopedSet{}, err
+			}
+			items, err := w.scopeForMount(mount, "")
+			if err != nil {
+				return scopedSet{}, err
+			}
+			scoped.Concepts = append(scoped.Concepts, items...)
+		}
 	}
 	sort.Slice(scoped.Concepts, func(i, j int) bool {
 		return scoped.Concepts[i].Concept.Path < scoped.Concepts[j].Concept.Path
@@ -1080,6 +1279,29 @@ func mountsForVirtualPath(mounts []vfs.Mount, current string) []vfs.Mount {
 		return selected[i].MountPath < selected[j].MountPath
 	})
 	return selected
+}
+
+func mountByPath(mounts []vfs.Mount, mountPath string) (vfs.Mount, bool) {
+	for _, mount := range mounts {
+		if mount.MountPath == mountPath {
+			return mount, true
+		}
+	}
+	return vfs.Mount{}, false
+}
+
+func mountMatchesPath(mountPath string, normalized string) bool {
+	if mountPath == "/" {
+		return normalized != "/"
+	}
+	return normalized == mountPath || strings.HasPrefix(normalized, mountPath+"/")
+}
+
+func mountRelativePath(mount vfs.Mount, normalized string) string {
+	if mount.MountPath == "/" {
+		return strings.TrimPrefix(normalized, "/")
+	}
+	return strings.TrimPrefix(normalized, mount.MountPath+"/")
 }
 
 func immediateChildPath(current string, candidate string) (string, bool) {
@@ -1186,7 +1408,7 @@ func summaryFromDoc(mount vfs.Mount, doc okf.Document, data []byte) ConceptSumma
 
 func conceptFromDoc(mount vfs.Mount, doc okf.Document, data []byte) Concept {
 	return Concept{
-		Path:        mount.MountPath + "/" + doc.ConceptID,
+		Path:        cleanVirtualJoin(mount.MountPath, doc.ConceptID),
 		ConceptID:   doc.ConceptID,
 		Revision:    revision.DigestBytes(data),
 		Frontmatter: doc.Frontmatter,
@@ -1241,7 +1463,7 @@ func (w *LocalWorkspace) localConceptPathSet() (map[string]bool, error) {
 			return nil, NormalizeError(err)
 		}
 		for _, id := range ids {
-			paths[mount.MountPath+"/"+okf.NormalizeConceptID(id)] = true
+			paths[cleanVirtualJoin(mount.MountPath, okf.NormalizeConceptID(id))] = true
 		}
 	}
 	return paths, nil
@@ -1286,7 +1508,7 @@ func (w *LocalWorkspace) validateConcept(mount vfs.Mount, conceptID string) (*sc
 			Severity:  "error",
 			Code:      ErrOKFParse,
 			Message:   err.Error(),
-			Path:      mount.MountPath + "/" + okf.NormalizeConceptID(conceptID),
+			Path:      cleanVirtualJoin(mount.MountPath, okf.NormalizeConceptID(conceptID)),
 			ConceptID: okf.NormalizeConceptID(conceptID),
 		}}, nil
 	}
@@ -1336,6 +1558,69 @@ func validateDocument(path string, doc okf.Document) []ValidationIssue {
 	return issues
 }
 
+type mkdirFiles struct {
+	storage []storage.ScaffoldFile
+	logical []string
+}
+
+func mkdirScaffoldFiles(logicalPath string, rel string, opts MkdirOptions) mkdirFiles {
+	if opts.Bundle {
+		opts.Log = true
+		opts.Overview = true
+	}
+	title := strings.TrimSpace(opts.Title)
+	if title == "" {
+		title = titleFromPath(logicalPath)
+	}
+	var files mkdirFiles
+	add := func(name string, data []byte) {
+		files.storage = append(files.storage, storage.ScaffoldFile{Name: name, Data: data})
+		files.logical = append(files.logical, path.Join(logicalPath, name))
+	}
+	add("index.md", mkdirIndexMarkdown(title, opts.Bundle))
+	if opts.Log {
+		add("log.md", mkdirLogMarkdown(title))
+	}
+	if opts.Overview {
+		add("overview.md", mkdirOverviewMarkdown(rel, title))
+	}
+	return files
+}
+
+func mkdirIndexMarkdown(title string, bundle bool) []byte {
+	if bundle {
+		return []byte("---\nokf_version: \"0.1\"\ntitle: " + okf.FormatValue(title) + "\n---\n\n# " + title + "\n")
+	}
+	frontmatter := map[string]any{"title": title}
+	order := []string{"title"}
+	return okf.Serialize(okf.Document{
+		Frontmatter: frontmatter,
+		Order:       order,
+		Markdown:    "# " + title + "\n",
+	})
+}
+
+func mkdirLogMarkdown(title string) []byte {
+	return okf.Serialize(okf.Document{
+		Frontmatter: map[string]any{"title": title + " Log"},
+		Order:       []string{"title"},
+		Markdown:    "# " + title + " Log\n\n- Created directory scaffold.\n",
+	})
+}
+
+func mkdirOverviewMarkdown(rel string, title string) []byte {
+	overviewTitle := title + " Overview"
+	return okf.Serialize(okf.Document{
+		ConceptID: rel + "/overview",
+		Frontmatter: map[string]any{
+			"type":  "Reference",
+			"title": overviewTitle,
+		},
+		Order:    []string{"type", "title"},
+		Markdown: "# " + overviewTitle + "\n",
+	})
+}
+
 func loadRegistryForMutation(registryPath string) ([]vfs.Mount, error) {
 	mounts, err := vfs.LoadRegistryFile(registryPath)
 	if err != nil {
@@ -1345,6 +1630,21 @@ func loadRegistryForMutation(registryPath string) ([]vfs.Mount, error) {
 		return nil, err
 	}
 	return mounts, nil
+}
+
+func ensureRootMountTargetAvailable(root string, mountPath string) error {
+	rel := strings.TrimPrefix(mountPath, "/")
+	file := filepath.Join(root, filepath.FromSlash(rel)+".md")
+	dir := filepath.Join(root, filepath.FromSlash(rel))
+	if fileExists(file) || dirExistsLocal(dir) {
+		return errorf(ErrAmbiguousTarget, "Path is both root path and mount: %s", mountPath)
+	}
+	return nil
+}
+
+func dirExistsLocal(name string) bool {
+	info, err := os.Stat(name)
+	return err == nil && info.IsDir()
 }
 
 func validationError(issues []ValidationIssue) *AppError {
@@ -1421,6 +1721,85 @@ func (w *LocalWorkspace) resolveForConceptWrite(inputPath string) ([]vfs.Mount, 
 	return mounts, vfs.Target{Kind: TargetConcept, Path: normalized, Mount: selected, ConceptID: conceptID, Exists: false}, nil
 }
 
+func (w *LocalWorkspace) resolveForDirectoryWrite(inputPath string) ([]vfs.Mount, vfs.Target, error) {
+	mounts, err := w.mounts()
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	normalized, err := vfs.NormalizePath(inputPath)
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	if normalized == "/" {
+		return nil, vfs.Target{}, errorf(ErrInvalidPath, "Directory path must not be /")
+	}
+	selected, rel, err := w.mountAndRelativePath(mounts, normalized)
+	if err != nil {
+		return nil, vfs.Target{}, err
+	}
+	if rel == "" {
+		return nil, vfs.Target{}, NewError(ErrPathAlreadyExists, "Path already exists: "+normalized)
+	}
+	if selected.Kind != "" && selected.Kind != "local" {
+		if err := w.ensureWritable(selected); err != nil {
+			return nil, vfs.Target{}, err
+		}
+	}
+	target, err := vfs.Resolve(mounts, normalized)
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	switch target.Kind {
+	case TargetConcept:
+		return nil, vfs.Target{}, NewError(ErrConceptAlreadyExist, "Concept already exists: "+normalized)
+	case TargetPath:
+		if target.Exists {
+			return nil, vfs.Target{}, NewError(ErrPathAlreadyExists, "Path already exists: "+normalized)
+		}
+	case TargetBundle:
+		return nil, vfs.Target{}, NewError(ErrPathAlreadyExists, "Path already exists: "+normalized)
+	default:
+		return nil, vfs.Target{}, errorf(ErrInvalidPath, "Invalid directory path: %s", normalized)
+	}
+	target.Mount = selected
+	target.RelPath = rel
+	target.ConceptID = rel
+	return mounts, target, nil
+}
+
+func (w *LocalWorkspace) ensureDirectoryParent(mounts []vfs.Mount, target vfs.Target) error {
+	parentPath := path.Dir(target.Path)
+	if parentPath == "." {
+		parentPath = "/"
+	}
+	if parentPath == "/" && target.Mount.MountPath == "/" {
+		return nil
+	}
+	parent, err := vfs.Resolve(mounts, parentPath)
+	if err != nil {
+		return NormalizeError(err)
+	}
+	if parent.Kind == TargetVirtualRoot {
+		if target.Mount.MountPath == "/" {
+			return nil
+		}
+		return errorf(ErrMountNotFound, "Parent path not found: %s", parentPath)
+	}
+	if parent.Kind == TargetConcept {
+		return errorf(ErrInvalidPath, "Parent path is a concept: %s", parentPath)
+	}
+	if !parent.Exists {
+		return errorf(ErrMountNotFound, "Parent path not found: %s", parentPath)
+	}
+	if parent.Mount.MountPath != target.Mount.MountPath {
+		return errorf(ErrMountNotFound, "Parent path not found in target source: %s", parentPath)
+	}
+	if parent.Kind != TargetPath && parent.Kind != TargetBundle {
+		return errorf(ErrInvalidPath, "Parent path is not a directory: %s", parentPath)
+	}
+	return nil
+}
+
 func (w *LocalWorkspace) resolveExistingConceptWrite(inputPath string) ([]vfs.Mount, vfs.Target, error) {
 	mounts, target, err := w.resolve(inputPath)
 	if err != nil {
@@ -1433,10 +1812,21 @@ func (w *LocalWorkspace) resolveExistingConceptWrite(inputPath string) ([]vfs.Mo
 }
 
 func (w *LocalWorkspace) mountAndConceptID(mounts []vfs.Mount, normalized string) (vfs.Mount, string, error) {
+	selected, conceptID, err := w.mountAndRelativePath(mounts, normalized)
+	if err != nil {
+		return vfs.Mount{}, "", err
+	}
+	if conceptID == "" {
+		return vfs.Mount{}, "", errorf(ErrPathIsNotConcept, "Path is not a concept: %s", normalized)
+	}
+	return selected, conceptID, nil
+}
+
+func (w *LocalWorkspace) mountAndRelativePath(mounts []vfs.Mount, normalized string) (vfs.Mount, string, error) {
 	var selected *vfs.Mount
 	for i := range mounts {
 		mount := mounts[i]
-		if normalized == mount.MountPath || strings.HasPrefix(normalized, mount.MountPath+"/") {
+		if mountMatchesPath(mount.MountPath, normalized) {
 			if selected == nil || len(mount.MountPath) > len(selected.MountPath) {
 				selected = &mounts[i]
 			}
@@ -1446,17 +1836,17 @@ func (w *LocalWorkspace) mountAndConceptID(mounts []vfs.Mount, normalized string
 		return vfs.Mount{}, "", NewError(ErrMountNotFound, "Mount not found for path: "+normalized)
 	}
 	if normalized == selected.MountPath {
-		return vfs.Mount{}, "", errorf(ErrPathIsNotConcept, "Path is not a concept: %s", normalized)
+		return *selected, "", nil
 	}
-	conceptID := strings.TrimPrefix(normalized, selected.MountPath+"/")
-	if conceptID == "" || strings.Contains(conceptID, "..") {
-		return vfs.Mount{}, "", errorf(ErrInvalidPath, "Invalid concept path: %s", normalized)
+	rel := mountRelativePath(*selected, normalized)
+	if rel == "" || strings.Contains(rel, "..") {
+		return vfs.Mount{}, "", errorf(ErrInvalidPath, "Invalid path: %s", normalized)
 	}
-	return *selected, conceptID, nil
+	return *selected, rel, nil
 }
 
 func (w *LocalWorkspace) mounts() ([]vfs.Mount, error) {
-	return vfs.LoadMounts(vfs.LoadOptions{MountFile: w.opts.MountFile, WorkDir: w.opts.WorkDir})
+	return vfs.LoadMounts(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
 }
 
 func (w *LocalWorkspace) ensureWritable(mount vfs.Mount) error {

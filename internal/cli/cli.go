@@ -17,11 +17,13 @@ import (
 	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/skill"
 	"github.com/factile/factile/pkg/trace"
+	"github.com/factile/factile/pkg/uibridge"
 	"github.com/factile/factile/pkg/version"
 )
 
 type globals struct {
 	MountFile string
+	Root      string
 	Format    string
 	Color     clirender.ColorMode
 	Quiet     bool
@@ -79,7 +81,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 	if global.Format == "" {
 		global.Format = formatText
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile, Root: global.Root})
 	if len(rest) == 0 {
 		result, err := ws.Summary(ctx)
 		if err != nil {
@@ -174,10 +176,10 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return writeStatResult(stdout, global, result)
 	case "read":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile read <concept-path>")
+			return showUsage(stdout, "factile read <document-path>")
 		}
 		if len(args) != 2 {
-			return usage(global, stdout, "factile read <concept-path>")
+			return usage(global, stdout, "factile read <document-path>")
 		}
 		result, err := ws.Read(ctx, args[1], factile.ReadOptions{})
 		if err != nil {
@@ -238,6 +240,10 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 			return 3, nil
 		}
 		return 0, nil
+	case "ui":
+		return runUI(ctx, ws, args, global, stdout)
+	case "mkdir":
+		return runMkdir(ctx, ws, args, global, stdout)
 	case "create":
 		return runCreate(ctx, ws, args, global, stdout)
 	case "write":
@@ -250,10 +256,14 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runDelete(ctx, ws, args, global, stdout)
 	case "deprecate":
 		return runDeprecate(ctx, ws, args, global, stdout)
+	case "mount":
+		return runMount(ctx, ws, args, global, stdout)
+	case "unmount":
+		return runUnmount(ctx, ws, args, global, stdout)
+	case "mounts":
+		return runMounts(ctx, ws, args, global, stdout)
 	case "bundle":
 		return runBundle(ctx, ws, args[1:], global, stdout)
-	case "kb":
-		return runKB(ctx, ws, args[1:], global, stdout)
 	case "view":
 		return runView(ctx, ws, args[1:], global, stdout)
 	case "skill":
@@ -286,14 +296,13 @@ func runPathShortcut(ctx context.Context, ws factile.Workspace, path string, glo
 
 func runInit(ctx context.Context, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile init [--knowledge-base <path>] [--agent <agent>]")
+		return showUsage(stdout, "factile init [--here] [--agent <agent>]")
 	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	agent := fs.String("agent", "", "")
-	knowledge := fs.String("knowledge", "", "")
-	knowledgeBase := fs.String("knowledge-base", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--agent": true, "--knowledge": true, "--knowledge-base": true})
+	here := fs.Bool("here", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--agent": true, "--here": false})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -301,17 +310,13 @@ func runInit(ctx context.Context, args []string, global globals, stdout io.Write
 		return 2, err
 	}
 	if fs.NArg() != 0 {
-		return usage(global, stdout, "factile init [--knowledge-base <path>] [--agent <agent>]")
-	}
-	knowledgePath := *knowledge
-	if *knowledgeBase != "" {
-		knowledgePath = *knowledgeBase
+		return usage(global, stdout, "factile init [--here] [--agent <agent>]")
 	}
 	var agents []string
 	if *agent != "" {
 		agents = []string{*agent}
 	}
-	result, err := bootstrap.Init(ctx, bootstrap.Options{KnowledgePath: knowledgePath, Agents: agents})
+	result, err := bootstrap.Init(ctx, bootstrap.Options{WorkDir: global.Root, Here: *here, Agents: agents})
 	if err != nil {
 		return 0, err
 	}
@@ -319,6 +324,56 @@ func runInit(ctx context.Context, args []string, global globals, stdout io.Write
 		return writeInitResult(stdout, global, result)
 	}
 	return writeResult(stdout, global, result)
+}
+
+func runUI(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]")
+	}
+	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	port := fs.Int("port", 0, "")
+	noOpen := fs.Bool("no-open", false, "")
+	devAssets := fs.String("dev-assets", "", "")
+	curator := fs.Bool("curator", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--port": true, "--no-open": false, "--dev-assets": true, "--curator": false})
+	if orderErr != nil {
+		return 2, orderErr
+	}
+	if err := fs.Parse(ordered); err != nil {
+		return 2, err
+	}
+	if fs.NArg() != 0 {
+		return usage(global, stdout, "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]")
+	}
+	server, err := uibridge.Start(ws, uibridge.Options{Port: *port, DevAssets: *devAssets, Curator: *curator})
+	if err != nil {
+		return 0, err
+	}
+	result := server.Result()
+	if global.structuredOutput() {
+		if _, err := printResult(stdout, global, result); err != nil {
+			return 1, err
+		}
+	} else if !global.Quiet {
+		_, _ = fmt.Fprintf(stdout, "Factile UI: %s\n", result.URL)
+		_, _ = fmt.Fprintf(stdout, "Local API:  %s\n", result.API)
+		if result.DevAssets != "" {
+			_, _ = fmt.Fprintf(stdout, "Dev assets: %s\n", result.DevAssets)
+		}
+		if result.Mode == "curator" {
+			_, _ = fmt.Fprintln(stdout, "Mode:       curator")
+		} else {
+			_, _ = fmt.Fprintln(stdout, "Mode:       reader")
+		}
+	}
+	if !*noOpen {
+		_ = uibridge.OpenBrowser(result.URL)
+	}
+	if err := server.Serve(ctx); err != nil {
+		return 0, err
+	}
+	return 0, nil
 }
 
 func runContext(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
@@ -372,9 +427,36 @@ func runGraph(ctx context.Context, ws factile.Workspace, args []string, global g
 	return writeGraphResult(stdout, global, result)
 }
 
+func runMkdir(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]")
+	}
+	fs := flag.NewFlagSet("mkdir", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	title := fs.String("title", "", "")
+	log := fs.Bool("log", false, "")
+	overview := fs.Bool("overview", false, "")
+	bundle := fs.Bool("bundle", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--title": true, "--log": false, "--overview": false, "--bundle": false})
+	if orderErr != nil {
+		return 2, orderErr
+	}
+	if err := fs.Parse(ordered); err != nil {
+		return 2, err
+	}
+	if fs.NArg() != 1 {
+		return usage(global, stdout, "factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]")
+	}
+	result, err := ws.Mkdir(ctx, fs.Arg(0), factile.MkdirOptions{Title: *title, Log: *log, Overview: *overview, Bundle: *bundle})
+	if err != nil {
+		return 0, err
+	}
+	return writeMkdirResult(stdout, global, result)
+}
+
 func runCreate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile create <concept-path> --type <type> --title <title> --body <file>")
+		return showUsage(stdout, "factile create <document-path> --type <type> --title <title> --body <file>")
 	}
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -389,7 +471,7 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 		return 2, err
 	}
 	if fs.NArg() != 1 || *typeValue == "" || *title == "" || *bodyFile == "" {
-		return usage(global, stdout, "factile create <concept-path> --type <type> --title <title> --body <file>")
+		return usage(global, stdout, "factile create <document-path> --type <type> --title <title> --body <file>")
 	}
 	body, err := os.ReadFile(*bodyFile)
 	if err != nil {
@@ -404,7 +486,7 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runWrite(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile write <concept-path> --rev <rev> --body <file>")
+		return showUsage(stdout, "factile write <document-path> --rev <rev> --body <file>")
 	}
 	fs := flag.NewFlagSet("write", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -418,7 +500,7 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 		return 2, err
 	}
 	if fs.NArg() != 1 || *bodyFile == "" {
-		return usage(global, stdout, "factile write <concept-path> --rev <rev> --body <file>")
+		return usage(global, stdout, "factile write <document-path> --rev <rev> --body <file>")
 	}
 	body, err := os.ReadFile(*bodyFile)
 	if err != nil {
@@ -433,10 +515,10 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 
 func runPatch(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile patch <concept-path> --rev <rev> [patch options]")
+		return showUsage(stdout, "factile patch <document-path> --rev <rev> [patch options]")
 	}
 	if len(args) < 2 {
-		return usage(global, stdout, "factile patch <concept-path> --rev <rev> [patch options]")
+		return usage(global, stdout, "factile patch <document-path> --rev <rev> [patch options]")
 	}
 	path := args[1]
 	input := factile.PatchConceptInput{Set: map[string]any{}, ReplaceSections: map[string]string{}, AppendSections: map[string]string{}}
@@ -538,7 +620,7 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runDelete(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile delete <concept-path> --rev <rev>")
+		return showUsage(stdout, "factile delete <document-path> --rev <rev>")
 	}
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -551,7 +633,7 @@ func runDelete(ctx context.Context, ws factile.Workspace, args []string, global 
 		return 2, err
 	}
 	if fs.NArg() != 1 {
-		return usage(global, stdout, "factile delete <concept-path> --rev <rev>")
+		return usage(global, stdout, "factile delete <document-path> --rev <rev>")
 	}
 	result, err := ws.Delete(ctx, fs.Arg(0), factile.DeleteOptions{ExpectedRevision: *rev})
 	if err != nil {
@@ -562,7 +644,7 @@ func runDelete(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile deprecate <concept-path> --rev <rev> --reason <text>")
+		return showUsage(stdout, "factile deprecate <document-path> --rev <rev> --reason <text>")
 	}
 	fs := flag.NewFlagSet("deprecate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -576,7 +658,7 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 		return 2, err
 	}
 	if fs.NArg() != 1 {
-		return usage(global, stdout, "factile deprecate <concept-path> --rev <rev> --reason <text>")
+		return usage(global, stdout, "factile deprecate <document-path> --rev <rev> --reason <text>")
 	}
 	result, err := ws.Deprecate(ctx, fs.Arg(0), factile.DeprecateOptions{ExpectedRevision: *rev, Reason: *reason})
 	if err != nil {
@@ -585,26 +667,72 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 	return writeConceptConfirmation(stdout, global, "Deprecated", result)
 }
 
+func runMount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile mount <source> <mount-path> [--read-only] [--title <title>] [--description <text>]")
+	}
+	fs := flag.NewFlagSet("mount", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	readOnly := fs.Bool("read-only", false, "")
+	title := fs.String("title", "", "")
+	description := fs.String("description", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--read-only": false, "--title": true, "--description": true})
+	if orderErr != nil {
+		return 2, orderErr
+	}
+	if err := fs.Parse(ordered); err != nil {
+		return 2, err
+	}
+	if fs.NArg() != 2 {
+		return usage(global, stdout, "factile mount <source> <mount-path> [--read-only] [--title <title>] [--description <text>]")
+	}
+	result, err := ws.Mount(ctx, fs.Arg(0), fs.Arg(1), factile.MountOptions{
+		Writable:    !*readOnly,
+		Title:       *title,
+		Description: *description,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return writeMountResult(stdout, global, result)
+}
+
+func runUnmount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile unmount <mount-path>")
+	}
+	if len(args) != 2 {
+		return usage(global, stdout, "factile unmount <mount-path>")
+	}
+	result, err := ws.Unmount(ctx, args[1], factile.UnmountOptions{})
+	if err != nil {
+		return 0, err
+	}
+	return writeUnmountResult(stdout, global, result)
+}
+
+func runMounts(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile mounts")
+	}
+	if len(args) != 1 {
+		return usage(global, stdout, "factile mounts")
+	}
+	result, err := ws.ListMounts(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return writeMountList(stdout, global, result)
+}
+
 func runBundle(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if len(args) == 1 && isHelpArg(args[0]) {
-		return showUsage(stdout, "factile bundle find|inspect|mount|unmount|list")
+		return showUsage(stdout, "factile bundle find|inspect")
 	}
 	if len(args) == 0 {
-		return usage(global, stdout, "factile bundle find|inspect|mount|unmount|list")
+		return usage(global, stdout, "factile bundle find|inspect")
 	}
 	switch args[0] {
-	case "list":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile bundle list")
-		}
-		if len(args) != 1 {
-			return usage(global, stdout, "factile bundle list")
-		}
-		result, err := ws.ListMounts(ctx)
-		if err != nil {
-			return 0, err
-		}
-		return writeMountList(stdout, global, result)
 	case "inspect":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile bundle inspect <source>")
@@ -633,133 +761,8 @@ func runBundle(ctx context.Context, ws factile.Workspace, args []string, global 
 			return 0, err
 		}
 		return writeBundleFind(stdout, global, result)
-	case "mount":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile bundle mount <source> <mount-path>")
-		}
-		if len(args) != 3 {
-			return usage(global, stdout, "factile bundle mount <source> <mount-path>")
-		}
-		result, err := ws.Mount(ctx, args[1], args[2], factile.MountOptions{Writable: true, Kind: "local"})
-		if err != nil {
-			return 0, err
-		}
-		return writeMountResult(stdout, global, result)
-	case "unmount":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile bundle unmount <mount-path>")
-		}
-		if len(args) != 2 {
-			return usage(global, stdout, "factile bundle unmount <mount-path>")
-		}
-		result, err := ws.Unmount(ctx, args[1], factile.UnmountOptions{})
-		if err != nil {
-			return 0, err
-		}
-		return writeUnmountResult(stdout, global, result)
 	default:
 		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported bundle command: "+args[0])
-	}
-}
-
-func runKB(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
-	if len(args) == 1 && isHelpArg(args[0]) {
-		return showUsage(stdout, "factile kb list|inspect|create|link|unlink")
-	}
-	if len(args) == 0 {
-		return usage(global, stdout, "factile kb list|inspect|create|link|unlink")
-	}
-	switch args[0] {
-	case "list":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile kb list")
-		}
-		if len(args) != 1 {
-			return usage(global, stdout, "factile kb list")
-		}
-		result, err := ws.ListKnowledgeBases(ctx)
-		if err != nil {
-			return 0, err
-		}
-		return writeKnowledgeBaseList(stdout, global, result)
-	case "inspect":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile kb inspect <kb-path>")
-		}
-		if len(args) != 2 {
-			return usage(global, stdout, "factile kb inspect <kb-path>")
-		}
-		result, err := ws.InspectKnowledgeBase(ctx, args[1])
-		if err != nil {
-			return 0, err
-		}
-		return writeKnowledgeBase(stdout, global, result)
-	case "create":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile kb create <kb-path> --title <title> [--description <text>]")
-		}
-		fs := flag.NewFlagSet("kb create", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		title := fs.String("title", "", "")
-		description := fs.String("description", "", "")
-		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--title": true, "--description": true})
-		if orderErr != nil {
-			return 2, orderErr
-		}
-		if err := fs.Parse(ordered); err != nil {
-			return 2, err
-		}
-		if fs.NArg() != 1 {
-			return usage(global, stdout, "factile kb create <kb-path> --title <title> [--description <text>]")
-		}
-		result, err := ws.CreateKnowledgeBase(ctx, fs.Arg(0), factile.KnowledgeBaseCreateInput{Title: *title, Description: *description})
-		if err != nil {
-			return 0, err
-		}
-		return writeKnowledgeBase(stdout, global, result)
-	case "link":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile kb link <kb-path> <source> <bundle-path> [--title <title>] [--read-only]")
-		}
-		fs := flag.NewFlagSet("kb link", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		title := fs.String("title", "", "")
-		description := fs.String("description", "", "")
-		readOnly := fs.Bool("read-only", false, "")
-		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--title": true, "--description": true, "--read-only": false})
-		if orderErr != nil {
-			return 2, orderErr
-		}
-		if err := fs.Parse(ordered); err != nil {
-			return 2, err
-		}
-		if fs.NArg() != 3 {
-			return usage(global, stdout, "factile kb link <kb-path> <source> <bundle-path> [--title <title>] [--read-only]")
-		}
-		result, err := ws.LinkBundle(ctx, fs.Arg(0), fs.Arg(1), fs.Arg(2), factile.BundleLinkInput{
-			Title:       *title,
-			Description: *description,
-			Writable:    !*readOnly,
-			Kind:        "local",
-		})
-		if err != nil {
-			return 0, err
-		}
-		return writeBundleLink(stdout, global, result)
-	case "unlink":
-		if hasHelp(args) {
-			return showUsage(stdout, "factile kb unlink <bundle-path>")
-		}
-		if len(args) != 2 {
-			return usage(global, stdout, "factile kb unlink <bundle-path>")
-		}
-		result, err := ws.UnlinkBundle(ctx, args[1])
-		if err != nil {
-			return 0, err
-		}
-		return writeBundleUnlink(stdout, global, result)
-	default:
-		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported kb command: "+args[0])
 	}
 }
 
@@ -956,7 +959,7 @@ func runMCP(ctx context.Context, global globals, args []string, stdin io.Reader,
 	if !stdio {
 		return 2, fmt.Errorf("MCP serve requires --stdio")
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile, ReadOnly: readOnly})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile, Root: global.Root})
 	return 0, mcpserver.Serve(ctx, ws, stdin, stdout, mcpserver.Options{ReadOnly: readOnly})
 }
 
@@ -974,6 +977,12 @@ func parseGlobals(args []string) (globals, []string, error) {
 				return global, nil, fmt.Errorf("--mount-file requires a path")
 			}
 			global.MountFile = args[i]
+		case "--root":
+			i++
+			if i >= len(args) {
+				return global, nil, fmt.Errorf("--root requires a path")
+			}
+			global.Root = args[i]
 		case "--format":
 			i++
 			if i >= len(args) {
@@ -1185,6 +1194,15 @@ func writeConceptConfirmation(stdout io.Writer, global globals, verb string, res
 	})
 }
 
+func writeMkdirResult(stdout io.Writer, global globals, result factile.DirectoryResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderMkdir(stdout, result)
+	})
+}
+
 func writeRenameResult(stdout io.Writer, global globals, result factile.RenameResult) (int, error) {
 	if global.structuredOutput() {
 		return writeResult(stdout, global, result)
@@ -1200,24 +1218,6 @@ func writeDeleteResult(stdout io.Writer, global globals, result factile.DeleteRe
 	}
 	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
 		return renderer.RenderDelete(stdout, result)
-	})
-}
-
-func writeKnowledgeBaseList(stdout io.Writer, global globals, result factile.KnowledgeBaseListResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderKnowledgeBaseList(stdout, result)
-	})
-}
-
-func writeKnowledgeBase(stdout io.Writer, global globals, result factile.KnowledgeBaseResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderKnowledgeBase(stdout, result)
 	})
 }
 
@@ -1245,24 +1245,6 @@ func writeViewDelete(stdout io.Writer, global globals, result factile.ViewDelete
 	}
 	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
 		return renderer.RenderViewDelete(stdout, result)
-	})
-}
-
-func writeBundleLink(stdout io.Writer, global globals, result factile.BundleLinkResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderBundleLink(stdout, result)
-	})
-}
-
-func writeBundleUnlink(stdout io.Writer, global globals, result factile.BundleUnlinkResult) (int, error) {
-	if global.structuredOutput() {
-		return writeResult(stdout, global, result)
-	}
-	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderBundleUnlink(stdout, result)
 	})
 }
 
@@ -1428,20 +1410,6 @@ func printResult(stdout io.Writer, global globals, value any) (int, error) {
 		} else {
 			_, _ = fmt.Fprintln(stdout, v.Card.Path)
 		}
-	case factile.KnowledgeBaseListResult:
-		for _, kb := range v.KnowledgeBases {
-			if kb.Title != "" {
-				_, _ = fmt.Fprintf(stdout, "%s %s\n", kb.Path, kb.Title)
-			} else {
-				_, _ = fmt.Fprintln(stdout, kb.Path)
-			}
-		}
-	case factile.KnowledgeBaseResult:
-		_, _ = fmt.Fprintln(stdout, v.KnowledgeBase.Path)
-	case factile.BundleLinkResult:
-		_, _ = fmt.Fprintln(stdout, v.Bundle.Path)
-	case factile.BundleUnlinkResult:
-		_, _ = fmt.Fprintf(stdout, "removed %s\n", v.BundlePath)
 	case factile.SearchResults:
 		for _, result := range v.Results {
 			_, _ = fmt.Fprintf(stdout, "%.1f %s\n", result.Score, result.Concept.Path)
@@ -1506,7 +1474,7 @@ func traceCLIArgs(args []string) (string, string, string) {
 			}
 		}
 		return commandName, "/", ""
-	case "read", "graph", "validate", "stat":
+	case "read", "graph", "validate", "stat", "mkdir":
 		if len(args) > 1 {
 			return command, args[1], ""
 		}
@@ -1517,13 +1485,6 @@ func traceCLIArgs(args []string) (string, string, string) {
 	case "bundle":
 		if len(args) > 1 {
 			command = "bundle " + args[1]
-		}
-		if len(args) > 2 {
-			return command, args[len(args)-1], ""
-		}
-	case "kb":
-		if len(args) > 1 {
-			command = "kb " + args[1]
 		}
 		if len(args) > 2 {
 			return command, args[len(args)-1], ""
@@ -1546,9 +1507,9 @@ func exitCode(code string) int {
 		return 2
 	case factile.ErrValidationFailed, factile.ErrOKFParse:
 		return 3
-	case factile.ErrMountNotFound, factile.ErrAmbiguousTarget, factile.ErrConceptNotFound, factile.ErrPathIsNotBundle, factile.ErrPathIsNotConcept:
+	case factile.ErrMountNotFound, factile.ErrNoActiveRoot, factile.ErrAmbiguousTarget, factile.ErrConceptNotFound, factile.ErrPathIsNotBundle, factile.ErrPathIsNotConcept:
 		return 4
-	case factile.ErrConceptAlreadyExist, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound:
+	case factile.ErrConceptAlreadyExist, factile.ErrPathAlreadyExists, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound:
 		return 5
 	case factile.ErrSourceReadOnly, factile.ErrUnsafeSourcePath, factile.ErrUnsupportedSource:
 		return 6

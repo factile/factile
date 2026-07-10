@@ -4,6 +4,7 @@ import "charm.land/lipgloss/v2"
 
 type Styles struct {
 	Heading lipgloss.Style
+	Path    lipgloss.Style
 	Label   lipgloss.Style
 	Value   lipgloss.Style
 	Muted   lipgloss.Style
@@ -17,6 +18,7 @@ func NewStyles(colorEnabled bool) Styles {
 	}
 	return Styles{
 		Heading: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#3b82f6")),
+		Path:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ffffff")),
 		Label:   lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b")),
 		Value:   lipgloss.NewStyle().Foreground(lipgloss.Color("#e2e8f0")),
 		Muted:   lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8")),

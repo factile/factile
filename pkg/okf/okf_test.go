@@ -32,6 +32,49 @@ tags: [one, two]
 	}
 }
 
+func TestParseConceptAcceptsStructuredYAMLFrontmatter(t *testing.T) {
+	doc, err := ParseConcept("datasets/orders", []byte(`---
+type: Data Model
+title: Orders
+metadata:
+  owner: analytics
+  reviewed: true
+  priority: 2
+aliases:
+  - orders
+  - completed_orders
+notes: |
+  First line.
+  Second line.
+---
+
+# Orders
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, ok := doc.Frontmatter["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata not parsed as map: %#v", doc.Frontmatter["metadata"])
+	}
+	if metadata["owner"] != "analytics" || metadata["reviewed"] != true || metadata["priority"] != int64(2) {
+		t.Fatalf("metadata not preserved: %#v", metadata)
+	}
+	aliases, ok := doc.Frontmatter["aliases"].([]any)
+	if !ok || len(aliases) != 2 || aliases[0] != "orders" || aliases[1] != "completed_orders" {
+		t.Fatalf("aliases not parsed as list: %#v", doc.Frontmatter["aliases"])
+	}
+	if doc.Frontmatter["notes"] != "First line.\nSecond line.\n" {
+		t.Fatalf("block scalar not preserved: %#v", doc.Frontmatter["notes"])
+	}
+	serialized := string(Serialize(doc))
+	for _, want := range []string{"metadata:\n", "  owner: analytics\n", "aliases: [orders, completed_orders]\n", "notes: \"First line.\\nSecond line.\\n\""} {
+		if !strings.Contains(serialized, want) {
+			t.Fatalf("serialized document missing %q:\n%s", want, serialized)
+		}
+	}
+}
+
 func TestParseConceptErrors(t *testing.T) {
 	if _, err := ParseConcept("bad", []byte("# Missing")); err == nil {
 		t.Fatal("expected missing frontmatter error")

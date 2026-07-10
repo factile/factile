@@ -7,11 +7,11 @@
   "steps": [
     {
       "title": "Find relevant architecture",
-      "command": "factile context / <review summary> --format json"
+      "command": "factile context / <review summary> --json"
     },
     {
       "title": "Check related validation guidance",
-      "command": "factile search / validation --format json"
+      "command": "factile search / validation --json"
     },
     {
       "title": "Report findings first",

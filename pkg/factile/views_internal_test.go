@@ -21,7 +21,7 @@ func TestScopeForViewIntersectsReaderScopes(t *testing.T) {
 		notWant []string
 	}{
 		{
-			name:    "knowledge base root",
+			name:    "mounted group root",
 			command: "/",
 			paths:   []string{"/engineering"},
 			want: []string{
@@ -31,7 +31,7 @@ func TestScopeForViewIntersectsReaderScopes(t *testing.T) {
 			},
 		},
 		{
-			name:    "bundle path",
+			name:    "mounted source path",
 			command: "/",
 			paths:   []string{"/engineering/django"},
 			want: []string{
@@ -156,9 +156,39 @@ func viewTestWorkspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	copyViewTestDir(t, filepath.Join("..", "..", "testdata", "catalog-workspace"), workspace)
+	mustWriteViewTestFile(t, filepath.Join(workspace, ".factile", "config.toml"), `version = 1
+
+name = "test"
+title = "Test"
+
+[defaults]
+format = "okf"
+`)
 	copyViewTestDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	mustWriteViewTestFile(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
+writable = false
+title = "Common Engineering Guides"
+`)
+	mustWriteViewTestFile(t, filepath.Join(workspace, "engineering", "django.mount.toml"), `source = "../../bundles/product-docs"
+writable = true
+title = "Django Product Docs"
+`)
+	mustWriteViewTestFile(t, filepath.Join(workspace, "engineering", "playbook.mount.toml"), `source = "../../bundles/shared-guides"
+writable = false
+title = "Engineering Playbook"
+`)
+	copyViewTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "legacy-notes"), filepath.Join(workspace, "legacy"))
 	return workspace
+}
+
+func mustWriteViewTestFile(t *testing.T, filename string, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func copyViewTestDir(t *testing.T, src string, dst string) {

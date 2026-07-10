@@ -3,7 +3,6 @@ package factile
 import (
 	"context"
 
-	"github.com/factile/factile/pkg/catalog"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -45,10 +44,14 @@ type Concept struct {
 }
 
 type Mount = vfs.Mount
-type KnowledgeBase = catalog.KnowledgeBase
-type KnowledgeBaseRef = catalog.KnowledgeBaseRef
-type BundleLink = catalog.BundleLink
-type LibraryView = catalog.LibraryView
+
+type View struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Paths       []string `json:"paths"`
+}
 
 type SearchResult struct {
 	Concept ConceptSummary `json:"concept"`
@@ -101,6 +104,16 @@ type ListResult struct {
 
 type ConceptResult struct {
 	Concept Concept `json:"concept"`
+}
+
+type Directory struct {
+	Path    string   `json:"path"`
+	Created bool     `json:"created"`
+	Files   []string `json:"files"`
+}
+
+type DirectoryResult struct {
+	Directory Directory `json:"directory"`
 }
 
 type SearchResults struct {
@@ -167,7 +180,7 @@ type MountListResult struct {
 type SummaryResult struct {
 	Workspace    WorkspaceSummary `json:"workspace"`
 	Knowledge    []CardSummary    `json:"knowledge"`
-	Views        []LibraryView    `json:"views"`
+	Views        []View           `json:"views"`
 	Sources      []Mount          `json:"sources"`
 	Health       []HealthSummary  `json:"health"`
 	NextCommands []string         `json:"next_commands"`
@@ -187,44 +200,13 @@ type StatResult struct {
 	Card CardSummary `json:"card"`
 }
 
-type KnowledgeBaseSummary struct {
-	ID          string `json:"id"`
-	Path        string `json:"path"`
-	Catalog     string `json:"catalog"`
-	Title       string `json:"title,omitempty"`
-	Description string `json:"description,omitempty"`
-	Status      string `json:"status,omitempty"`
-}
-
-type KnowledgeBaseListResult struct {
-	KnowledgeBases []KnowledgeBaseSummary `json:"knowledge_bases"`
-}
-
-type KnowledgeBaseResult struct {
-	KnowledgeBase KnowledgeBase `json:"knowledge_base"`
-	Catalog       string        `json:"catalog"`
-	Action        string        `json:"action,omitempty"`
-}
-
-type BundleLinkResult struct {
-	KnowledgeBase KnowledgeBaseSummary `json:"knowledge_base"`
-	Bundle        BundleLink           `json:"bundle"`
-	Action        string               `json:"action,omitempty"`
-}
-
-type BundleUnlinkResult struct {
-	KnowledgeBase KnowledgeBaseSummary `json:"knowledge_base"`
-	BundlePath    string               `json:"bundle_path"`
-	Removed       bool                 `json:"removed"`
-}
-
 type ViewListResult struct {
-	Views []LibraryView `json:"views"`
+	Views []View `json:"views"`
 }
 
 type ViewResult struct {
-	View   LibraryView `json:"view"`
-	Action string      `json:"action,omitempty"`
+	View   View   `json:"view"`
+	Action string `json:"action,omitempty"`
 }
 
 type ViewDeleteResult struct {
@@ -261,19 +243,23 @@ type ValidateOptions struct {
 	View string
 }
 type StatOptions struct{}
+type MkdirOptions struct {
+	Title    string
+	Log      bool
+	Overview bool
+	Bundle   bool
+}
 type MountOptions struct {
-	Writable bool
-	Kind     string
-}
-type KnowledgeBaseCreateInput struct {
-	Title       string
-	Description string
-}
-type BundleLinkInput struct {
-	Title       string
-	Description string
-	Writable    bool
-	Kind        string
+	Writable     bool
+	Kind         string
+	Title        string
+	Description  string
+	WhenToUse    string
+	WhenNotToUse string
+	Version      string
+	Ref          string
+	Revision     string
+	Trust        string
 }
 type ViewInput struct {
 	Title       string
@@ -331,6 +317,7 @@ type Workspace interface {
 	Graph(ctx context.Context, path string, opts GraphOptions) (GraphResult, error)
 	Validate(ctx context.Context, path string, opts ValidateOptions) (ValidationResult, error)
 	Summary(ctx context.Context) (SummaryResult, error)
+	Mkdir(ctx context.Context, path string, opts MkdirOptions) (DirectoryResult, error)
 	Create(ctx context.Context, path string, input CreateConceptInput) (ConceptResult, error)
 	Write(ctx context.Context, path string, input WriteConceptInput) (ConceptResult, error)
 	Patch(ctx context.Context, path string, input PatchConceptInput) (ConceptResult, error)
@@ -340,11 +327,6 @@ type Workspace interface {
 	Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error)
 	Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error)
 	ListMounts(ctx context.Context) (MountListResult, error)
-	ListKnowledgeBases(ctx context.Context) (KnowledgeBaseListResult, error)
-	InspectKnowledgeBase(ctx context.Context, path string) (KnowledgeBaseResult, error)
-	CreateKnowledgeBase(ctx context.Context, path string, input KnowledgeBaseCreateInput) (KnowledgeBaseResult, error)
-	LinkBundle(ctx context.Context, knowledgeBasePath string, source string, bundlePath string, input BundleLinkInput) (BundleLinkResult, error)
-	UnlinkBundle(ctx context.Context, bundlePath string) (BundleUnlinkResult, error)
 	ListViews(ctx context.Context) (ViewListResult, error)
 	InspectView(ctx context.Context, id string) (ViewResult, error)
 	SetView(ctx context.Context, id string, input ViewInput) (ViewResult, error)

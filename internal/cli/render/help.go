@@ -15,20 +15,21 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, r.helpTitle("Factile local OKF tool")); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Local OKF knowledge as paths. Read by default; curate only when you mean to change catalogs or documents."); err != nil {
+	if _, err := fmt.Fprintln(w, "Local OKF knowledge as paths. Read by default; curate only when you mean to change mounts, views, or documents."); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
 	if err := r.renderHelpSection(w, "Start here", []helpItem{
-		{command: "factile init", description: "Create .factile knowledge in this repo"},
+		{command: "factile init", description: "Create or reuse the active Factile root"},
 		{command: "factile", description: "Show this workspace summary"},
 		{command: "factile status", description: "Show this workspace summary"},
 		{command: "factile /", description: "Browse or read from a path"},
 		{command: "factile list /", description: "Browse available knowledge"},
 		{command: "factile list / --brief", description: "Show compact reader cards"},
 		{command: "factile context / \"what should I know?\"", description: "Gather task context"},
+		{command: "factile ui", description: "Open the local browser reader"},
 		{command: "factile version", description: "Show build version"},
 	}); err != nil {
 		return err
@@ -42,7 +43,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "  factile [global options] (<command> [args] | <path>)"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "  global options: --mount-file <path>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
+	if _, err := fmt.Fprintln(w, "  global options: --root <path>, --mount-file <path>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, "  Global options may appear before or after the command."); err != nil {
@@ -59,37 +60,34 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "status", description: "Show workspace knowledge, views, sources, and next commands"},
 			{command: "list [path] [--brief] [--view <id>]", description: "Browse folders and documents"},
 			{command: "stat <path>", description: "Show one compact card"},
-			{command: "read <concept-path>", description: "Read one document"},
+			{command: "read <document-path>", description: "Read one document"},
 			{command: "search <path> <query> [--view <id>]", description: "Search local documents"},
 			{command: "context <path> <query> [--depth 0|1] [--view <id>]", description: "Assemble relevant context"},
 			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect local links"},
 			{command: "validate <path> [--view <id>]", description: "Validate an OKF scope"},
+			{command: "ui [--port <port>] [--no-open] [--dev-assets <url>]", description: "Serve the local browser reader"},
 		}},
 		{title: "Curator commands", items: []helpItem{
-			{command: "kb list", description: "List Knowledge Bases"},
-			{command: "kb inspect <kb-path>", description: "Inspect a Knowledge Base"},
-			{command: "kb create <kb-path> --title <title>", description: "Create a Knowledge Base"},
-			{command: "kb link <kb-path> <source> <bundle-path>", description: "Add a local Bundle"},
-			{command: "kb unlink <bundle-path>", description: "Remove a Bundle link"},
-			{command: "view list", description: "List library views"},
-			{command: "view inspect <id>", description: "Inspect a library view"},
-			{command: "view set <id> --title <title> --path <path>", description: "Create or replace a library view"},
-			{command: "view delete <id>", description: "Delete a library view"},
+			{command: "mount <source> <mount-path>", description: "Create a path mount descriptor"},
+			{command: "unmount <mount-path>", description: "Remove a path mount descriptor"},
+			{command: "mounts", description: "List configured mounts"},
+			{command: "view list", description: "List views"},
+			{command: "view inspect <id>", description: "Inspect a view"},
+			{command: "view set <id> --title <title> --path <path>", description: "Create or replace a view"},
+			{command: "view delete <id>", description: "Delete a view"},
 		}},
 		{title: "Write commands", items: []helpItem{
-			{command: "create <concept-path> --type <type> --title <title> --body <file>", description: "Create a document"},
-			{command: "write <concept-path> --rev <rev> --body <file>", description: "Replace Markdown body"},
-			{command: "patch <concept-path> --rev <rev> [patch options]", description: "Edit frontmatter or sections"},
+			{command: "mkdir <path> [--title <title>] [--log] [--overview] [--bundle]", description: "Create a directory scaffold"},
+			{command: "create <document-path> --type <type> --title <title> --body <file>", description: "Create a document"},
+			{command: "write <document-path> --rev <rev> --body <file>", description: "Replace Markdown body"},
+			{command: "patch <document-path> --rev <rev> [patch options]", description: "Edit frontmatter or sections"},
 			{command: "rename <old-path> <new-path> --rev <rev>", description: "Move one document"},
-			{command: "delete <concept-path> --rev <rev>", description: "Delete one document"},
-			{command: "deprecate <concept-path> --rev <rev> --reason <text>", description: "Mark a document deprecated"},
+			{command: "delete <document-path> --rev <rev>", description: "Delete one document"},
+			{command: "deprecate <document-path> --rev <rev> --reason <text>", description: "Mark a document deprecated"},
 		}},
 		{title: "Bundle admin", items: []helpItem{
 			{command: "bundle find [path]", description: "Find local OKF bundles"},
 			{command: "bundle inspect <source>", description: "Inspect a source directory"},
-			{command: "bundle list", description: "List direct mounts"},
-			{command: "bundle mount <source> <mount-path>", description: "Add a direct mount"},
-			{command: "bundle unmount <mount-path>", description: "Remove a direct mount"},
 		}},
 		{title: "Agents and MCP", items: []helpItem{
 			{command: "skill install codex --scope repo|user", description: "Install agent guidance"},
