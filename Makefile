@@ -15,7 +15,7 @@ FACTILE_UI_DIST ?= $(FACTILE_UI_DIR)/apps/local/dist
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build ui-assets smoke-ui install verify conformance-reader conformance-cli conformance-mcp conformance-okf conformance-root-layout conformance-writer conformance-writer-cli conformance-writer-mcp
+.PHONY: help build ui-assets smoke-ui install verify pre-release conformance-reader conformance-cli conformance-mcp conformance-okf conformance-root-layout conformance-writer conformance-writer-cli conformance-writer-mcp
 
 help:
 	@echo "usage: make <target> [BINDIR=$(BINDIR)]"
@@ -25,6 +25,7 @@ help:
 	@echo "    $(CYAN)ui-assets$(CLEAR) : Build factile-ui and refresh embedded UI assets"
 	@echo "    $(CYAN)smoke-ui$(CLEAR) : Build and smoke-test the embedded UI bridge"
 	@echo "    $(CYAN)verify$(CLEAR) : Run Go tests and checked-in conformance tests"
+	@echo "    $(CYAN)pre-release$(CLEAR) : Run the complete local v0.2 release gate"
 	@echo "    $(CYAN)conformance-reader$(CLEAR) : Run Reader Contract CLI and MCP conformance"
 	@echo "    $(CYAN)conformance-cli$(CLEAR) : Run Reader Contract CLI JSON conformance"
 	@echo "    $(CYAN)conformance-mcp$(CLEAR) : Run Reader Contract local MCP conformance"
@@ -51,6 +52,10 @@ smoke-ui:
 
 verify:
 	@$(GO) test ./...
+
+pre-release:
+	@./scripts/verify.sh
+	@$(MAKE) smoke-ui
 
 install: build
 	@install -d "$(BINDIR)"

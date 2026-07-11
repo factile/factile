@@ -348,6 +348,24 @@ goreleaser check
 If `goreleaser` is not installed, normal repository verification is still
 covered by `./scripts/verify.sh`.
 
+## Prepare v0.2.0
+
+The v0.2.0 release uses the checked-in embedded UI snapshot; it does not publish
+the private `factile-ui` source repository or its workspace packages.
+
+Before creating the `v0.2.0` tag:
+
+```bash
+make ui-assets
+git diff --exit-code -- pkg/uibridge/static
+make pre-release
+git status --short
+```
+
+Review the generated GitHub and npm artifacts, then create and push the tag in
+a separate explicit release step. Preparing the candidate does not tag or
+publish it.
+
 ## Project Governance
 
 Source code and ordinary project documentation are licensed under the

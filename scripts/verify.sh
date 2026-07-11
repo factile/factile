@@ -42,7 +42,7 @@ writable = true
 EOF2
 
 "$factile_bin" --help >/dev/null
-"$factile_bin" version >/dev/null
+test "$("$factile_bin" version)" = "factile v0.2.0"
 "$factile_bin" --version >/dev/null
 "$factile_bin" skill list --json >/dev/null
 "$factile_bin" skill inspect codex --json >/dev/null
@@ -124,3 +124,8 @@ EOF3
 npm_stage="$tmpdir/npm"
 node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.2.0 >/dev/null
 node packaging/npm/scripts/smoke-test.mjs --root "$npm_stage" >/dev/null
+
+(
+  cd docs
+  "$factile_bin" validate / --json >/dev/null
+)
