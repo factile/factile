@@ -12,7 +12,7 @@ directories. It exposes Markdown documents through stable Factile paths and
 serves the same reader contract through a native Go CLI and a local stdio MCP
 server.
 
-Status: early local-first v0.2.0. JSON output is intended as the stable
+Status: early local-first v0.3.0. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
@@ -61,7 +61,7 @@ and Windows. Download the archive for your platform, unpack it, and put
 The installer script supports Linux and macOS. Pin the release tag you want:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.3.0/install.sh | bash
 ```
 
 From a checkout, build directly:
@@ -93,9 +93,12 @@ make ui-assets
 make smoke-ui
 ```
 
-The smoke builds the binary, serves the embedded app on loopback in curator
-mode, checks the SPA route, verifies writer capabilities, and reads a fixture
-document through `/api/local/v1`.
+The smoke builds the binary, serves the embedded app on loopback in reader and
+curator modes, and exercises source metadata, views, lazy lists, read, search,
+context, graph, validation, deep SPA fallback, and static assets. It verifies
+that reader mode rejects writer operations and that curator mode does not alter
+reader results. The server process runs with an empty executable search path,
+which proves the embedded app has no Node or npm runtime dependency.
 
 ## Quickstart
 
@@ -288,7 +291,7 @@ Curator mode installs write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.2.0; there is no recipe runner or `factile recipe` command.
+v0.3.0; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -307,7 +310,7 @@ vocabulary when useful, but server event payload semantics are defined in
 
 ## Known Limitations
 
-Factile v0.2.0 is intentionally local-only:
+Factile v0.3.0 is intentionally local-only:
 
 - There is no hosted service, remote source sync, auth, marketplace, billing,
   or cloud MCP in this repository.
@@ -348,12 +351,13 @@ goreleaser check
 If `goreleaser` is not installed, normal repository verification is still
 covered by `./scripts/verify.sh`.
 
-## Prepare v0.2.0
+## Prepare v0.3.0
 
-The v0.2.0 release uses the checked-in embedded UI snapshot; it does not publish
-the private `factile-ui` source repository or its workspace packages.
+The v0.3.0 release uses the checked-in embedded UI snapshot. CLI release
+artifacts contain the compiled browser assets, not the sibling `factile-ui`
+source workspace or its packages.
 
-Before creating the `v0.2.0` tag:
+Before creating the `v0.3.0` tag:
 
 ```bash
 make ui-assets

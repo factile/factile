@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img" aria-labelledby="title description">
+  <title id="title">Factile reader architecture</title>
+  <desc id="description">The explorer opens a document, with related context alongside it.</desc>
+  <defs>
+    <marker id="arrow" markerHeight="8" markerWidth="8" orient="auto-start-reverse" refX="7" refY="4">
+      <path d="M0 0 8 4 0 8z" fill="#51758c"/>
+    </marker>
+  </defs>
+  <rect width="720" height="220" rx="14" fill="#eef5f8"/>
+  <g fill="#fff" stroke="#91a9b8" stroke-width="2">
+    <rect x="52" y="58" width="160" height="104" rx="8"/>
+    <rect x="280" y="58" width="160" height="104" rx="8"/>
+    <rect x="508" y="58" width="160" height="104" rx="8"/>
+  </g>
+  <g fill="#17384d" font-family="system-ui, sans-serif" font-size="20" font-weight="650" text-anchor="middle">
+    <text x="132" y="116">Explorer</text>
+    <text x="360" y="116">Document</text>
+    <text x="588" y="116">Context</text>
+  </g>
+  <g fill="none" stroke="#51758c" stroke-width="3" marker-end="url(#arrow)">
+    <path d="M220 110h48"/>
+    <path d="M448 110h48"/>
+  </g>
+</svg>

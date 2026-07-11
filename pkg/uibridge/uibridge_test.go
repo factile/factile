@@ -3,6 +3,7 @@ package uibridge
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,12 @@ import (
 )
 
 type fakeReader struct{}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
 
 func (fakeReader) List(ctx context.Context, path string, opts factile.ListOptions) (factile.ListResult, error) {
 	_ = ctx
@@ -365,15 +372,44 @@ func TestHandlerCuratorModeWriteErrors(t *testing.T) {
 func TestHandlerServesEmbeddedSPAFallback(t *testing.T) {
 	handler := NewHandler(fakeReader{}, Options{})
 
-	response := request(handler, http.MethodGet, "/guides/onboarding")
-	if response.Code != http.StatusOK {
-		t.Fatalf("fallback status = %d body=%s", response.Code, response.Body.String())
+	for _, target := range []string{
+		"/guides/onboarding",
+		"/guides/onboarding?view=support",
+		"/guides/onboarding?view=support#related",
+	} {
+		response := request(handler, http.MethodGet, target)
+		if response.Code != http.StatusOK {
+			t.Fatalf("fallback %s status = %d body=%s", target, response.Code, response.Body.String())
+		}
+		if !strings.Contains(response.Body.String(), `<div id="root">`) {
+			t.Fatalf("fallback %s did not serve root HTML: %s", target, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "not embedded") {
+			t.Fatalf("fallback %s served placeholder instead of embedded UI: %s", target, response.Body.String())
+		}
 	}
-	if !strings.Contains(response.Body.String(), `<div id="root">`) {
-		t.Fatalf("fallback did not serve root HTML: %s", response.Body.String())
+}
+
+func TestHandlerDevAssetsProxyKeepsTheLocalAPI(t *testing.T) {
+	previousTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			Body:       io.NopCloser(strings.NewReader("dev:" + request.URL.RequestURI())),
+			Header:     make(http.Header),
+			StatusCode: http.StatusOK,
+		}, nil
+	})
+	defer func() { http.DefaultTransport = previousTransport }()
+
+	handler := NewHandler(fakeReader{}, Options{DevAssets: "http://dev-assets.test"})
+	deepRoute := request(handler, http.MethodGet, "/guides/onboarding?view=support")
+	if deepRoute.Code != http.StatusOK || deepRoute.Body.String() != "dev:/guides/onboarding?view=support" {
+		t.Fatalf("dev asset proxy response = %d %q", deepRoute.Code, deepRoute.Body.String())
 	}
-	if strings.Contains(response.Body.String(), "not embedded") {
-		t.Fatalf("fallback served placeholder instead of embedded UI: %s", response.Body.String())
+
+	capabilities := request(handler, http.MethodGet, APIPrefix+"/capabilities")
+	if capabilities.Code != http.StatusOK || !strings.Contains(capabilities.Body.String(), `"transport":"local_http"`) {
+		t.Fatalf("dev asset mode did not preserve the local API: %d %s", capabilities.Code, capabilities.Body.String())
 	}
 }
 
