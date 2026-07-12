@@ -1,98 +1,79 @@
 ---
 name: coding-practice
-description: Apply shared Factile engineering practice to non-trivial software architecture, design, documentation, planning, review, diagnosis, implementation, verification, or delivery work where workflow selection, scope and authority, sequencing, evidence, or cross-project consistency matters. Retrieve focused guidance from the read-only /coding mount or canonical coding-practice root and combine it with closer project facts. Do not use for simple factual answers, formatting, mechanical renames, syntax-only fixes, or obvious one-line local edits unless risk or a crossed boundary makes the task non-trivial.
+description: Use shared Factile engineering practice when a non-trivial software task needs a decision about authority, process weight, durable coordination, completion evidence, or a documented technical practice. Read one exact mapped concept first and combine it with closer project facts. Do not use for simple factual answers, formatting, mechanical renames, syntax-only fixes, or obvious local edits unless material risk changes the decision.
 ---
 
 # Coding Practice
 
-Use the shared bundle as a focused decision aid, not as a replacement for
-project inspection or as permission to take broader action.
+Use this skill as a small router, not as a prompt-sized manual.
 
-## Resolve Authority And Mode
+## Respect Authority
 
-1. Follow platform safety and authorization constraints.
-2. Follow the explicit current user request.
-3. Follow closer client and project instructions and verified repository facts.
-4. Apply shared practice only as a compatible default.
+Follow platform constraints, then the explicit current request, then closer
+project instructions and verified facts. Shared practice is a compatible
+default; it never broadens permission.
 
-Identify whether the user asked to explain, discuss, review, diagnose, plan,
-implement, verify, or ship. Do not advance to a later mode without authority.
+If the task is trivial and low-risk, stop here and handle it directly.
 
-## Locate The Knowledge
+## Read One Exact Concept
 
-Prefer the project's logical read-only mount:
+Choose the most specific matching route. An explicit subject in the current
+request wins. Use task modes only when the question is about allowed actions or
+mode boundaries, or when no more specific route applies.
 
-```bash
-factile list /coding --brief --json
-```
+| Need | Read |
+|---|---|
+| Django CI, versioning, release, or Docker delivery | `/coding/practices/ci/django-apps` |
+| Adopt, update, override, or remove this bundle | `/coding/governance/using-and-evolving` |
+| Concise completion note | `/coding/verification/evidence-record` |
+| Completion or verification depth | `/coding/verification/definition-of-done` |
+| Accepted work needing durable coordination | `/coding/workflows/tracked-design-to-delivery` |
+| Repository facts versus a generic pattern | `/coding/principles/project-facts` |
+| Design simplicity or process weight | `/coding/principles/simplicity` |
+| Allowed actions or mode boundary | `/coding/workflows/task-modes` |
 
-If `/coding` is unavailable, use the canonical root configured by
-`CODING_PRACTICE_ROOT`, falling back on this installation's path:
-
-```bash
-factile --root "${CODING_PRACTICE_ROOT:-/srv/knowledge/coding}" list / --brief --json
-```
-
-If neither source exists, continue from project guidance and live evidence.
-Mention the missing shared source only when it materially limits the task.
-
-## Retrieve Only Relevant Context
-
-Summarize the actual task in one specific query. Narrow the path when the task
-kind is already clear: use `/coding/workflows` for workflow selection,
-`/coding/principles` for a decision rule, `/coding/verification` for completion
-evidence, or `/coding/practices` for technical guidance. Use the bundle root
-only when the task genuinely crosses those scopes.
-
-For example:
+Read the selected path directly:
 
 ```bash
-factile context /coding/workflows "<task summary>" --json
+factile read <mapped-path> --json
 ```
 
-When using the canonical root fallback:
+If `/coding` is unavailable, strip that prefix and use the canonical checkout:
 
 ```bash
 factile --root "${CODING_PRACTICE_ROOT:-/srv/knowledge/coding}" \
-  context /workflows "<task summary>" --json
+  read <mapped-path-without-/coding> --json
 ```
 
-Read individual concepts only when the context result needs more detail. Common
-entry points are:
+If neither source exists, continue from project guidance and live evidence.
+Mention the missing source only when it materially limits the work.
 
-- `/coding/workflows/task-modes` for action and authority boundaries
-- `/coding/workflows/tracked-design-to-delivery` for accepted, non-trivial,
-  sequenced work
-- `/coding/verification/definition-of-done` for proportional completion gates
-- `/coding/governance/using-and-evolving` for adoption, overrides, and changes
-- `/coding/practices` for a relevant reusable technical practice
+The exact read selected here satisfies Factile knowledge retrieval for this
+shared bundle. Do not also run generic Factile list or context discovery for the
+same bundle unless the mapped path fails. Retrieve separate project knowledge
+when the task needs it.
 
-Strip the `/coding` prefix when using the canonical-root fallback. Do not load
-the whole bundle by default.
+## Use Context Only For Ambiguity
 
-## Apply The Guidance
+Use `context` only when no route above fits or the question genuinely crosses
+several concepts. Choose the narrowest applicable scope, such as
+`/coding/principles`, `/coding/workflows`, `/coding/verification`, or a precise
+technical-practice path.
 
-- Inspect the active repository, contracts, runtime, data, and worktree before
-  relying on a generic pattern.
-- Keep trivial work direct.
-- For accepted non-trivial work, create the durable epic and sequenced tasks
-  before repository edits when the tracked workflow's triggers apply.
-- Implement one ready task at a time and close it only after its acceptance
-  evidence passes.
-- Verify the changed surfaces proportionately and distinguish static, local,
-  integrated, hosted, and production evidence.
-- Keep client-specific policy and examples in the client project.
+Never request root `/coding` context by default. Do not load every related
+concept after an exact route answered the decision.
 
-Use reader commands only. Never curate the shared bundle, alter its mount, or
-promote a correction without an explicit human request and review.
+## Apply It Locally
+
+Inspect the active repository, contracts, runtime, data, and worktree. Use local
+commands and closer policy. Keep client-specific rules in the client project.
+For tracked work, follow its readiness and evidence gates one task at a time.
+
+Use reader commands only. Do not curate, publish, mount, or promote shared
+practice without an explicit request.
 
 ## Finish Truthfully
 
-State the outcome first. Name the checks actually run, the highest evidence
-level observed, material skips or pre-existing failures, and remaining risk.
-Do not claim publishing, deployment, or production behavior from local
-evidence.
-
-For installation assets, use `assets/AGENTS.block.md` and
-`assets/coding.mount.toml`; follow the canonical bundle's
-`/governance/using-and-evolving` guide for reversible adoption.
+Lead with the outcome. Name checks actually run, the highest evidence level
+observed, material skips or pre-existing failures, and remaining risk. Local
+evidence never proves publication, deployment, or production behavior.
