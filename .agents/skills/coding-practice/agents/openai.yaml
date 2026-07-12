@@ -1,4 +1,4 @@
 interface:
   display_name: "Shared Coding Practice"
-  short_description: "Apply shared engineering workflows and evidence"
-  default_prompt: "Use $coding-practice to choose and apply the right shared engineering workflow for this task."
+  short_description: "Route to one relevant shared engineering practice"
+  default_prompt: "Use $coding-practice to read and apply the most specific shared practice for this task within current project instructions."

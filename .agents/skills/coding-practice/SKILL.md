@@ -18,19 +18,21 @@ If the task is trivial and low-risk, stop here and handle it directly.
 ## Read One Exact Concept
 
 Choose the most specific matching route. An explicit subject in the current
-request wins. Use task modes only when the question is about allowed actions or
-mode boundaries, or when no more specific route applies.
+request wins. Use task modes only when choosing or transitioning between task
+modes, or when no more specific route applies.
 
 | Need | Read |
 |---|---|
 | Django CI, versioning, release, or Docker delivery | `/coding/practices/ci/django-apps` |
 | Adopt, update, override, or remove this bundle | `/coding/governance/using-and-evolving` |
+| Scope, authorization, scope expansion, or external or destructive action | `/coding/principles/scope-and-authority` |
+| Claim grounding, epistemic status, or current versus proposed truth | `/coding/principles/evidence-before-claims` |
 | Concise completion note | `/coding/verification/evidence-record` |
 | Completion or verification depth | `/coding/verification/definition-of-done` |
 | Accepted work needing durable coordination | `/coding/workflows/tracked-design-to-delivery` |
 | Repository facts versus a generic pattern | `/coding/principles/project-facts` |
 | Design simplicity or process weight | `/coding/principles/simplicity` |
-| Allowed actions or mode boundary | `/coding/workflows/task-modes` |
+| Task mode choice or transition | `/coding/workflows/task-modes` |
 
 Read the selected path directly:
 
