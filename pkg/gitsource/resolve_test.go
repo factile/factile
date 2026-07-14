@@ -454,7 +454,9 @@ func TestResolveDoesNotRunRemoteHooksInitializeSubmodulesOrDownloadLFS(t *testin
 	gitRun(t, fixture.runner, fixture.workPath, "add", "--", ".gitattributes", ".gitmodules", "large.bin")
 	gitRun(t, fixture.runner, fixture.workPath, "update-index", "--add", "--cacheinfo", "160000,"+fixture.featureRevision+",vendor/dependency")
 	gitRun(t, fixture.runner, fixture.workPath, "commit", "-m", "adversarial content")
-	gitRun(t, fixture.runner, fixture.workPath, "push", "--", fixture.remote, "adversarial:adversarial")
+	// The LFS pointer deliberately has no local object. Ignore host-provided
+	// push hooks while seeding the fixture; hooks are not behavior under test.
+	gitRun(t, fixture.runner, fixture.workPath, "-c", "core.hooksPath="+t.TempDir(), "push", "--", fixture.remote, "adversarial:adversarial")
 
 	marker := filepath.Join(t.TempDir(), "remote-hook-ran")
 	hook := filepath.Join(fixture.remotePath, "hooks", "post-checkout")
