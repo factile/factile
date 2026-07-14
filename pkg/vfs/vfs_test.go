@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,16 @@ func TestInvalidPathsAndDuplicateMounts(t *testing.T) {
 	if _, err := NormalizePath(`/a\..\b`); err == nil {
 		t.Fatal("expected backslash traversal rejection")
 	}
+	for _, input := range []string{
+		"/.factile/cache",
+		"/.factile.md",
+		"/docs/.git/config",
+		"/docs/.GIT/HEAD",
+	} {
+		if _, err := NormalizePath(input); err == nil {
+			t.Fatalf("NormalizePath(%q) should reject internal paths", input)
+		}
+	}
 	tmp := t.TempDir()
 	registry := filepath.Join(tmp, "mount-registry.toml")
 	mustWrite(t, registry, `[mounts."/docs"]
@@ -90,6 +101,19 @@ func TestResolveLongestPrefixWins(t *testing.T) {
 	}
 	if deep.Mount.SourcePath != deepBundle {
 		t.Fatalf("longest prefix did not win: %s", deep.Mount.SourcePath)
+	}
+}
+
+func TestResolveMaterializedGitMountUsesLocalSnapshot(t *testing.T) {
+	snapshot := t.TempDir()
+	mustWrite(t, filepath.Join(snapshot, "guides", "setup.md"), "---\ntype: Guide\n---\n")
+	mounts := []Mount{{MountPath: "/git", Source: "https://example.test/docs.git", SourcePath: snapshot, Kind: SourceKindGit}}
+	target, err := Resolve(mounts, "/git/guides/setup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Kind != TargetConcept || !target.Exists || target.Mount.Kind != SourceKindGit || target.Mount.SourcePath != snapshot {
+		t.Fatalf("materialized Git mount did not use the local snapshot: %#v", target)
 	}
 }
 
@@ -212,6 +236,24 @@ trust = "local"
 	}
 	if mount.Title != "Engineering" || mount.Description != "Engineering docs" || mount.WhenToUse == "" || mount.WhenNotToUse == "" || mount.Version != "1" || mount.Ref != "main" || mount.Revision != "abc123" || mount.Trust != "local" {
 		t.Fatalf("metadata not preserved: %#v", mount)
+	}
+	if !mount.VersionSet || !mount.RefSet || !mount.RevisionSet {
+		t.Fatalf("metadata field presence not preserved: %#v", mount)
+	}
+}
+
+func TestLoadDescriptorMountPreservesEmptySelectorPresence(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "coding.mount.toml"), `source = "https://example.test/coding.git"
+writable = false
+ref = ""
+`)
+	mounts, err := LoadDescriptorMounts(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 1 || !mounts[0].RefSet || mounts[0].Ref != "" {
+		t.Fatalf("empty ref presence was lost: %#v", mounts)
 	}
 }
 
@@ -337,7 +379,35 @@ revision = "abc123"
 	}
 }
 
-func TestLoadDescriptorMountsSkipsFactileAndMountedSources(t *testing.T) {
+func TestMountDescriptorClassifiesNativeGitSources(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		mountPath string
+		source    string
+	}{
+		{mountPath: "/native", source: "https://github.com/senseware/coding-practice.git"},
+		{mountPath: "/scp", source: "git@github.com:senseware/coding-practice.git"},
+		{mountPath: "/compat", source: "git+https://github.com/senseware/coding-practice.git"},
+	}
+	for _, tc := range tests {
+		written, err := WriteMountDescriptorFile(root, Mount{MountPath: tc.mountPath, Source: tc.source})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if written.Kind != SourceKindGit || written.Source != tc.source || written.SourcePath != "" {
+			t.Fatalf("unexpected written Git descriptor: %#v", written)
+		}
+		loaded, err := LoadMountDescriptorFile(root, written.RegistryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Kind != SourceKindGit || loaded.Source != tc.source || loaded.SourcePath != "" {
+			t.Fatalf("unexpected loaded Git descriptor: %#v", loaded)
+		}
+	}
+}
+
+func TestLoadDescriptorMountsSkipsInternalAndMountedSources(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "external.mount.toml"), `source = "vendor/docs"
 writable = true
@@ -348,6 +418,11 @@ writable = "bad"
 	mustWrite(t, filepath.Join(root, ".factile", "hidden.mount.toml"), `source = "../hidden"
 writable = true
 `)
+	for _, internal := range []string{".FACTILE", ".git", ".GIT"} {
+		mustWrite(t, filepath.Join(root, internal, "hidden.mount.toml"), `source = "../hidden"
+writable = "invalid"
+`)
+	}
 
 	mounts, err := LoadDescriptorMounts(root)
 	if err != nil {
@@ -540,6 +615,63 @@ writable = true
 	}
 	if len(mounts) != 1 || mounts[0].MountPath != "/explicit" {
 		t.Fatalf("explicit mount file should replace root discovery: %#v", mounts)
+	}
+}
+
+func TestLoadRegistryFileDefaultsOmittedWritableToReadOnly(t *testing.T) {
+	registry := filepath.Join(t.TempDir(), "mount-registry.toml")
+	mustWrite(t, registry, `[mounts."/default"]
+source = "./default"
+kind = "local"
+
+[mounts."/writable"]
+source = "./writable"
+kind = "local"
+writable = true
+`)
+
+	mounts, err := LoadRegistryFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 2 || mounts[0].MountPath != "/default" || mounts[0].Writable || mounts[1].MountPath != "/writable" || !mounts[1].Writable {
+		t.Fatalf("unexpected legacy registry capabilities: %#v", mounts)
+	}
+}
+
+func TestLoadRegistryFileRejectsGitSources(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "declared Git kind",
+			content: `[mounts."/coding"]
+source = "file:///fixture/repository.git"
+kind = "git"
+writable = false
+revision = "1111111111111111111111111111111111111111"
+`,
+		},
+		{
+			name: "native Git source with omitted kind",
+			content: `[mounts."/coding"]
+source = "https://example.test/coding.git"
+writable = false
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := filepath.Join(t.TempDir(), "mount-registry.toml")
+			mustWrite(t, registry, tc.content)
+			_, err := LoadRegistryFile(registry)
+			var vfsErr *Error
+			if !errors.As(err, &vfsErr) || vfsErr.Code != "unsupported_source" || vfsErr.Message != "Git sources are not supported with --mount-file; use an active Factile root." {
+				t.Fatalf("unexpected legacy Git registry error: %v", err)
+			}
+		})
 	}
 }
 

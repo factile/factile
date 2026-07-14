@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/gitsource"
 	"github.com/factile/factile/pkg/version"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 func TestToolsRespectReadOnly(t *testing.T) {
@@ -31,7 +35,10 @@ func TestToolsRespectReadOnly(t *testing.T) {
 	if descriptions["factile_context"] != "Retrieve focused OKF context for a task or question." {
 		t.Fatalf("unexpected context description: %q", descriptions["factile_context"])
 	}
-	if descriptions["factile_stat"] == "" || descriptions["factile_mounts"] == "" || descriptions["factile_view_list"] == "" || descriptions["factile_view_inspect"] == "" {
+	if descriptions["factile_mounts"] != "List configured mounts and cached Git source status without refreshing." || descriptions["factile_refresh"] != "Immediately check and refresh generated state for one Git mount." {
+		t.Fatalf("unexpected Git reader tool descriptions: %#v", descriptions)
+	}
+	if descriptions["factile_stat"] == "" || descriptions["factile_mounts"] == "" || descriptions["factile_refresh"] == "" || descriptions["factile_view_list"] == "" || descriptions["factile_view_inspect"] == "" {
 		t.Fatalf("read-only tools missing reader, mount, or view inspection tools: %#v", descriptions)
 	}
 	if descriptions["factile_kb_list"] != "" || descriptions["factile_kb_inspect"] != "" || descriptions["factile_mount"] != "" || descriptions["factile_unmount"] != "" || descriptions["factile_view_set"] != "" || descriptions["factile_view_delete"] != "" || descriptions["factile_mkdir"] != "" {
@@ -51,11 +58,16 @@ func TestToolsRespectReadOnly(t *testing.T) {
 		t.Fatal("expected write tools in read-write mode")
 	}
 	readWriteSchemas := map[string]map[string]any{}
+	readWriteDescriptions := map[string]string{}
 	for _, tool := range readWrite.Tools() {
 		readWriteSchemas[tool.Name] = tool.InputSchema
+		readWriteDescriptions[tool.Name] = tool.Description
+	}
+	if readWriteDescriptions["factile_mount"] != "Create or replace a read-only-by-default local or Git path mount." {
+		t.Fatalf("unexpected mount tool description: %q", readWriteDescriptions["factile_mount"])
 	}
 	properties, ok := readWriteSchemas["factile_mount"]["properties"].(map[string]any)
-	if !ok || properties["mount_path"] == nil || properties["source"] == nil || readWriteSchemas["factile_mount"]["additionalProperties"] != false {
+	if !ok || properties["mount_path"] == nil || properties["source"] == nil || properties["writable"] == nil || properties["read_only"] == nil || properties["ref"] == nil || properties["revision"] == nil || readWriteSchemas["factile_mount"]["additionalProperties"] != false {
 		t.Fatalf("write tools missing mount schema: %#v", readWriteSchemas["factile_mount"])
 	}
 	properties, ok = readWriteSchemas["factile_unmount"]["properties"].(map[string]any)
@@ -175,6 +187,256 @@ func TestServeV2MountToolsAndReaderCards(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "engineering", "docs.mount.toml")); !os.IsNotExist(err) {
 		t.Fatalf("expected MCP unmount to remove descriptor, err=%v", err)
+	}
+}
+
+func TestMCPMountCapabilityCompatibility(t *testing.T) {
+	tmp := t.TempDir()
+	writeMCPRootConfig(t, tmp)
+	source := filepath.Join(tmp, "source")
+	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/default"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/writable","writable":true}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/legacy-writable","read_only":false}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/conflict","writable":true,"read_only":false}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	defaultMount := mcpStructured[factile.MountResult](t, responses[1])
+	if defaultMount.Mount.Writable {
+		t.Fatalf("omitted MCP capability should be read-only: %#v", defaultMount.Mount)
+	}
+	writableMount := mcpStructured[factile.MountResult](t, responses[2])
+	if !writableMount.Mount.Writable {
+		t.Fatalf("writable MCP input should enable local writes: %#v", writableMount.Mount)
+	}
+	legacyMount := mcpStructured[factile.MountResult](t, responses[3])
+	if !legacyMount.Mount.Writable {
+		t.Fatalf("legacy read_only=false should retain writable behavior: %#v", legacyMount.Mount)
+	}
+	conflict := responses[4]
+	if conflict.Error == nil {
+		t.Fatalf("conflicting MCP capability inputs should fail validation: %#v", conflict)
+	}
+	errorData, ok := conflict.Error.Data.(map[string]any)
+	if !ok || errorData["code"] != factile.ErrValidationFailed {
+		t.Fatalf("conflicting MCP capability inputs should fail validation: %#v", conflict)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "conflict.mount.toml")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting MCP capability inputs wrote a descriptor: %v", err)
+	}
+}
+
+func TestMCPGitMountRefreshAndReadOnlyVisibility(t *testing.T) {
+	tmp := t.TempDir()
+	writeMCPRootConfig(t, tmp)
+	remote := mcpGitRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/git","ref":"main"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mounts","arguments":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_refresh","arguments":{"mount_path":"/git"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/writable","writable":true}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/conflict","ref":"main","revision":"1111111111111111111111111111111111111111"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/empty-ref","ref":""}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/empty-revision","revision":""}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"factile_mkdir","arguments":{"path":"/git/new"}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"factile_create","arguments":{"path":"/git/new","type":"Guide","title":"New","markdown":"# New"}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"factile_write","arguments":{"path":"/git/overview","expected_revision":"sha256:unchanged","markdown":"# Changed"}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"factile_patch","arguments":{"path":"/git/overview","expected_revision":"sha256:unchanged","set":{"status":"draft"}}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"factile_rename","arguments":{"old_path":"/git/overview","new_path":"/git/renamed","expected_revision":"sha256:unchanged"}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"factile_delete","arguments":{"path":"/git/overview","expected_revision":"sha256:unchanged"}}}
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"factile_deprecate","arguments":{"path":"/git/overview","expected_revision":"sha256:unchanged","reason":"superseded"}}}
+{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/sha256-lower","revision":"` + strings.Repeat("a", 64) + `"}}}
+{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/sha256-upper","revision":"` + strings.Repeat("A", 64) + `"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	mounted := mcpStructured[factile.MountResult](t, responses[1])
+	if mounted.Mount.Kind != "git" || mounted.Mount.Ref != "main" || mounted.Mount.Writable {
+		t.Fatalf("unexpected MCP Git mount: %#v", mounted)
+	}
+	mounts := mcpStructured[factile.MountListResult](t, responses[2])
+	if len(mounts.Mounts) != 1 || mounts.Mounts[0].SourceStatus == nil || !mounts.Mounts[0].SourceStatus.SnapshotAvailable {
+		t.Fatalf("MCP mounts missing Git status: %#v", mounts)
+	}
+	refreshed := mcpStructured[factile.RefreshResult](t, responses[3])
+	if refreshed.Outcome != "unchanged" || !refreshed.Status.SnapshotAvailable {
+		t.Fatalf("unexpected MCP refresh: %#v", refreshed)
+	}
+	for _, tc := range []struct {
+		id   int
+		code string
+	}{{id: 4, code: factile.ErrSourceReadOnly}, {id: 5, code: factile.ErrValidationFailed}, {id: 6, code: factile.ErrValidationFailed}, {id: 7, code: factile.ErrValidationFailed}, {id: 15, code: factile.ErrValidationFailed}, {id: 16, code: factile.ErrValidationFailed}} {
+		response := responses[tc.id]
+		if response.Error == nil {
+			t.Fatalf("MCP Git rejection %d succeeded: %#v", tc.id, response)
+		}
+		data, ok := response.Error.Data.(map[string]any)
+		if !ok || data["code"] != tc.code {
+			t.Fatalf("MCP Git rejection %d code = %#v", tc.id, response)
+		}
+	}
+	for _, mountPath := range []string{"/sha256-lower", "/sha256-upper"} {
+		descriptor := filepath.Join(tmp, strings.TrimPrefix(mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !os.IsNotExist(err) {
+			t.Fatalf("64-hex MCP revision wrote %s: %v", descriptor, err)
+		}
+	}
+	for _, id := range []int{8, 9, 10, 11, 12, 13, 14} {
+		response := responses[id]
+		if response.Error == nil {
+			t.Fatalf("Git mutation %d should fail below the MCP adapter: %#v", id, response)
+		}
+		data, ok := response.Error.Data.(map[string]any)
+		if !ok || data["code"] != factile.ErrSourceReadOnly {
+			t.Fatalf("Git mutation %d should fail below the MCP adapter: %#v", id, response)
+		}
+	}
+
+	out.Reset()
+	readOnlyInput := strings.NewReader(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"factile_refresh","arguments":{"mount_path":"/git"}}}
+`)
+	if err := Serve(context.Background(), ws, readOnlyInput, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyRefresh := mcpStructured[factile.RefreshResult](t, mcpResponses(t, out.String())[6])
+	if readOnlyRefresh.MountPath != "/git" {
+		t.Fatalf("read-only MCP refresh failed: %#v", readOnlyRefresh)
+	}
+
+	out.Reset()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	canceledInput := strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"factile_refresh","arguments":{"mount_path":"/git"}}}
+`)
+	if err := Serve(canceledCtx, ws, canceledInput, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	canceled := mcpResponses(t, out.String())[7]
+	if canceled.Error == nil || !strings.Contains(canceled.Error.Message, "context canceled") {
+		t.Fatalf("canceled MCP refresh did not preserve cancellation: %#v", canceled)
+	}
+}
+
+func TestMCPGitMountUsesCachedSnapshotWhenGitIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	writeMCPRootConfig(t, root)
+	remote := mcpGitRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	if _, err := ws.Mount(context.Background(), remote, "/git", factile.MountOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := cache.Entry("/git", remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := cache.ReadState(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.LastAttemptAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := cache.WriteState(entry, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "uncached.mount.toml"), []byte("source = \""+remote+"\"\nwritable = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/git/overview"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_refresh","arguments":{"mount_path":"/git"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/uncached/overview"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	read := mcpStructured[factile.ConceptResult](t, responses[1])
+	if read.Concept.Path != "/git/overview" {
+		t.Fatalf("cached MCP read with missing Git = %#v", read)
+	}
+	refreshed := mcpStructured[factile.RefreshResult](t, responses[2])
+	if refreshed.Outcome != "stale" || refreshed.Warning == nil {
+		t.Fatalf("cached MCP refresh with missing Git = %#v", refreshed)
+	}
+	failed := responses[3]
+	if failed.Error == nil {
+		t.Fatalf("uncached MCP read with missing Git succeeded: %#v", failed)
+	}
+	data, ok := failed.Error.Data.(map[string]any)
+	if !ok || data["code"] != factile.ErrRemoteSourceUnavailable {
+		t.Fatalf("uncached MCP missing-Git error = %#v", failed)
+	}
+}
+
+func TestMCPRejectsEmptyGitURIDelimitersBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	writeMCPRootConfig(t, root)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"https://example.test/repository.git?","mount_path":"/native-query"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"https://example.test/repository.git#","mount_path":"/native-fragment"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"git+https://example.test/repository.git?","mount_path":"/git-plus-query"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"git+https://example.test/repository.git#","mount_path":"/git-plus-fragment"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	for id := 1; id <= 4; id++ {
+		response := responses[id]
+		if response.Error == nil {
+			t.Fatalf("empty URI delimiter request %d succeeded: %#v", id, response)
+		}
+		data, ok := response.Error.Data.(map[string]any)
+		if !ok || data["code"] != factile.ErrValidationFailed {
+			t.Fatalf("empty URI delimiter request %d error = %#v", id, response)
+		}
+	}
+	for _, mountPath := range []string{"/native-query", "/native-fragment", "/git-plus-query", "/git-plus-fragment"} {
+		descriptor := filepath.Join(root, strings.TrimPrefix(mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !os.IsNotExist(err) {
+			t.Fatalf("empty URI delimiter MCP request wrote %s: %v", descriptor, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !os.IsNotExist(err) {
+		t.Fatalf("empty URI delimiter MCP requests initialized Git cache: %v", err)
+	}
+}
+
+func TestMCPGitStatusRedactsInvalidHandAuthoredSource(t *testing.T) {
+	root := t.TempDir()
+	writeMCPRootConfig(t, root)
+	source := "https://alice:correct-horse@example.test/private.git?token=hunter2"
+	if err := os.WriteFile(filepath.Join(root, "private.mount.toml"), []byte("source = \""+source+"\"\nwritable = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"factile_mounts\",\"arguments\":{}}}\n")
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "[redacted]") || !strings.Contains(text, `"last_error_code":"validation_failed"`) {
+		t.Fatalf("invalid descriptor status was not safely rendered: %s", text)
+	}
+	for _, secret := range []string{"alice", "correct-horse", "hunter2", source} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("MCP status exposed %q: %s", secret, text)
+		}
 	}
 }
 
@@ -494,6 +756,33 @@ title: ` + title + `
 ` + markdown
 	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func mcpGitRemote(t *testing.T) string {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), "source")
+	writeMCPRootConfig(t, source)
+	writeMCPConceptFile(t, filepath.Join(source, "overview.md"), "Reference", "Git Fixture", "# Git Fixture\n")
+	mcpGitRun(t, "", "init", "--", source)
+	mcpGitRun(t, source, "config", "--local", "--", "user.name", "Factile Test")
+	mcpGitRun(t, source, "config", "--local", "--", "user.email", "factile@example.test")
+	mcpGitRun(t, source, "add", "--", ".")
+	mcpGitRun(t, source, "commit", "-m", "fixture")
+	mcpGitRun(t, source, "branch", "-M", "main")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	mcpGitRun(t, "", "clone", "--bare", "--", source, remotePath)
+	absolute, err := filepath.Abs(remotePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String()
+}
+
+func mcpGitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := gitsource.NewRunner().Run(context.Background(), dir, args...); err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 	}
 }
 

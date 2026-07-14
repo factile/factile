@@ -9,25 +9,30 @@ Factile turns docs you own into structured context agents can trust.
 
 Factile is a local-first command line tool for Open Knowledge Format
 directories. It exposes Markdown documents through stable Factile paths and
-serves the same reader contract through a native Go CLI and a local stdio MCP
+serves the same reader operations through a native Go CLI and a local stdio MCP
 server.
 
 Status: early local-first v0.3.0. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
-Factile does not implement remote sources, hosted MCP, subscriptions, billing,
-auth, marketplace search, publisher portals, remote caches, or cloud sync in
-this repository.
+Factile reads root-local and explicitly mounted local directories, and can
+materialize read-only Git repositories into a generated per-root cache. It does
+not implement hosted `factile://` source resolution, hosted MCP, subscriptions,
+billing, auth products, marketplace search, publisher portals, remote caches,
+or cloud sync in this repository.
 
-Public interoperability contracts for OKF bundles, roots and sources, reader
-operations, and local writer operations live under [`contracts/`](contracts/),
-with human documentation under
-[`docs/architecture/contracts/`](docs/architecture/contracts/).
+Public user and contributor guidance lives in this README, `docs/`, command
+help, and self-contained implementation tests. Building, testing, installing,
+and using the CLI never requires a separate specification checkout.
 
 ## Install
 
 Factile is one Go binary named `factile`.
+
+Local roots and directory mounts need no external runtime. Git mounts require a
+system `git` executable on `PATH`; SSH remotes also require the normal SSH
+client and agent or key configuration used by Git.
 
 The recommended install method is npm:
 
@@ -171,10 +176,48 @@ A mount attaches another source as a child path. `factile mount` writes a
 descriptor beside the logical child path:
 
 ```bash
-factile mount ./reference /reference --title "Reference"
+factile mount ./reference /reference
+factile mount ./working-notes /working-notes --writable
+factile mount https://github.com/senseware/coding-practice.git /coding
+factile mount git@github.com:senseware/coding-practice.git /coding-ssh --ref main
 factile mounts
 factile list /reference
+factile list /coding
 ```
+
+Every explicit mount is read-only by default. Only a local directory can opt
+into writes with `--writable`; Git mounts are always read-only. The implicit
+active-root mount at `/` remains writable in curator mode. `--read-only` remains
+accepted as a deprecated compatibility flag.
+
+Native `https://`, `http://`, `ssh://`, `git://`, `file://`, and SCP-style
+`user@host:path` Git remotes are accepted as written. A single `git+` prefix is
+also supported for compatibility, but is not required. Omit a selector to
+follow remote `HEAD`, use `--ref <branch-or-tag>` for a floating named ref, or
+use `--revision <40-hex-sha1>` for an immutable pin. Git mounts support SHA-1
+object-format repositories; SHA-256 repositories and 64-hex pins are not
+supported. `--ref` and `--revision` cannot be combined.
+
+Factile resolves Git content into immutable snapshots under the active root's
+`.factile/cache/git/` directory. Floating mounts check for updates when needed
+after the previous check is at least 24 hours old. Check immediately with:
+
+```bash
+factile refresh /coding
+factile mounts
+factile status
+```
+
+`factile mounts` and `factile status` inspect cached source state without
+fetching. If a refresh fails after a successful acquisition, readers keep using
+the last snapshot and report it as stale. Without a usable snapshot, the read
+fails with `remote_source_unavailable`.
+
+When `--title` or `--description` is omitted, Factile fills each missing field
+from the source root's `.factile/config.toml`, then from the root
+`overview.md` concept. If no title is available, it humanizes the mount path,
+for example `/shared-reference` becomes `Shared Reference`. An unavailable
+description remains empty. Explicit flags always win.
 
 Descriptor filenames use `<name>.mount.toml` and are named after the mounted
 child:
@@ -187,16 +230,17 @@ docs/
 Example descriptor:
 
 ```toml
-source = "./reference"
+source = "https://github.com/senseware/coding-practice.git"
 writable = false
-title = "Reference"
-description = "Shared project reference material."
+title = "Coding Practice"
+ref = "main"
 ```
 
 The mount path comes from the descriptor location. `docs/reference.mount.toml`
 creates `/reference`; `docs/engineering/django.mount.toml` creates
 `/engineering/django`. Local relative sources resolve from the descriptor file's
-directory.
+directory. Metadata defaults are resolved once when the descriptor is written;
+they are not live inherited values.
 
 Remove a descriptor-backed mount with:
 
@@ -246,9 +290,10 @@ factile mcp serve --stdio
 The MCP adapter uses the same workspace API and JSON models as the CLI.
 Read-only mode exposes reader tools such as `factile_list`, `factile_stat`,
 `factile_read`, `factile_search`, `factile_context`, `factile_graph`,
-`factile_validate`, and `factile_mounts`. Write-capable mode adds document,
-mount, unmount, and view mutation tools. Use `--read-only` for default agent
-reading.
+`factile_validate`, `factile_mounts`, and `factile_refresh`. Refresh only
+updates generated Git cache state; it never makes the source writable.
+Write-capable mode adds document, mount, unmount, and view mutation tools. Use
+`--read-only` for default agent reading.
 
 ## Curating Knowledge
 
@@ -256,6 +301,7 @@ Curator workflows manage local paths, descriptors, views, and documents:
 
 ```bash
 factile mount ./reference /reference --title "Reference"
+factile mount ./working-notes /working-notes --writable
 factile mounts
 factile unmount /reference
 
@@ -303,18 +349,23 @@ FACTILE_TRACE_FILE=.factile/usage.jsonl factile context / "invoice import" --jso
 ```
 
 Trace logging is local-only and disabled unless the environment variable is
-set. These records are opt-in diagnostics; they are not the Factile Server
-append-only Event Ledger. Future local trace output may reuse Event Ledger
-vocabulary when useful, but server event payload semantics are defined in
-`docs/architecture/contracts/event-ledger-contract.md`.
+set. These records are opt-in diagnostics, not a hosted audit or billing
+ledger.
 
 ## Known Limitations
 
-Factile v0.3.0 is intentionally local-only:
+Factile v0.3.0 is intentionally local-first:
 
-- There is no hosted service, remote source sync, auth, marketplace, billing,
-  or cloud MCP in this repository.
-- Remote-looking source strings are reserved for future adapters.
+- There is no hosted service, hosted `factile://` source resolution, auth
+  product, marketplace, billing, publication workflow, or cloud MCP in this
+  repository.
+- Git support is pull/read only. There are no Git writes, repository
+  subdirectory mounts, submodule initialization, Git LFS downloads, background
+  refresh daemon, or global shared cache.
+- Git snapshots reject repository symlinks. Credentials must come from Git's
+  external credential or SSH mechanisms, not from the recorded source URI.
+  Literal query or fragment delimiters are rejected even when empty;
+  percent-encoded path characters remain valid.
 - Recipes are seed guidance data, not executable workflows.
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
@@ -330,6 +381,8 @@ npm packages and release archives target:
 - Windows amd64
 
 Source builds require Go 1.26 or newer.
+Git mounts additionally require the system Git executable; local-only use does
+not.
 
 ## Verify
 

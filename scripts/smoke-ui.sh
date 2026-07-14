@@ -6,7 +6,7 @@ BINARY="${BINARY:-bin/factile}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-4327}"
 CURATOR_PORT="$((PORT + 1))"
-FIXTURE_ROOT="$(pwd)/contracts/reader/v1/fixtures/root"
+FIXTURE_ROOT="$(pwd)/testdata/ui-smoke"
 TMP_ROOT="${TMPDIR:-/tmp}/factile-cli-ui-smoke-${PORT}"
 
 if [ ! -f "pkg/uibridge/static/index.html" ]; then
@@ -91,7 +91,7 @@ curl -fsS "$ROOT_URL/api/local/v1/reader/validate?path=%2Fguides%2Fonboarding" >
 grep -q '"mode":"reader"' "$TMP_ROOT/reader-capabilities.json"
 grep -q '"patch":false' "$TMP_ROOT/reader-capabilities.json"
 grep -q '"title":"Local Factile workspace"' "$TMP_ROOT/source.json"
-grep -q 'reader/v1/fixtures/root' "$TMP_ROOT/source.json"
+grep -q 'testdata/ui-smoke' "$TMP_ROOT/source.json"
 grep -q '"id":"support"' "$TMP_ROOT/views.json"
 grep -q '"id":"support"' "$TMP_ROOT/view.json"
 grep -q '"path":"/"' "$TMP_ROOT/list-root.json"

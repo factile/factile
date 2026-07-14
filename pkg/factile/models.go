@@ -177,6 +177,16 @@ type MountListResult struct {
 	Mounts []Mount `json:"mounts"`
 }
 
+type SourceStatus = vfs.SourceStatus
+type SourceWarning = vfs.SourceWarning
+
+type RefreshResult struct {
+	MountPath string         `json:"mount_path"`
+	Outcome   string         `json:"outcome"`
+	Status    SourceStatus   `json:"status"`
+	Warning   *SourceWarning `json:"warning,omitempty"`
+}
+
 type SummaryResult struct {
 	Workspace    WorkspaceSummary `json:"workspace"`
 	Knowledge    []CardSummary    `json:"knowledge"`
@@ -259,6 +269,9 @@ type MountOptions struct {
 	Version      string
 	Ref          string
 	Revision     string
+	VersionSet   bool
+	RefSet       bool
+	RevisionSet  bool
 	Trust        string
 }
 type ViewInput struct {
@@ -327,6 +340,7 @@ type Workspace interface {
 	Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error)
 	Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error)
 	ListMounts(ctx context.Context) (MountListResult, error)
+	Refresh(ctx context.Context, mountPath string) (RefreshResult, error)
 	ListViews(ctx context.Context) (ViewListResult, error)
 	InspectView(ctx context.Context, id string) (ViewResult, error)
 	SetView(ctx context.Context, id string, input ViewInput) (ViewResult, error)

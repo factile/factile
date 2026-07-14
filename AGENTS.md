@@ -25,15 +25,18 @@ Before creating a new `/docs/**/*.md` file:
 
 # Factile Agent Instructions
 
-Factile Phase 1 is a local-only open-source OKF tool.
+Factile is a local-first open-source OKF tool with local directory and
+read-only Git sources.
 
 ## Product rules
 
 - Build one native Go binary named `factile`.
 - Keep CLI and MCP as thin adapters over the core workspace API.
-- Do not implement remote bundles, auth, subscriptions, billing, hosted MCP, marketplace search, publisher portals, or cloud sync in Phase 1.
+- Keep read-only Git acquisition local to the active root. Do not add hosted `factile://` resolution, writable Git, auth products, subscriptions, billing, hosted MCP, marketplace search, publisher portals, publication, or cloud sync.
 - Public knowledge operations use virtual Factile paths, for example `/product-docs/workflows/invoice-import`.
-- Bundle management commands may accept local source paths.
+- Mount commands accept local source paths and native Git remote syntax; `git+` remains compatibility syntax rather than a requirement.
+- Every explicit mount defaults to read-only. Only local mounts may opt into `--writable`; Git mounts are always read-only and the implicit active root remains writable in curator mode.
+- Floating Git sources check at most once per 24 hours unless explicitly refreshed. Generated cache state stays under the active root's `.factile/cache/` directory.
 - JSON output is the stable agent contract.
 - Text output is presentation only.
 - Preserve human-readable Markdown.
@@ -56,6 +59,7 @@ internal/cli/
 pkg/factile/
 pkg/mcpserver/
 pkg/vfs/
+pkg/gitsource/
 pkg/storage/
 pkg/okf/
 pkg/search/
@@ -90,7 +94,8 @@ factile rename <old-path> <new-path> --rev <rev>
 factile delete <document-path> --rev <rev>
 factile deprecate <document-path> --rev <rev> --reason <text>
 
-factile mount <source> <mount-path>
+factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable]
+factile refresh <mount-path>
 factile unmount <mount-path>
 factile mounts
 factile bundle find [path]
@@ -107,6 +112,7 @@ Every task ends by running:
 gofmt -w .
 go test ./...
 go vet ./...
+factile validate /docs
 ./scripts/verify.sh
 ```
 
@@ -123,6 +129,7 @@ Each implementation slice includes:
 - CLI smoke tests
 - fixture OKF bundles under `testdata/bundles`
 - negative tests for invalid paths, bad frontmatter, missing revisions, and revision mismatch
+- temporary local Git remotes for Git behavior; tests never require live network, credentials, or SSH access
 
 ## Done means
 
@@ -131,7 +138,7 @@ A task is done only when:
 1. tests exist for the new behavior
 2. implementation passes all verification commands
 3. CLI JSON output is stable
-4. no Phase 2 remote behavior is implemented accidentally
+4. no hosted, writable-Git, background-sync, or publication behavior is implemented accidentally
 5. docs or command help are updated when behavior changes
 
 <!-- factile:codex:start -->
@@ -139,9 +146,11 @@ A task is done only when:
 
 This repository may have local Factile knowledge available by path.
 
-Reader commands work by path. A path may be backed by root-local Markdown files or mounted sources; do not classify it before navigating it.
+Reader commands work by path. A path may be backed by root-local Markdown files or mounted sources; do not classify a path before navigating it.
 
 A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
+
+Mount sources may be local directories or read-only Git repositories. Reader paths behave the same for both. Use `factile mounts --json` to inspect generated Git status and `factile refresh <mount-path>` only when an immediate upstream check is needed; refresh never makes source content writable.
 
 Use `--view <id>` on reader commands when a named view matches the task; views narrow scope without changing document paths.
 
@@ -154,7 +163,7 @@ For tasks involving architecture, design, implementation choices, domain concept
 5. Read specific concepts with `factile read <path> --json` only when more detail is needed.
 6. Prefer Factile context over ad-hoc guessing when project knowledge is relevant.
 
-Mode: reader. Do not edit Factile/OKF knowledge or catalog state unless the user explicitly asks to curate knowledge.
+Mode: reader. Do not edit Factile/OKF documents, `.factile/views.toml`, `<name>.mount.toml`, or root config unless the user explicitly asks to curate knowledge.
 
 Skip Factile for mechanical renames, formatting, syntax fixes, and obvious local edits.
 

@@ -7,6 +7,8 @@ Reader commands work by path. A path may be backed by root-local Markdown files 
 
 A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
 
+Mount sources may be local directories or read-only Git repositories. Reader paths behave the same for both. Use `factile mounts --json` to inspect generated Git status and `factile refresh <mount-path>` only when an immediate upstream check is needed; refresh never makes source content writable.
+
 Use `--view <id>` on reader commands when a named view matches the task; views narrow scope without changing document paths.
 
 For tasks involving architecture, design, implementation choices, domain concepts, runbooks, standards, policies, documentation, reviews, or decisions:

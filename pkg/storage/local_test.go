@@ -43,7 +43,9 @@ func TestListConceptIDsScansHiddenKnowledgeDirsButSkipsToolPrivateDirs(t *testin
 	root := t.TempDir()
 	mustWriteStorageTestFile(t, filepath.Join(root, ".well-known", "source.md"), []byte("---\ntype: Reference\n---\n\n# Source\n"))
 	mustWriteStorageTestFile(t, filepath.Join(root, ".factile", "private.md"), []byte("# Tool metadata\n"))
+	mustWriteStorageTestFile(t, filepath.Join(root, ".FACTILE", "private.md"), []byte("# Tool metadata\n"))
 	mustWriteStorageTestFile(t, filepath.Join(root, ".git", "ignored.md"), []byte("# Git internals\n"))
+	mustWriteStorageTestFile(t, filepath.Join(root, ".GIT", "ignored.md"), []byte("# Git internals\n"))
 
 	store, err := NewLocal(root)
 	if err != nil {
@@ -125,6 +127,17 @@ func TestLocalRejectsUnsafeConceptIDs(t *testing.T) {
 	}
 	if err := store.AtomicReplace("../outside", []byte("nope")); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("AtomicReplace unsafe path error = %v, want ErrUnsafePath", err)
+	}
+	for _, conceptID := range []string{".factile/cache/git/snapshot", "docs/.git/config", ".GIT/HEAD"} {
+		if _, err := store.ConceptFile(conceptID); !errors.Is(err, ErrUnsafePath) {
+			t.Fatalf("ConceptFile(%q) error = %v, want ErrUnsafePath", conceptID, err)
+		}
+		if err := store.AtomicReplace(conceptID, []byte("nope")); !errors.Is(err, ErrUnsafePath) {
+			t.Fatalf("AtomicReplace(%q) error = %v, want ErrUnsafePath", conceptID, err)
+		}
+	}
+	if _, err := store.ListConceptIDs(".factile/cache"); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("ListConceptIDs internal path error = %v, want ErrUnsafePath", err)
 	}
 }
 

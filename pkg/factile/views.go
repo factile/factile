@@ -121,10 +121,10 @@ func (w *LocalWorkspace) DeleteView(ctx context.Context, id string) (ViewDeleteR
 	return ViewDeleteResult{ID: viewID, Deleted: true}, nil
 }
 
-func (w *LocalWorkspace) scopeForView(inputPath string, viewID string) (scopedSet, error) {
+func (w *LocalWorkspace) scopeForView(ctx context.Context, inputPath string, viewID string) (scopedSet, error) {
 	viewID = strings.TrimSpace(viewID)
 	if viewID == "" {
-		return w.scope(inputPath)
+		return w.scope(ctx, inputPath)
 	}
 	normalized, selectedPaths, err := w.selectedViewPaths(inputPath, viewID)
 	if err != nil {
@@ -134,7 +134,7 @@ func (w *LocalWorkspace) scopeForView(inputPath string, viewID string) (scopedSe
 	seen := map[string]bool{}
 	for _, selected := range selectedPaths {
 		scoped.Paths = append(scoped.Paths, selected)
-		part, err := w.scope(selected)
+		part, err := w.scope(ctx, selected)
 		if err != nil {
 			return scopedSet{}, err
 		}
@@ -183,11 +183,11 @@ func (w *LocalWorkspace) selectedViewPaths(inputPath string, viewID string) (str
 	return normalized, selected, nil
 }
 
-func (w *LocalWorkspace) scopeWithView(inputPath string, viewID string) (scopedSet, error) {
+func (w *LocalWorkspace) scopeWithView(ctx context.Context, inputPath string, viewID string) (scopedSet, error) {
 	if strings.TrimSpace(viewID) == "" {
-		return w.scope(inputPath)
+		return w.scope(ctx, inputPath)
 	}
-	return w.scopeForView(inputPath, viewID)
+	return w.scopeForView(ctx, inputPath, viewID)
 }
 
 func intersectViewPath(commandPath string, viewPath string) (string, bool, error) {
@@ -228,7 +228,7 @@ func normalizeViewPaths(inputs []string) ([]string, error) {
 }
 
 func sortedViews(views []View) []View {
-	out := append([]View(nil), views...)
+	out := append([]View{}, views...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }

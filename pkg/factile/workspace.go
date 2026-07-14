@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/factile/factile/pkg/contextpack"
+	"github.com/factile/factile/pkg/gitsource"
 	graphpkg "github.com/factile/factile/pkg/graph"
 	"github.com/factile/factile/pkg/okf"
 	patchpkg "github.com/factile/factile/pkg/patch"
@@ -36,7 +37,6 @@ func NewWorkspace(opts WorkspaceOptions) *LocalWorkspace {
 }
 
 func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOptions) (ListResult, error) {
-	_ = ctx
 	if inputPath == "" {
 		inputPath = "/"
 	}
@@ -45,7 +45,7 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 		return ListResult{}, err
 	}
 	if strings.TrimSpace(opts.View) != "" {
-		return w.listForView(normalized, opts)
+		return w.listForView(ctx, normalized, opts)
 	}
 	mounts, err := w.mounts()
 	if err != nil {
@@ -54,7 +54,7 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	folders := immediateMountFolders(mounts, normalized)
 	if normalized == "/" {
 		if mount, ok := mountByPath(mounts, "/"); ok {
-			if err := ensureLocal(mount); err != nil {
+			if err := ensureReadable(mount); err != nil {
 				return ListResult{}, err
 			}
 			var documents []DocumentSummary
@@ -64,19 +64,23 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 			}
 			sortFolderSummaries(folders)
 			sortDocumentSummaries(documents)
-			return w.listResult(normalized, folders, documents, opts)
+			return w.listResult(ctx, normalized, folders, documents, opts)
 		}
-		return w.listResult(normalized, folders, nil, opts)
+		return w.listResult(ctx, normalized, folders, nil, opts)
+	}
+	mounts, err = w.mountsForTarget(ctx, normalized)
+	if err != nil {
+		return ListResult{}, err
 	}
 
 	target, err := vfs.Resolve(mounts, normalized)
 	if err != nil {
 		if len(folders) > 0 {
-			return w.listResult(normalized, folders, nil, opts)
+			return w.listResult(ctx, normalized, folders, nil, opts)
 		}
 		return ListResult{}, NormalizeError(err)
 	}
-	if err := ensureLocal(target.Mount); err != nil {
+	if err := ensureReadable(target.Mount); err != nil {
 		return ListResult{}, err
 	}
 	if target.Kind == TargetConcept {
@@ -91,7 +95,7 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 	}
 	sortFolderSummaries(folders)
 	sortDocumentSummaries(documents)
-	return w.listResult(target.Path, folders, documents, opts)
+	return w.listResult(ctx, target.Path, folders, documents, opts)
 }
 
 func (w *LocalWorkspace) listLocalEntries(mount vfs.Mount, prefix string, folders []FolderSummary) ([]FolderSummary, []DocumentSummary, error) {
@@ -135,16 +139,16 @@ func (w *LocalWorkspace) listLocalEntries(mount vfs.Mount, prefix string, folder
 	return folders, documents, nil
 }
 
-func (w *LocalWorkspace) listForView(normalized string, opts ListOptions) (ListResult, error) {
-	if _, target, err := w.resolve(normalized); err == nil && target.Kind == TargetConcept {
+func (w *LocalWorkspace) listForView(ctx context.Context, normalized string, opts ListOptions) (ListResult, error) {
+	if _, target, err := w.resolveReadable(ctx, normalized); err == nil && target.Kind == TargetConcept {
 		return ListResult{}, errorf(ErrPathIsNotBundle, "Path is a concept, not a listable path: %s", target.Path)
 	}
-	scoped, err := w.scopeForView(normalized, opts.View)
+	scoped, err := w.scopeForView(ctx, normalized, opts.View)
 	if err != nil {
 		return ListResult{}, err
 	}
 	folders, documents := listEntriesFromScope(normalized, scoped)
-	return w.listResult(normalized, folders, documents, opts)
+	return w.listResult(ctx, normalized, folders, documents, opts)
 }
 
 func listEntriesFromScope(current string, scoped scopedSet) ([]FolderSummary, []DocumentSummary) {
@@ -185,16 +189,15 @@ func listEntriesFromScope(current string, scoped scopedSet) ([]FolderSummary, []
 }
 
 func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOptions) (ConceptResult, error) {
-	_, target, err := w.resolve(inputPath)
+	_, target, err := w.resolveReadable(ctx, inputPath)
 	if err != nil {
-		return ConceptResult{}, err
-	}
-	_ = ctx
-	if err := ensureLocal(target.Mount); err != nil {
 		return ConceptResult{}, err
 	}
 	if target.Kind != TargetConcept {
 		return ConceptResult{}, errorf(ErrConceptNotFound, "Concept not found: %s", target.Path)
+	}
+	if err := ensureReadable(target.Mount); err != nil {
+		return ConceptResult{}, err
 	}
 	concept, err := w.readConcept(target.Mount, target.ConceptID)
 	if err != nil {
@@ -207,8 +210,7 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 	if strings.TrimSpace(query) == "" {
 		return SearchResults{}, errorf(ErrInvalidPath, "Search query must not be empty")
 	}
-	_ = ctx
-	scope, err := w.scopeWithView(inputPath, opts.View)
+	scope, err := w.scopeWithView(ctx, inputPath, opts.View)
 	if err != nil {
 		return SearchResults{}, err
 	}
@@ -248,7 +250,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	if err != nil {
 		return ContextPack{}, err
 	}
-	scope, err := w.scopeWithView(inputPath, opts.View)
+	scope, err := w.scopeWithView(ctx, inputPath, opts.View)
 	if err != nil {
 		return ContextPack{}, err
 	}
@@ -305,18 +307,17 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 }
 
 func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts GraphOptions) (GraphResult, error) {
-	_ = ctx
 	depth, err := normalizeLinkDepth(opts.Depth)
 	if err != nil {
 		return GraphResult{}, err
 	}
-	scope, err := w.scopeWithView(inputPath, opts.View)
+	scope, err := w.scopeWithView(ctx, inputPath, opts.View)
 	if err != nil {
 		return GraphResult{}, err
 	}
 	var target vfs.Target
 	targetResolved := false
-	_, resolved, err := w.resolve(scope.Path)
+	_, resolved, err := w.resolveReadable(ctx, scope.Path)
 	if err == nil {
 		target = resolved
 		targetResolved = true
@@ -393,7 +394,6 @@ func normalizeLinkDepth(depth int) (int, error) {
 }
 
 func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts ValidateOptions) (ValidationResult, error) {
-	_ = ctx
 	if inputPath == "" {
 		inputPath = "/"
 	}
@@ -402,7 +402,7 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 		return ValidationResult{}, NormalizeError(err)
 	}
 	if viewID := strings.TrimSpace(opts.View); viewID != "" {
-		return w.validateViewScope(normalized, viewID)
+		return w.validateViewScope(ctx, normalized, viewID)
 	}
 	metadataIssues, metadataBlocking, err := w.validateRootMetadata()
 	if err != nil {
@@ -411,7 +411,7 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 	if metadataBlocking {
 		return ValidationResult{Path: normalized, Valid: false, Issues: metadataIssues}, nil
 	}
-	resultPath, concepts, issues, err := w.validatePathScope(normalized)
+	resultPath, concepts, issues, err := w.validatePathScope(ctx, normalized)
 	if err != nil {
 		return ValidationResult{}, err
 	}
@@ -455,16 +455,18 @@ func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error)
 	return issues, blocking, nil
 }
 
-func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedConcept, []ValidationIssue, error) {
-	mounts, err := w.mounts()
+func (w *LocalWorkspace) validatePathScope(ctx context.Context, normalized string) (string, []scopedConcept, []ValidationIssue, error) {
+	mounts, issues, invalidMounts, err := w.mountsForValidationScope(ctx, normalized)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	issues := []ValidationIssue{}
 	var concepts []scopedConcept
 	if normalized == "/" {
 		for _, mount := range mounts {
-			if err := ensureLocal(mount); err != nil {
+			if invalidMounts[mount.MountPath] {
+				continue
+			}
+			if err := ensureReadable(mount); err != nil {
 				return "", nil, nil, err
 			}
 			items, mountIssues, err := w.validateMountScope(mount, "")
@@ -483,7 +485,10 @@ func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedC
 			return "", nil, nil, NormalizeError(err)
 		}
 		for _, mount := range selected {
-			if err := ensureLocal(mount); err != nil {
+			if invalidMounts[mount.MountPath] {
+				continue
+			}
+			if err := ensureReadable(mount); err != nil {
 				return "", nil, nil, err
 			}
 			items, mountIssues, err := w.validateMountScope(mount, "")
@@ -495,7 +500,10 @@ func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedC
 		}
 		return normalized, concepts, issues, nil
 	}
-	if err := ensureLocal(target.Mount); err != nil {
+	if invalidMounts[target.Mount.MountPath] {
+		return target.Path, concepts, issues, nil
+	}
+	if err := ensureReadable(target.Mount); err != nil {
 		return "", nil, nil, err
 	}
 	if target.Kind == TargetConcept {
@@ -518,7 +526,10 @@ func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedC
 		concepts = append(concepts, items...)
 		issues = append(issues, scopeIssues...)
 		for _, mount := range mountsForVirtualPath(mounts, normalized) {
-			if err := ensureLocal(mount); err != nil {
+			if invalidMounts[mount.MountPath] {
+				continue
+			}
+			if err := ensureReadable(mount); err != nil {
 				return "", nil, nil, err
 			}
 			items, mountIssues, err := w.validateMountScope(mount, "")
@@ -532,12 +543,8 @@ func (w *LocalWorkspace) validatePathScope(normalized string) (string, []scopedC
 	return target.Path, concepts, issues, nil
 }
 
-func (w *LocalWorkspace) validateViewScope(inputPath string, viewID string) (ValidationResult, error) {
+func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string, viewID string) (ValidationResult, error) {
 	normalized, selectedPaths, err := w.selectedViewPaths(inputPath, viewID)
-	if err != nil {
-		return ValidationResult{}, err
-	}
-	fullPaths, err := w.localConceptPathSet()
 	if err != nil {
 		return ValidationResult{}, err
 	}
@@ -554,7 +561,7 @@ func (w *LocalWorkspace) validateViewScope(inputPath string, viewID string) (Val
 		issues = append(issues, issue)
 	}
 	for _, selectedPath := range selectedPaths {
-		_, items, itemIssues, err := w.validatePathScope(selectedPath)
+		_, items, itemIssues, err := w.validatePathScope(ctx, selectedPath)
 		if err != nil {
 			return ValidationResult{}, err
 		}
@@ -569,7 +576,7 @@ func (w *LocalWorkspace) validateViewScope(inputPath string, viewID string) (Val
 			addIssue(issue)
 		}
 	}
-	for _, issue := range linkIssuesAgainst(concepts, fullPaths) {
+	for _, issue := range linkIssuesWithinScopes(concepts, selectedPaths) {
 		addIssue(issue)
 	}
 	return ValidationResult{Path: normalized, Valid: !hasErrors(issues), Issues: issues}, nil
@@ -894,7 +901,27 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
 	}
-	if unsupportedMountSource(source, opts.Kind) {
+	classification, err := vfs.ClassifySource(source)
+	if err != nil {
+		return MountResult{}, NormalizeError(err)
+	}
+	kind := classification.Kind
+	if opts.Kind != "" && opts.Kind != kind {
+		return MountResult{}, NewError(ErrUnsupportedSource, "Mount source kind does not match its syntax")
+	}
+	if w.opts.MountFile != "" && kind == vfs.SourceKindGit {
+		return MountResult{}, NewError(ErrUnsupportedSource, "Git sources are not supported with --mount-file; use an active Factile root.")
+	}
+	if opts.Writable && kind != vfs.SourceKindLocal {
+		if kind == vfs.SourceKindGit {
+			return MountResult{}, NewError(ErrSourceReadOnly, "Git sources are always read-only.")
+		}
+		return MountResult{}, NewError(ErrSourceReadOnly, "Only local sources can be mounted writable")
+	}
+	if kind == vfs.SourceKindLocal && (opts.RefSet || opts.Ref != "" || opts.RevisionSet || opts.Revision != "") {
+		return MountResult{}, NewError(ErrValidationFailed, "Git selectors require a Git source")
+	}
+	if kind == vfs.SourceKindFactile {
 		return MountResult{}, NewError(ErrUnsupportedSource, "Remote sources are not implemented in Phase 1")
 	}
 	if w.opts.MountFile == "" {
@@ -906,23 +933,31 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 		if err != nil {
 			return MountResult{}, NormalizeError(err)
 		}
-		mount := vfs.Mount{
-			MountPath:    normalized,
-			Source:       source,
-			Writable:     opts.Writable,
-			Title:        opts.Title,
-			Description:  opts.Description,
-			WhenToUse:    opts.WhenToUse,
-			WhenNotToUse: opts.WhenNotToUse,
-			Version:      opts.Version,
-			Ref:          opts.Ref,
-			Revision:     opts.Revision,
-			Trust:        opts.Trust,
-		}
 		var result MountResult
 		err = storage.WithFileLock(descriptorPath, func() error {
 			if err := ensureRootMountTargetAvailable(root, normalized); err != nil {
 				return err
+			}
+			sourcePath, err := w.resolveMountSource(ctx, root, source, normalized, kind, filepath.Dir(descriptorPath), false, opts)
+			if err != nil {
+				return err
+			}
+			resolved := applyMountMetadataDefaults(sourcePath, normalized, opts)
+			mount := vfs.Mount{
+				MountPath:    normalized,
+				Source:       source,
+				Writable:     resolved.Writable,
+				Title:        resolved.Title,
+				Description:  resolved.Description,
+				WhenToUse:    resolved.WhenToUse,
+				WhenNotToUse: resolved.WhenNotToUse,
+				Version:      resolved.Version,
+				Ref:          resolved.Ref,
+				Revision:     resolved.Revision,
+				VersionSet:   resolved.VersionSet,
+				RefSet:       resolved.RefSet,
+				RevisionSet:  resolved.RevisionSet,
+				Trust:        resolved.Trust,
 			}
 			written, err := vfs.WriteMountDescriptorFile(root, mount)
 			if err != nil {
@@ -936,10 +971,6 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 		}
 		return result, nil
 	}
-	kind := opts.Kind
-	if kind == "" {
-		kind = "local"
-	}
 	registryPath, err := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
@@ -950,14 +981,19 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 		if err != nil {
 			return err
 		}
+		sourcePath, err := w.resolveMountSource(ctx, "", source, normalized, kind, filepath.Dir(registryPath), true, opts)
+		if err != nil {
+			return err
+		}
+		resolved := applyMountMetadataDefaults(sourcePath, normalized, opts)
 		for i, mount := range mounts {
 			if mount.MountPath == normalized {
-				mounts[i] = vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: opts.Writable}
+				mounts[i] = vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: resolved.Writable, Title: resolved.Title, Description: resolved.Description, Version: resolved.Version, Ref: resolved.Ref, Revision: resolved.Revision, VersionSet: resolved.VersionSet, RefSet: resolved.RefSet, RevisionSet: resolved.RevisionSet}
 				result = MountResult{Mount: mounts[i]}
 				return vfs.WriteRegistryFile(registryPath, mounts)
 			}
 		}
-		mount := vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: opts.Writable}
+		mount := vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: resolved.Writable, Title: resolved.Title, Description: resolved.Description, Version: resolved.Version, Ref: resolved.Ref, Revision: resolved.Revision, VersionSet: resolved.VersionSet, RefSet: resolved.RefSet, RevisionSet: resolved.RevisionSet}
 		mounts = append(mounts, mount)
 		result = MountResult{Mount: mount}
 		return vfs.WriteRegistryFile(registryPath, mounts)
@@ -966,13 +1002,6 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 		return MountResult{}, NormalizeError(err)
 	}
 	return result, nil
-}
-
-func unsupportedMountSource(source, kind string) bool {
-	if kind != "" && kind != "local" {
-		return true
-	}
-	return strings.HasPrefix(source, "factile://") || strings.HasPrefix(source, "git+")
 }
 
 func (w *LocalWorkspace) Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error) {
@@ -1035,7 +1064,6 @@ func (w *LocalWorkspace) Unmount(ctx context.Context, mountPath string, opts Unm
 }
 
 func (w *LocalWorkspace) ListMounts(ctx context.Context) (MountListResult, error) {
-	_ = ctx
 	mounts, err := w.mounts()
 	if err != nil {
 		return MountListResult{}, NormalizeError(err)
@@ -1045,9 +1073,44 @@ func (w *LocalWorkspace) ListMounts(ctx context.Context) (MountListResult, error
 		if mount.MountPath == "/" {
 			continue
 		}
+		if mount.Kind == vfs.SourceKindGit {
+			status, statusErr := w.gitSourceStatus(mount)
+			if statusErr != nil {
+				status = invalidGitStatus(mount)
+				mount.Source = status.Source
+			}
+			mount.SourceStatus = &status
+		}
 		out = append(out, mount)
 	}
 	return MountListResult{Mounts: out}, nil
+}
+
+func (w *LocalWorkspace) Refresh(ctx context.Context, mountPath string) (RefreshResult, error) {
+	normalized, err := vfs.ValidateMountPath(mountPath)
+	if err != nil {
+		return RefreshResult{}, NormalizeError(err)
+	}
+	mounts, err := w.mounts()
+	if err != nil {
+		return RefreshResult{}, NormalizeError(err)
+	}
+	mount, ok := mountByPath(mounts, normalized)
+	if !ok {
+		return RefreshResult{}, NewError(ErrMountNotFound, "Mount not found: "+normalized)
+	}
+	if mount.Kind != vfs.SourceKindGit {
+		return RefreshResult{}, NewError(ErrUnsupportedSource, "Only Git mounts can be refreshed")
+	}
+	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir}, gitsource.NewRunner())
+	if err != nil {
+		return RefreshResult{}, NormalizeError(err)
+	}
+	result, err := cache.Refresh(ctx, gitIntent(mount))
+	if err != nil {
+		return RefreshResult{}, normalizeGitSourceError(err)
+	}
+	return RefreshResult{MountPath: result.MountPath, Outcome: result.Outcome, Status: result.Status, Warning: result.Warning}, nil
 }
 
 func (w *LocalWorkspace) InspectBundle(ctx context.Context, source string) (BundleInspectResult, error) {
@@ -1122,7 +1185,7 @@ type scopedSet struct {
 	Summaries []ConceptSummary
 }
 
-func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
+func (w *LocalWorkspace) scope(ctx context.Context, inputPath string) (scopedSet, error) {
 	if inputPath == "" {
 		inputPath = "/"
 	}
@@ -1130,7 +1193,7 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 	if err != nil {
 		return scopedSet{}, NormalizeError(err)
 	}
-	mounts, err := w.mounts()
+	mounts, err := w.mountsForScope(ctx, normalized)
 	if err != nil {
 		return scopedSet{}, NormalizeError(err)
 	}
@@ -1143,7 +1206,7 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 			return scopedSet{}, NormalizeError(err)
 		}
 		for _, mount := range selected {
-			if err := ensureLocal(mount); err != nil {
+			if err := ensureReadable(mount); err != nil {
 				return scopedSet{}, err
 			}
 			items, err := w.scopeForMount(mount, "")
@@ -1154,7 +1217,7 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 		}
 	} else if target.Kind == TargetVirtualRoot {
 		for _, mount := range mounts {
-			if err := ensureLocal(mount); err != nil {
+			if err := ensureReadable(mount); err != nil {
 				return scopedSet{}, err
 			}
 			items, err := w.scopeForMount(mount, "")
@@ -1164,7 +1227,7 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 			scoped.Concepts = append(scoped.Concepts, items...)
 		}
 	} else {
-		if err := ensureLocal(target.Mount); err != nil {
+		if err := ensureReadable(target.Mount); err != nil {
 			return scopedSet{}, err
 		}
 		if target.Kind == TargetConcept {
@@ -1184,7 +1247,7 @@ func (w *LocalWorkspace) scope(inputPath string) (scopedSet, error) {
 		}
 		scoped.Concepts = append(scoped.Concepts, items...)
 		for _, mount := range mountsForVirtualPath(mounts, normalized) {
-			if err := ensureLocal(mount); err != nil {
+			if err := ensureReadable(mount); err != nil {
 				return scopedSet{}, err
 			}
 			items, err := w.scopeForMount(mount, "")
@@ -1444,31 +1507,6 @@ func validateScope(scope scopedSet) []ValidationIssue {
 	return issues
 }
 
-func (w *LocalWorkspace) localConceptPathSet() (map[string]bool, error) {
-	mounts, err := w.mounts()
-	if err != nil {
-		return nil, err
-	}
-	paths := map[string]bool{}
-	for _, mount := range mounts {
-		if err := ensureLocal(mount); err != nil {
-			return nil, err
-		}
-		store, err := storage.NewLocal(mount.SourcePath)
-		if err != nil {
-			return nil, NormalizeError(err)
-		}
-		ids, err := store.ListConceptIDs("")
-		if err != nil {
-			return nil, NormalizeError(err)
-		}
-		for _, id := range ids {
-			paths[cleanVirtualJoin(mount.MountPath, okf.NormalizeConceptID(id))] = true
-		}
-	}
-	return paths, nil
-}
-
 func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]scopedConcept, []ValidationIssue, error) {
 	store, err := storage.NewLocal(mount.SourcePath)
 	if err != nil {
@@ -1542,6 +1580,39 @@ func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []Valid
 		}
 	}
 	return issues
+}
+
+func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []ValidationIssue {
+	byPath := map[string]bool{}
+	for _, item := range concepts {
+		byPath[item.Concept.Path] = true
+	}
+	var issues []ValidationIssue
+	for _, item := range concepts {
+		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			if !ok || !pathInAnyScope(target, scopes) || byPath[target] {
+				continue
+			}
+			issues = append(issues, ValidationIssue{
+				Severity:  "warning",
+				Code:      "broken_link",
+				Message:   "Broken Markdown link: " + link.Target,
+				Path:      item.Concept.Path,
+				ConceptID: item.Concept.ConceptID,
+			})
+		}
+	}
+	return issues
+}
+
+func pathInAnyScope(candidate string, scopes []string) bool {
+	for _, scope := range scopes {
+		if candidate == scope || strings.HasPrefix(candidate, scope+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDocument(path string, doc okf.Document) []ValidationIssue {
@@ -1695,6 +1766,22 @@ func (w *LocalWorkspace) resolve(inputPath string) ([]vfs.Mount, vfs.Target, err
 	return mounts, target, nil
 }
 
+func (w *LocalWorkspace) resolveReadable(ctx context.Context, inputPath string) ([]vfs.Mount, vfs.Target, error) {
+	normalized, err := vfs.NormalizePath(inputPath)
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	mounts, err := w.mountsForTarget(ctx, normalized)
+	if err != nil {
+		return nil, vfs.Target{}, err
+	}
+	target, err := vfs.Resolve(mounts, normalized)
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	return mounts, target, nil
+}
+
 func (w *LocalWorkspace) resolveForConceptWrite(inputPath string) ([]vfs.Mount, vfs.Target, error) {
 	mounts, err := w.mounts()
 	if err != nil {
@@ -1801,6 +1888,21 @@ func (w *LocalWorkspace) ensureDirectoryParent(mounts []vfs.Mount, target vfs.Ta
 }
 
 func (w *LocalWorkspace) resolveExistingConceptWrite(inputPath string) ([]vfs.Mount, vfs.Target, error) {
+	mounts, err := w.mounts()
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	normalized, err := vfs.NormalizePath(inputPath)
+	if err != nil {
+		return nil, vfs.Target{}, NormalizeError(err)
+	}
+	selected, _, err := w.mountAndRelativePath(mounts, normalized)
+	if err != nil {
+		return nil, vfs.Target{}, err
+	}
+	if selected.Kind == vfs.SourceKindGit {
+		return nil, vfs.Target{}, w.ensureWritable(selected)
+	}
 	mounts, target, err := w.resolve(inputPath)
 	if err != nil {
 		return nil, vfs.Target{}, err
@@ -1850,10 +1952,23 @@ func (w *LocalWorkspace) mounts() ([]vfs.Mount, error) {
 }
 
 func (w *LocalWorkspace) ensureWritable(mount vfs.Mount) error {
+	if mount.Kind == vfs.SourceKindGit {
+		return NewError(ErrSourceReadOnly, "Source is read-only: "+mount.MountPath)
+	}
 	if w.opts.ReadOnly || !mount.Writable {
 		return NewError(ErrSourceReadOnly, "Source is read-only: "+mount.MountPath)
 	}
 	return ensureLocal(mount)
+}
+
+func ensureReadable(mount vfs.Mount) error {
+	if mount.Kind != "" && mount.Kind != vfs.SourceKindLocal && mount.Kind != vfs.SourceKindGit {
+		return NewError(ErrUnsupportedSource, "Unsupported source kind: "+mount.Kind)
+	}
+	if mount.SourcePath == "" {
+		return NewError(ErrUnsupportedSource, "Source is not materialized: "+mount.MountPath)
+	}
+	return nil
 }
 
 func ensureLocal(mount vfs.Mount) error {

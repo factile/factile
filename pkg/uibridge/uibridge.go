@@ -287,6 +287,9 @@ func viewsHandler(ws readerWorkspace) http.HandlerFunc {
 			writeError(w, errorStatus(err), err)
 			return
 		}
+		if result.Views == nil {
+			result.Views = []factile.View{}
+		}
 		writeJSON(w, result)
 	}
 }
@@ -896,11 +899,18 @@ func serveEmbeddedApp(w http.ResponseWriter, r *http.Request) {
 
 	assetPath := cleanAssetPath(r.URL.Path)
 	if !embeddedAssetExists(staticFS, assetPath) {
+		if strings.HasPrefix(assetPath, "assets/") {
+			http.NotFound(w, r)
+			return
+		}
 		assetPath = "index.html"
 	}
 	if assetPath == "index.html" {
 		serveEmbeddedIndex(w, staticFS)
 		return
+	}
+	if strings.HasPrefix(assetPath, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 
 	next := new(http.Request)
@@ -918,6 +928,7 @@ func serveEmbeddedIndex(w http.ResponseWriter, staticFS fs.FS) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
 }
 

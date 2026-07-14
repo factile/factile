@@ -10,6 +10,7 @@ Factile exposes local OKF knowledge as a virtual filesystem.
 Reader commands work on paths such as `/`, `/engineering`, and `/engineering/django`; a path may be backed by root-local Markdown files or mounted sources.
 A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
 Use `--view <id>` on reader commands when a named view matches the task; views narrow scope without changing document paths.
+Mount sources may be local directories or read-only Git repositories. Reader commands use the same paths for both. Inspect generated Git status with `factile mounts --json`; use `factile refresh <mount-path>` only when an immediate upstream check is needed. Refresh does not grant write access.
 
 Use Factile when the task may depend on repository-specific:
 

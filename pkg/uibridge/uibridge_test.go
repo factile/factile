@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -107,7 +108,23 @@ func (fakeReader) Summary(ctx context.Context) (factile.SummaryResult, error) {
 	_ = ctx
 	return factile.SummaryResult{
 		Workspace: factile.WorkspaceSummary{Path: "/tmp/factile", Version: "test"},
-		Sources:   []factile.Mount{{MountPath: "/", Source: ".", Kind: "local", Writable: true}},
+		Sources: []factile.Mount{
+			{MountPath: "/", Source: ".", Kind: "local", Writable: true},
+			{
+				MountPath: "/git",
+				Source:    "https://example.test/knowledge.git",
+				Kind:      "git",
+				Writable:  false,
+				SourceStatus: &factile.SourceStatus{
+					MountPath:         "/git",
+					Source:            "https://example.test/knowledge.git",
+					Kind:              "git",
+					SelectorMode:      "head",
+					SelectedRevision:  "1111111111111111111111111111111111111111",
+					SnapshotAvailable: true,
+				},
+			},
+		},
 	}, nil
 }
 
@@ -188,6 +205,15 @@ type noActiveRootReader struct {
 	fakeReader
 }
 
+type nilViewsReader struct {
+	fakeReader
+}
+
+func (nilViewsReader) ListViews(ctx context.Context) (factile.ViewListResult, error) {
+	_ = ctx
+	return factile.ViewListResult{}, nil
+}
+
 func (noActiveRootReader) Summary(ctx context.Context) (factile.SummaryResult, error) {
 	_ = ctx
 	return factile.SummaryResult{}, factile.NewError(factile.ErrNoActiveRoot, "No active Factile root")
@@ -262,6 +288,18 @@ func TestHandlerReaderOperations(t *testing.T) {
 	}
 }
 
+func TestHandlerSourceIncludesCachedGitStatus(t *testing.T) {
+	response := request(NewHandler(fakeReader{}, Options{}), http.MethodGet, APIPrefix+"/source")
+	if response.Code != http.StatusOK {
+		t.Fatalf("source status = %d body=%s", response.Code, response.Body.String())
+	}
+	for _, want := range []string{`"mount_path":"/git"`, `"kind":"git"`, `"selected_revision":"1111111111111111111111111111111111111111"`, `"snapshot_available":true`} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("source response missing %s: %s", want, response.Body.String())
+		}
+	}
+}
+
 func TestHandlerSourceFallsBackWithoutActiveRoot(t *testing.T) {
 	handler := NewHandler(noActiveRootReader{}, Options{})
 
@@ -279,6 +317,18 @@ func TestHandlerSourceFallsBackWithoutActiveRoot(t *testing.T) {
 	}
 	if !strings.Contains(views.Body.String(), `"views":[]`) {
 		t.Fatalf("views response should be empty without active root: %s", views.Body.String())
+	}
+}
+
+func TestHandlerNormalizesNilViewsToAnEmptyArray(t *testing.T) {
+	handler := NewHandler(nilViewsReader{}, Options{})
+
+	response := request(handler, http.MethodGet, APIPrefix+"/views")
+	if response.Code != http.StatusOK {
+		t.Fatalf("views status = %d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"views":[]`) {
+		t.Fatalf("views response should contain an empty array: %s", response.Body.String())
 	}
 }
 
@@ -387,6 +437,37 @@ func TestHandlerServesEmbeddedSPAFallback(t *testing.T) {
 		if strings.Contains(response.Body.String(), "not embedded") {
 			t.Fatalf("fallback %s served placeholder instead of embedded UI: %s", target, response.Body.String())
 		}
+		if got := response.Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("fallback %s cache control = %q", target, got)
+		}
+	}
+}
+
+func TestHandlerCachesHashedAssetsAndRejectsMissingAssets(t *testing.T) {
+	handler := NewHandler(fakeReader{}, Options{})
+	staticFS, err := fs.Sub(embeddedStatic, "static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := fs.Glob(staticFS, "assets/*")
+	if err != nil || len(assets) == 0 {
+		t.Fatalf("embedded assets = %v, %v", assets, err)
+	}
+
+	asset := request(handler, http.MethodGet, "/"+assets[0])
+	if asset.Code != http.StatusOK {
+		t.Fatalf("asset status = %d body=%s", asset.Code, asset.Body.String())
+	}
+	if got := asset.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("asset cache control = %q", got)
+	}
+
+	missing := request(handler, http.MethodGet, "/assets/missing-build-hash.js")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing asset status = %d body=%s", missing.Code, missing.Body.String())
+	}
+	if strings.Contains(missing.Body.String(), `<div id="root">`) {
+		t.Fatalf("missing asset served the SPA entry point: %s", missing.Body.String())
 	}
 }
 

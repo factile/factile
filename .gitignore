@@ -4,6 +4,7 @@ TASKS.md
 .agents/
 .beads/
 .codex/
+.codebase-memory/
 /.factile/
 !testdata/catalog-workspace/.factile/
 !testdata/catalog-workspace/.factile/**

@@ -30,20 +30,47 @@ func (e *Error) Error() string {
 }
 
 type Mount struct {
-	MountPath    string `json:"mount_path"`
-	Source       string `json:"source"`
-	Kind         string `json:"kind"`
-	Writable     bool   `json:"writable"`
-	Title        string `json:"title,omitempty"`
-	Description  string `json:"description,omitempty"`
-	WhenToUse    string `json:"when_to_use,omitempty"`
-	WhenNotToUse string `json:"when_not_to_use,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Ref          string `json:"ref,omitempty"`
-	Revision     string `json:"revision,omitempty"`
-	Trust        string `json:"trust,omitempty"`
-	RegistryPath string `json:"-"`
-	SourcePath   string `json:"-"`
+	MountPath    string        `json:"mount_path"`
+	Source       string        `json:"source"`
+	Kind         string        `json:"kind"`
+	Writable     bool          `json:"writable"`
+	Title        string        `json:"title,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	WhenToUse    string        `json:"when_to_use,omitempty"`
+	WhenNotToUse string        `json:"when_not_to_use,omitempty"`
+	Version      string        `json:"version,omitempty"`
+	Ref          string        `json:"ref,omitempty"`
+	Revision     string        `json:"revision,omitempty"`
+	VersionSet   bool          `json:"-"`
+	RefSet       bool          `json:"-"`
+	RevisionSet  bool          `json:"-"`
+	Trust        string        `json:"trust,omitempty"`
+	SourceStatus *SourceStatus `json:"source_status,omitempty"`
+	RegistryPath string        `json:"-"`
+	SourcePath   string        `json:"-"`
+}
+
+type SourceStatus struct {
+	MountPath         string         `json:"mount_path"`
+	Source            string         `json:"source"`
+	Kind              string         `json:"kind"`
+	SelectorMode      string         `json:"selector_mode"`
+	IntentRef         string         `json:"intent_ref,omitempty"`
+	IntentRevision    string         `json:"intent_revision,omitempty"`
+	SelectedRevision  string         `json:"selected_revision,omitempty"`
+	SnapshotAvailable bool           `json:"snapshot_available"`
+	RefreshDue        bool           `json:"refresh_due"`
+	Stale             bool           `json:"stale"`
+	LastAttemptAt     string         `json:"last_attempt_at,omitempty"`
+	LastSuccessAt     string         `json:"last_success_at,omitempty"`
+	LastErrorCode     string         `json:"last_error_code,omitempty"`
+	Warning           *SourceWarning `json:"warning,omitempty"`
+}
+
+type SourceWarning struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	MountPath string `json:"mount_path"`
 }
 
 type LoadOptions struct {
@@ -77,6 +104,11 @@ func NormalizePath(input string) (string, error) {
 	}
 	if clean != "/" && strings.HasSuffix(clean, ".md") {
 		clean = strings.TrimSuffix(clean, ".md")
+	}
+	for _, part := range strings.Split(strings.TrimPrefix(clean, "/"), "/") {
+		if strings.EqualFold(part, ".factile") || strings.EqualFold(part, ".git") {
+			return "", &Error{Code: "invalid_path", Message: "Factile path must not address internal .factile or .git directories"}
+		}
 	}
 	return clean, nil
 }
@@ -212,7 +244,7 @@ func LoadRegistryFile(filename string) ([]Mount, error) {
 				return nil, &Error{Code: "validation_failed", Message: "Duplicate mount path in registry: " + normalized}
 			}
 			seen[normalized] = true
-			mounts = append(mounts, Mount{MountPath: normalized, Kind: "local", Writable: true, RegistryPath: registryPath})
+			mounts = append(mounts, Mount{MountPath: normalized, Kind: "local", RegistryPath: registryPath})
 			current = &mounts[len(mounts)-1]
 			continue
 		}
@@ -244,6 +276,18 @@ func LoadRegistryFile(filename string) ([]Mount, error) {
 				return nil, err
 			}
 			current.Writable = value
+		case "title":
+			value, err := parseMountString(rawValue, key, lineNo)
+			if err != nil {
+				return nil, err
+			}
+			current.Title = value
+		case "description":
+			value, err := parseMountString(rawValue, key, lineNo)
+			if err != nil {
+				return nil, err
+			}
+			current.Description = value
 		case "revision":
 			if _, err := parseMountString(rawValue, key, lineNo); err != nil {
 				return nil, err
@@ -261,6 +305,13 @@ func LoadRegistryFile(filename string) ([]Mount, error) {
 		}
 		if mounts[i].Kind == "" {
 			mounts[i].Kind = "local"
+		}
+		classification, err := ClassifySource(mounts[i].Source)
+		if err != nil {
+			return nil, err
+		}
+		if mounts[i].Kind == SourceKindGit || classification.Kind == SourceKindGit {
+			return nil, &Error{Code: "unsupported_source", Message: "Git sources are not supported with --mount-file; use an active Factile root."}
 		}
 		if mounts[i].Kind == "local" {
 			source := mounts[i].Source
@@ -332,7 +383,7 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 	rel := mountRelativePath(*selected, normalized)
 	target.RelPath = rel
 	target.ConceptID = rel
-	if selected.Kind != "local" {
+	if selected.SourcePath == "" {
 		target.Kind = TargetPath
 		return target, nil
 	}
@@ -468,10 +519,13 @@ func WriteRegistryFile(filename string, mounts []Mount) error {
 		}
 		b.WriteString("\"\n")
 		if mount.Writable {
-			b.WriteString("writable = true\n\n")
+			b.WriteString("writable = true\n")
 		} else {
-			b.WriteString("writable = false\n\n")
+			b.WriteString("writable = false\n")
 		}
+		writeOptionalMountDescriptorString(&b, "title", mount.Title)
+		writeOptionalMountDescriptorString(&b, "description", mount.Description)
+		b.WriteString("\n")
 	}
 	return os.WriteFile(filename, []byte(b.String()), 0o644)
 }

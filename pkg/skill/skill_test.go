@@ -20,6 +20,8 @@ func TestCodexAssetsRenderGeneratedContent(t *testing.T) {
 		!strings.Contains(readerSkill, ".factile/config.toml") ||
 		!strings.Contains(readerSkill, "<name>.mount.toml") ||
 		!strings.Contains(readerSkill, ".factile/views.toml") ||
+		!strings.Contains(readerSkill, "read-only Git repositories") ||
+		!strings.Contains(readerSkill, "factile refresh <mount-path>") ||
 		strings.Contains(readerSkill, "{{") {
 		t.Fatalf("reader skill rendered incorrectly:\n%s", readerSkill)
 	}
@@ -33,6 +35,7 @@ func TestCodexAssetsRenderGeneratedContent(t *testing.T) {
 	if !strings.Contains(curatorAgents, "Mode: curator") ||
 		!strings.Contains(curatorAgents, "Profile: `software`") ||
 		!strings.Contains(curatorAgents, "factile mount") ||
+		!strings.Contains(curatorAgents, "factile refresh") ||
 		!strings.Contains(curatorAgents, ".factile/views.toml") ||
 		strings.Contains(curatorAgents, "{{") {
 		t.Fatalf("curator AGENTS block rendered incorrectly:\n%s", curatorAgents)

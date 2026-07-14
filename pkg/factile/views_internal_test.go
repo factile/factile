@@ -81,7 +81,7 @@ func TestScopeForViewIntersectsReaderScopes(t *testing.T) {
 			if _, err := ws.SetView(ctx, viewID, ViewInput{Paths: tc.paths}); err != nil {
 				t.Fatal(err)
 			}
-			scope, err := ws.scopeForView(tc.command, viewID)
+			scope, err := ws.scopeForView(context.Background(), tc.command, viewID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,7 +113,7 @@ func TestScopeForViewDeduplicatesOverlappingPaths(t *testing.T) {
 	if _, err := ws.SetView(ctx, "overlap", ViewInput{Paths: []string{"/engineering/django", "/engineering/django/runbooks"}}); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := ws.scopeForView("/", "overlap")
+	scope, err := ws.scopeForView(context.Background(), "/", "overlap")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestScopeForViewPreservesViewPathOrder(t *testing.T) {
 	if _, err := ws.SetView(ctx, "ordered", ViewInput{Paths: []string{"/legacy", "/engineering/django/runbooks"}}); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := ws.scopeForView("/", "ordered")
+	scope, err := ws.scopeForView(context.Background(), "/", "ordered")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestScopeForViewPreservesViewPathOrder(t *testing.T) {
 func TestScopeForViewRejectsUnknownView(t *testing.T) {
 	workspaceDir := viewTestWorkspace(t)
 	ws := NewWorkspace(WorkspaceOptions{WorkDir: workspaceDir})
-	if _, err := ws.scopeForView("/", "missing"); ErrorCode(NormalizeError(err)) != ErrMountNotFound {
+	if _, err := ws.scopeForView(context.Background(), "/", "missing"); ErrorCode(NormalizeError(err)) != ErrMountNotFound {
 		t.Fatalf("expected missing view to be not found, got %v", err)
 	}
 }

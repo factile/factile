@@ -1,0 +1,6 @@
+[[views]]
+id = "support"
+title = "Support"
+description = "Troubleshooting knowledge used by the embedded UI smoke."
+status = "active"
+paths = ["/runbooks"]

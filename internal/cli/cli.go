@@ -262,6 +262,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runUnmount(ctx, ws, args, global, stdout)
 	case "mounts":
 		return runMounts(ctx, ws, args, global, stdout)
+	case "refresh":
+		return runRefresh(ctx, ws, args, global, stdout)
 	case "bundle":
 		return runBundle(ctx, ws, args[1:], global, stdout)
 	case "view":
@@ -669,14 +671,17 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 
 func runMount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile mount <source> <mount-path> [--read-only] [--title <title>] [--description <text>]")
+		return showUsage(stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]\n\n--mount-file is a legacy local-source registry; Git mounts require an active Factile root.")
 	}
 	fs := flag.NewFlagSet("mount", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	writable := fs.Bool("writable", false, "")
 	readOnly := fs.Bool("read-only", false, "")
 	title := fs.String("title", "", "")
 	description := fs.String("description", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--read-only": false, "--title": true, "--description": true})
+	ref := fs.String("ref", "", "")
+	revision := fs.String("revision", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--writable": false, "--read-only": false, "--title": true, "--description": true, "--ref": true, "--revision": true})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -684,17 +689,51 @@ func runMount(ctx context.Context, ws factile.Workspace, args []string, global g
 		return 2, err
 	}
 	if fs.NArg() != 2 {
-		return usage(global, stdout, "factile mount <source> <mount-path> [--read-only] [--title <title>] [--description <text>]")
+		return usage(global, stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]")
+	}
+	if *writable && *readOnly {
+		return 0, factile.NewError(factile.ErrValidationFailed, "--writable and --read-only cannot be combined")
+	}
+	refSet := false
+	revisionSet := false
+	fs.Visit(func(flag *flag.Flag) {
+		switch flag.Name {
+		case "ref":
+			refSet = true
+		case "revision":
+			revisionSet = true
+		}
+	})
+	if refSet && revisionSet {
+		return 0, factile.NewError(factile.ErrValidationFailed, "--ref and --revision cannot be combined")
 	}
 	result, err := ws.Mount(ctx, fs.Arg(0), fs.Arg(1), factile.MountOptions{
-		Writable:    !*readOnly,
+		Writable:    *writable,
 		Title:       *title,
 		Description: *description,
+		Ref:         *ref,
+		Revision:    *revision,
+		RefSet:      refSet,
+		RevisionSet: revisionSet,
 	})
 	if err != nil {
 		return 0, err
 	}
 	return writeMountResult(stdout, global, result)
+}
+
+func runRefresh(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	if hasHelp(args) {
+		return showUsage(stdout, "factile refresh <mount-path>")
+	}
+	if len(args) != 2 {
+		return usage(global, stdout, "factile refresh <mount-path>")
+	}
+	result, err := ws.Refresh(ctx, args[1])
+	if err != nil {
+		return 0, err
+	}
+	return writeRefreshResult(stdout, global, result)
 }
 
 func runUnmount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
@@ -1275,6 +1314,15 @@ func writeMountList(stdout io.Writer, global globals, result factile.MountListRe
 	})
 }
 
+func writeRefreshResult(stdout io.Writer, global globals, result factile.RefreshResult) (int, error) {
+	if global.structuredOutput() {
+		return writeResult(stdout, global, result)
+	}
+	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
+		return renderer.RenderRefresh(stdout, result)
+	})
+}
+
 func writeBundleInspect(stdout io.Writer, global globals, result factile.BundleInspectResult) (int, error) {
 	if global.structuredOutput() {
 		return writeResult(stdout, global, result)
@@ -1474,7 +1522,7 @@ func traceCLIArgs(args []string) (string, string, string) {
 			}
 		}
 		return commandName, "/", ""
-	case "read", "graph", "validate", "stat", "mkdir":
+	case "read", "graph", "validate", "stat", "mkdir", "refresh":
 		if len(args) > 1 {
 			return command, args[1], ""
 		}
@@ -1511,7 +1559,7 @@ func exitCode(code string) int {
 		return 4
 	case factile.ErrConceptAlreadyExist, factile.ErrPathAlreadyExists, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound:
 		return 5
-	case factile.ErrSourceReadOnly, factile.ErrUnsafeSourcePath, factile.ErrUnsupportedSource:
+	case factile.ErrSourceReadOnly, factile.ErrUnsafeSourcePath, factile.ErrUnsupportedSource, factile.ErrRemoteSourceUnavailable, factile.ErrRevisionNotAvailable:
 		return 6
 	case factile.ErrPartialFailure:
 		return 7

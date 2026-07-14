@@ -57,6 +57,12 @@ func (s Local) safeJoin(rel string) (string, error) {
 	if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return "", fmt.Errorf("%w: %s", ErrUnsafePath, rel)
 	}
+	conceptPath := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+	for _, part := range strings.Split(conceptPath, "/") {
+		if strings.EqualFold(part, ".factile") || strings.EqualFold(part, ".git") {
+			return "", fmt.Errorf("%w: internal path %s", ErrUnsafePath, rel)
+		}
+	}
 	target := filepath.Join(s.Root, rel)
 	cleanTarget := filepath.Clean(target)
 	if cleanTarget != s.Root && !strings.HasPrefix(cleanTarget, s.Root+string(filepath.Separator)) {
@@ -100,7 +106,7 @@ func (s Local) ListConceptIDs(prefix string) ([]string, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if p != root && (name == ".factile" || name == ".git") {
+			if p != root && (strings.EqualFold(name, ".factile") || strings.EqualFold(name, ".git")) {
 				return filepath.SkipDir
 			}
 			return nil

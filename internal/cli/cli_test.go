@@ -6,15 +6,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/gitsource"
 	"github.com/factile/factile/pkg/skill"
 	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/version"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 func TestCLIHelpAndReadJSON(t *testing.T) {
@@ -25,7 +29,7 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			t.Fatalf("%v help exit code = %d", args, code)
 		}
 		help := stdout.String()
-		if !strings.Contains(help, "Factile local OKF tool") || !strings.Contains(help, "Local OKF knowledge as paths") {
+		if !strings.Contains(help, "Factile local-first OKF tool") || !strings.Contains(help, "Local and read-only Git knowledge as paths") {
 			t.Fatalf("unexpected help for %v: %s", args, help)
 		}
 		for _, expected := range []string{
@@ -56,11 +60,13 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 		for _, expected := range []string{
 			"mount",
 			"<source> <mount-path>",
-			"Create a path mount descriptor",
+			"Mount a local path or Git remote read-only by default",
+			"refresh",
+			"Immediately check and refresh one Git mount",
 			"unmount",
 			"Remove a path mount descriptor",
 			"mounts",
-			"List configured mounts",
+			"List mounts and cached Git source status",
 			"view list",
 			"List views",
 			"view inspect",
@@ -220,9 +226,10 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
 		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]"},
 		{name: "ui", args: []string{"ui", "--help"}, want: "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]"},
-		{name: "mount", args: []string{"mount", "--help"}, want: "factile mount <source> <mount-path> [--read-only] [--title <title>] [--description <text>]"},
+		{name: "mount", args: []string{"mount", "--help"}, want: "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]\n\n--mount-file is a legacy local-source registry; Git mounts require an active Factile root."},
 		{name: "unmount", args: []string{"unmount", "--help"}, want: "factile unmount <mount-path>"},
 		{name: "mounts", args: []string{"mounts", "--help"}, want: "factile mounts"},
+		{name: "refresh", args: []string{"refresh", "--help"}, want: "factile refresh <mount-path>"},
 		{name: "view group", args: []string{"view", "--help"}, want: "factile view list|inspect|set|delete"},
 		{name: "view leaf", args: []string{"view", "set", "--help"}, want: "factile view set <id> --title <title> --path <path> [--description <text>]"},
 		{name: "bundle group", args: []string{"bundle", "--help"}, want: "factile bundle find|inspect"},
@@ -574,7 +581,7 @@ func TestCLIJSONMountAndBundleContracts(t *testing.T) {
 		t.Fatalf("unexpected bundle find contract: %#v", found)
 	}
 
-	pathMounted := runCLIJSON[factile.MountResult](t, "mount", source, "/docs", "--title", "Docs", "--description", "Project docs", "--read-only", "--json")
+	pathMounted := runCLIJSON[factile.MountResult](t, "mount", source, "/docs", "--title", "Docs", "--description", "Project docs", "--json")
 	if pathMounted.Mount.MountPath != "/docs" || pathMounted.Mount.Source != source || pathMounted.Mount.Writable || pathMounted.Mount.Title != "Docs" {
 		t.Fatalf("unexpected mount contract: %#v", pathMounted)
 	}
@@ -598,6 +605,307 @@ func TestCLIJSONMountAndBundleContracts(t *testing.T) {
 		t.Fatalf("descriptor should be removed by unmount, err=%v", err)
 	}
 
+}
+
+func TestCLIMountCapabilityFlags(t *testing.T) {
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	t.Chdir(tmp)
+	writeCLIRootConfig(t, ".")
+
+	writable := runCLIJSON[factile.MountResult](t, "mount", source, "/writable", "--writable", "--json")
+	if !writable.Mount.Writable {
+		t.Fatalf("--writable did not create a writable local mount: %#v", writable.Mount)
+	}
+	compat := runCLIJSON[factile.MountResult](t, "mount", source, "/compat", "--read-only", "--json")
+	if compat.Mount.Writable {
+		t.Fatalf("--read-only compatibility flag should remain read-only: %#v", compat.Mount)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"mount", source, "/conflict", "--writable", "--read-only", "--json"}, nil, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
+		t.Fatalf("conflicting capability flags should fail stably, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "conflict.mount.toml")); !os.IsNotExist(err) {
+		t.Fatalf("conflicting flags wrote a descriptor: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"mount", source, "/text"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "(read-only)") {
+		t.Fatalf("mount text should expose the resolved capability, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCLIMountFileRejectsGitAndExplainsRestriction(t *testing.T) {
+	mountFile := filepath.Join(t.TempDir(), "mount-registry.toml")
+	assertCLIJSONError(
+		t,
+		6,
+		factile.ErrUnsupportedSource,
+		"Git sources are not supported with --mount-file; use an active Factile root.",
+		"--mount-file", mountFile,
+		"mount", "https://example.test/coding.git", "/coding", "--ref", "main", "--json",
+	)
+	if _, err := os.Stat(mountFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected CLI Git mount changed registry: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"mount", "--help"}, nil, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "--mount-file is a legacy local-source registry") {
+		t.Fatalf("mount help omitted legacy restriction: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCLIGitMountRefreshAndStatus(t *testing.T) {
+	root := t.TempDir()
+	writeCLIRootConfig(t, root)
+	remote := cliGitRemote(t)
+	httpsSource := "https://github.com/senseware/coding-practice.git"
+	scpSource := "git@github.com:senseware/coding-practice.git"
+	configureCLIURLRewrites(t, remote, httpsSource, scpSource)
+	t.Chdir(root)
+
+	httpsMount := runCLIJSON[factile.MountResult](t, "mount", httpsSource, "/https", "--json")
+	if httpsMount.Mount.Source != httpsSource || httpsMount.Mount.Kind != "git" || httpsMount.Mount.Writable {
+		t.Fatalf("unexpected native HTTPS mount: %#v", httpsMount)
+	}
+	scpMount := runCLIJSON[factile.MountResult](t, "mount", scpSource, "/scp", "--ref", "main", "--json")
+	if scpMount.Mount.Source != scpSource || scpMount.Mount.Ref != "main" || scpMount.Mount.Writable {
+		t.Fatalf("unexpected SCP mount: %#v", scpMount)
+	}
+	revisionFields := strings.Fields(cliGitOutput(t, "", "ls-remote", remote, "HEAD"))
+	if len(revisionFields) == 0 {
+		t.Fatal("temporary remote has no HEAD")
+	}
+	pinned := runCLIJSON[factile.MountResult](t, "mount", httpsSource, "/pinned", "--revision", revisionFields[0], "--json")
+	if pinned.Mount.Revision != revisionFields[0] || pinned.Mount.Writable {
+		t.Fatalf("unexpected pinned Git mount: %#v", pinned)
+	}
+	for path, source := range map[string]string{"https.mount.toml": httpsSource, "scp.mount.toml": scpSource} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil || !strings.Contains(string(data), `source = "`+source+`"`) {
+			t.Fatalf("descriptor %s did not preserve %q: %s %v", path, source, data, err)
+		}
+	}
+
+	mounts := runCLIJSON[factile.MountListResult](t, "mounts", "--json")
+	for _, mountPath := range []string{"/https", "/scp"} {
+		var status *factile.SourceStatus
+		for _, mount := range mounts.Mounts {
+			if mount.MountPath == mountPath {
+				status = mount.SourceStatus
+			}
+		}
+		if status == nil || !status.SnapshotAvailable || status.SelectedRevision == "" {
+			t.Fatalf("%s missing source status: %#v", mountPath, mounts)
+		}
+	}
+	refreshed := runCLIJSON[factile.RefreshResult](t, "refresh", "/https", "--json")
+	if refreshed.Outcome != "unchanged" || !refreshed.Status.SnapshotAvailable {
+		t.Fatalf("unexpected refresh JSON: %#v", refreshed)
+	}
+	summary := runCLIJSON[factile.SummaryResult](t, "status", "--json")
+	if len(summary.Sources) != 3 {
+		t.Fatalf("status omitted Git sources: %#v", summary.Sources)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"mounts", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "fresh revision=") {
+		t.Fatalf("mount text omitted source status: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"refresh", "/https", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), "Refresh /https: unchanged") || strings.Contains(stdout.String(), `{"`) {
+		t.Fatalf("unexpected refresh text: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"mount", httpsSource, "/bad", "--ref", "main", "--revision", strings.Repeat("1", 40), "--json"}, nil, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
+		t.Fatalf("conflicting selectors should fail: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	for _, tc := range []struct {
+		mountPath string
+		flag      string
+	}{
+		{mountPath: "/empty-ref", flag: "--ref"},
+		{mountPath: "/empty-revision", flag: "--revision"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		code = Run(context.Background(), []string{"mount", httpsSource, tc.mountPath, tc.flag, "", "--json"}, nil, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
+			t.Fatalf("empty selector %s should fail: code=%d stdout=%s stderr=%s", tc.flag, code, stdout.String(), stderr.String())
+		}
+	}
+	for _, tc := range []struct {
+		mountPath string
+		revision  string
+	}{
+		{mountPath: "/sha256-lower", revision: strings.Repeat("a", 64)},
+		{mountPath: "/sha256-upper", revision: strings.Repeat("A", 64)},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		code = Run(context.Background(), []string{"mount", httpsSource, tc.mountPath, "--revision", tc.revision, "--json"}, nil, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
+			t.Fatalf("64-hex revision should fail: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+		descriptor := filepath.Join(root, strings.TrimPrefix(tc.mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("64-hex revision wrote %s: %v", descriptor, err)
+		}
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"mount", httpsSource, "/missing-ref", "--ref", "missing", "--json"}, nil, &stdout, &stderr)
+	if code != 6 || !strings.Contains(stderr.String(), `"code":"revision_not_available"`) {
+		t.Fatalf("missing ref should fail stably: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"mount", httpsSource, "/writable-git", "--writable", "--json"}, nil, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), `"code":"source_read_only"`) {
+		t.Fatalf("writable Git should fail: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	bodyFile := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(bodyFile, []byte("# Changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mutationCommands := [][]string{
+		{"mkdir", "/https/new", "--json"},
+		{"create", "/https/new", "--type", "Guide", "--title", "New", "--body", bodyFile, "--json"},
+		{"write", "/https/overview", "--rev", "sha256:unchanged", "--body", bodyFile, "--json"},
+		{"patch", "/https/overview", "--rev", "sha256:unchanged", "--set", "status=draft", "--json"},
+		{"rename", "/https/overview", "/https/renamed", "--rev", "sha256:unchanged", "--json"},
+		{"delete", "/https/overview", "--rev", "sha256:unchanged", "--json"},
+		{"deprecate", "/https/overview", "--rev", "sha256:unchanged", "--reason", "superseded", "--json"},
+	}
+	for _, command := range mutationCommands {
+		stdout.Reset()
+		stderr.Reset()
+		code = Run(context.Background(), command, nil, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), `"code":"source_read_only"`) {
+			t.Fatalf("Git mutation %v should fail below the CLI adapter: code=%d stdout=%s stderr=%s", command, code, stdout.String(), stderr.String())
+		}
+	}
+
+	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := cache.Entry("/https", httpsSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := cache.ReadState(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.LastAttemptAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := cache.WriteState(entry, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "uncached.mount.toml"), []byte("source = \""+httpsSource+"\"\nwritable = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--json", "read", "/https/overview"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), `"path": "/https/overview"`) {
+		t.Fatalf("cached CLI read with missing Git failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--json", "refresh", "/https"}, nil, &stdout, &stderr)
+	if code != 0 || !strings.Contains(stdout.String(), `"outcome": "stale"`) {
+		t.Fatalf("cached CLI refresh with missing Git failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--json", "read", "/uncached/overview"}, nil, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), `"code":"remote_source_unavailable"`) && !strings.Contains(stderr.String(), `"code": "remote_source_unavailable"`) || strings.Contains(stderr.String(), `"code":"unsupported_source"`) || strings.Contains(stderr.String(), `"code": "unsupported_source"`) {
+		t.Fatalf("uncached CLI missing-Git error is unstable: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCLIGitMountTraceDoesNotExposeCredentials(t *testing.T) {
+	root := t.TempDir()
+	writeCLIRootConfig(t, root)
+	t.Chdir(root)
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	t.Setenv("FACTILE_TRACE_FILE", tracePath)
+	source := "https://alice:correct-horse@example.test/private.git"
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"mount", source, "/private", "--json"}, nil, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("credential-bearing Git source succeeded: %s", stdout.String())
+	}
+	traceData, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := stderr.String() + string(traceData)
+	for _, secret := range []string{"alice", "correct-horse", source} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("CLI error or trace exposed %q: %s", secret, combined)
+		}
+	}
+	handAuthored := source + "?token=hunter2"
+	if err := os.WriteFile(filepath.Join(root, "private.mount.toml"), []byte("source = \""+handAuthored+"\"\nwritable = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range [][]string{{"mounts", "--json"}, {"status", "--json"}} {
+		stdout.Reset()
+		stderr.Reset()
+		code = Run(context.Background(), command, nil, &stdout, &stderr)
+		if code != 0 || !strings.Contains(stdout.String(), "[redacted]") || !strings.Contains(stdout.String(), `"last_error_code"`) || !strings.Contains(stdout.String(), factile.ErrValidationFailed) {
+			t.Fatalf("invalid descriptor status was not safely rendered: command=%v code=%d stdout=%s stderr=%s", command, code, stdout.String(), stderr.String())
+		}
+		for _, secret := range []string{"alice", "correct-horse", "hunter2", handAuthored} {
+			if strings.Contains(stdout.String()+stderr.String(), secret) {
+				t.Fatalf("invalid descriptor status exposed %q: %s%s", secret, stdout.String(), stderr.String())
+			}
+		}
+	}
+}
+
+func TestCLIRejectsEmptyGitURIDelimitersBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	writeCLIRootConfig(t, root)
+	t.Chdir(root)
+	for _, tc := range []struct {
+		mountPath string
+		source    string
+	}{
+		{mountPath: "/native-query", source: "https://example.test/repository.git?"},
+		{mountPath: "/native-fragment", source: "https://example.test/repository.git#"},
+		{mountPath: "/git-plus-query", source: "git+https://example.test/repository.git?"},
+		{mountPath: "/git-plus-fragment", source: "git+https://example.test/repository.git#"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), []string{"mount", tc.source, tc.mountPath, "--json"}, nil, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), `"code":"validation_failed"`) {
+			t.Fatalf("empty URI delimiter source %q: code=%d stdout=%s stderr=%s", tc.source, code, stdout.String(), stderr.String())
+		}
+		descriptor := filepath.Join(root, strings.TrimPrefix(tc.mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("empty URI delimiter wrote %s: %v", descriptor, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty URI delimiters initialized Git cache: %v", err)
+	}
 }
 
 func TestCLIJSONViewContracts(t *testing.T) {
@@ -867,6 +1175,8 @@ func TestCLIExitCodeMappingsAndJSONErrors(t *testing.T) {
 		{code: factile.ErrSourceReadOnly, want: 6},
 		{code: factile.ErrUnsafeSourcePath, want: 6},
 		{code: factile.ErrUnsupportedSource, want: 6},
+		{code: factile.ErrRemoteSourceUnavailable, want: 6},
+		{code: factile.ErrRevisionNotAvailable, want: 6},
 		{code: factile.ErrPartialFailure, want: 7},
 		{code: factile.ErrLockTimeout, want: 8},
 	}
@@ -2043,6 +2353,61 @@ format = "okf"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func cliGitRemote(t *testing.T) string {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), "source")
+	writeCLIRootConfig(t, source)
+	writeCLITestFile(t, filepath.Join(source, "overview.md"), `---
+type: Reference
+title: Coding Practice
+---
+
+# Coding Practice
+`)
+	cliGitRun(t, "", "init", "--", source)
+	cliGitRun(t, source, "config", "--local", "--", "user.name", "Factile Test")
+	cliGitRun(t, source, "config", "--local", "--", "user.email", "factile@example.test")
+	cliGitRun(t, source, "add", "--", ".")
+	cliGitRun(t, source, "commit", "-m", "fixture")
+	cliGitRun(t, source, "branch", "-M", "main")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	cliGitRun(t, "", "clone", "--bare", "--", source, remotePath)
+	absolute, err := filepath.Abs(remotePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String()
+}
+
+func configureCLIURLRewrites(t *testing.T, remote string, sources ...string) {
+	t.Helper()
+	config := filepath.Join(t.TempDir(), "gitconfig")
+	var body strings.Builder
+	fmt.Fprintf(&body, "[url %q]\n", remote)
+	for _, source := range sources {
+		fmt.Fprintf(&body, "\tinsteadOf = %s\n", source)
+	}
+	writeCLITestFile(t, config, body.String())
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+func cliGitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := gitsource.NewRunner().Run(context.Background(), dir, args...); err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+func cliGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	output, err := gitsource.NewRunner().Run(context.Background(), dir, args...)
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func copyTestDir(t *testing.T, src, dst string) {

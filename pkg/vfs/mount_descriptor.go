@@ -44,9 +44,13 @@ func WriteMountDescriptorFile(root string, mount Mount) (Mount, error) {
 	if strings.TrimSpace(mount.Source) == "" {
 		return Mount{}, &Error{Code: "validation_failed", Message: "Mount source is required"}
 	}
+	classification, err := ClassifySource(mount.Source)
+	if err != nil {
+		return Mount{}, err
+	}
 	mount.MountPath = normalized
 	mount.RegistryPath = filename
-	mount.Kind = kindForDescriptorSource(mount.Source)
+	mount.Kind = classification.Kind
 	if mount.Kind == "local" {
 		source := mount.Source
 		if !filepath.IsAbs(source) {
@@ -111,7 +115,8 @@ func LoadDescriptorMounts(root string) ([]Mount, error) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".factile" {
+			name := entry.Name()
+			if filename != rootAbs && (strings.EqualFold(name, ".factile") || strings.EqualFold(name, ".git")) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -233,7 +238,11 @@ func LoadMountDescriptorFile(root string, filename string) (Mount, error) {
 	if !writableSet {
 		return Mount{}, fmt.Errorf("mount descriptor %s has no writable value", filepath.ToSlash(relFile))
 	}
-	mount.Kind = kindForDescriptorSource(mount.Source)
+	classification, err := ClassifySource(mount.Source)
+	if err != nil {
+		return Mount{}, err
+	}
+	mount.Kind = classification.Kind
 	if mount.Kind == "local" {
 		source := mount.Source
 		if !filepath.IsAbs(source) {
@@ -272,10 +281,13 @@ func assignMountDescriptor(mount *Mount, key string, rawValue string, lineNo int
 	case "when_not_to_use":
 		return assignMountDescriptorString(&mount.WhenNotToUse, rawValue, key, lineNo)
 	case "version":
+		mount.VersionSet = true
 		return assignMountDescriptorString(&mount.Version, rawValue, key, lineNo)
 	case "ref":
+		mount.RefSet = true
 		return assignMountDescriptorString(&mount.Ref, rawValue, key, lineNo)
 	case "revision":
+		mount.RevisionSet = true
 		return assignMountDescriptorString(&mount.Revision, rawValue, key, lineNo)
 	case "trust":
 		return assignMountDescriptorString(&mount.Trust, rawValue, key, lineNo)
@@ -292,17 +304,6 @@ func assignMountDescriptorString(target *string, rawValue string, key string, li
 	}
 	*target = value
 	return nil
-}
-
-func kindForDescriptorSource(source string) string {
-	switch {
-	case strings.HasPrefix(source, "factile://"):
-		return "factile"
-	case strings.HasPrefix(source, "git+"):
-		return "git"
-	default:
-		return "local"
-	}
 }
 
 type mountedSourceDir struct {

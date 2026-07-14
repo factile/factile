@@ -12,10 +12,10 @@ type helpItem struct {
 }
 
 func (r *Renderer) RenderHelp(w io.Writer) error {
-	if _, err := fmt.Fprintln(w, r.helpTitle("Factile local OKF tool")); err != nil {
+	if _, err := fmt.Fprintln(w, r.helpTitle("Factile local-first OKF tool")); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Local OKF knowledge as paths. Read by default; curate only when you mean to change mounts, views, or documents."); err != nil {
+	if _, err := fmt.Fprintln(w, "Local and read-only Git knowledge as paths. Read by default; curate only when you mean to change mounts, views, or documents."); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
@@ -46,6 +46,9 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "  global options: --root <path>, --mount-file <path>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(w, "  --mount-file is a legacy local-source registry; Git mounts require an active Factile root."); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintln(w, "  Global options may appear before or after the command."); err != nil {
 		return err
 	}
@@ -61,16 +64,17 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "list [path] [--brief] [--view <id>]", description: "Browse folders and documents"},
 			{command: "stat <path>", description: "Show one compact card"},
 			{command: "read <document-path>", description: "Read one document"},
-			{command: "search <path> <query> [--view <id>]", description: "Search local documents"},
+			{command: "search <path> <query> [--view <id>]", description: "Search OKF documents"},
 			{command: "context <path> <query> [--depth 0|1] [--view <id>]", description: "Assemble relevant context"},
-			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect local links"},
+			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect Markdown links"},
 			{command: "validate <path> [--view <id>]", description: "Validate an OKF scope"},
 			{command: "ui [--port <port>] [--no-open] [--dev-assets <url>]", description: "Serve the local browser reader"},
 		}},
 		{title: "Curator commands", items: []helpItem{
-			{command: "mount <source> <mount-path>", description: "Create a path mount descriptor"},
+			{command: "mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only]", description: "Mount a local path or Git remote read-only by default"},
+			{command: "refresh <mount-path>", description: "Immediately check and refresh one Git mount"},
 			{command: "unmount <mount-path>", description: "Remove a path mount descriptor"},
-			{command: "mounts", description: "List configured mounts"},
+			{command: "mounts", description: "List mounts and cached Git source status"},
 			{command: "view list", description: "List views"},
 			{command: "view inspect <id>", description: "Inspect a view"},
 			{command: "view set <id> --title <title> --path <path>", description: "Create or replace a view"},

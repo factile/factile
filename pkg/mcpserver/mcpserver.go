@@ -27,7 +27,7 @@ type Server struct {
 	opts      Options
 }
 
-const Instructions = "Use Factile for local OKF knowledge. For architecture, design, documentation, review, runbook, standards, policy, legal, compliance, or domain tasks, discover paths, retrieve focused context, then read specific concepts as needed. Do not edit knowledge unless explicitly asked."
+const Instructions = "Use Factile for local and read-only Git OKF knowledge. For architecture, design, documentation, review, runbook, standards, policy, legal, compliance, or domain tasks, discover paths, retrieve focused context, then read specific concepts as needed. Do not edit knowledge unless explicitly asked."
 
 func New(workspace factile.Workspace, opts Options) *Server {
 	return &Server{workspace: workspace, opts: opts}
@@ -67,7 +67,10 @@ func (s *Server) Tools() []Tool {
 			"depth": integerSchema("Related-link traversal depth: 0 disables expansion, 1 adds one-hop links and backlinks."),
 			"view":  stringSchema("View id used to narrow graph nodes and edges."),
 		}, "path")),
-		tool("factile_mounts", "List configured Factile mounts.", objectSchema(map[string]any{})),
+		tool("factile_mounts", "List configured mounts and cached Git source status without refreshing.", objectSchema(map[string]any{})),
+		tool("factile_refresh", "Immediately check and refresh generated state for one Git mount.", objectSchema(map[string]any{
+			"mount_path": stringSchema("Git mount path to refresh."),
+		}, "mount_path")),
 		tool("factile_view_list", "List views.", objectSchema(map[string]any{})),
 		tool("factile_view_inspect", "Inspect one view.", objectSchema(map[string]any{
 			"id": stringSchema("View id."),
@@ -75,12 +78,15 @@ func (s *Server) Tools() []Tool {
 	}
 	if !s.opts.ReadOnly {
 		tools = append(tools,
-			tool("factile_mount", "Create or replace a path mount descriptor.", objectSchema(map[string]any{
-				"source":      stringSchema("Local source path or future source URI."),
+			tool("factile_mount", "Create or replace a read-only-by-default local or Git path mount.", objectSchema(map[string]any{
+				"source":      stringSchema("Local source path, native Git remote, or git+ compatibility source."),
 				"mount_path":  stringSchema("Factile path where the source should appear."),
-				"read_only":   boolSchema("Mark the mounted source read-only."),
-				"title":       stringSchema("Mount title."),
-				"description": stringSchema("Mount description."),
+				"writable":    boolSchema("Request deliberate write access for a local source; defaults to false."),
+				"read_only":   boolSchema("Deprecated compatibility input; false retains the legacy writable-local request."),
+				"title":       stringSchema("Optional mount title; defaults from source metadata when available."),
+				"description": stringSchema("Optional mount description; defaults from source metadata when available."),
+				"ref":         stringSchema("Optional floating Git branch or tag; mutually exclusive with revision."),
+				"revision":    stringSchema("Optional pinned full 40-hex SHA-1 Git commit identifier; mutually exclusive with ref."),
 			}, "source", "mount_path")),
 			tool("factile_unmount", "Remove one path mount descriptor.", objectSchema(map[string]any{
 				"mount_path": stringSchema("Factile mount path to remove."),
@@ -322,6 +328,8 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return s.workspace.Validate(ctx, stringArg(args, "path"), factile.ValidateOptions{View: stringArg(args, "view")})
 	case "factile_mounts":
 		return s.workspace.ListMounts(ctx)
+	case "factile_refresh":
+		return s.workspace.Refresh(ctx, stringArg(args, "mount_path"))
 	case "factile_view_list":
 		return s.workspace.ListViews(ctx)
 	case "factile_view_inspect":
@@ -330,10 +338,18 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
 		}
+		writable, err := mountWritableArg(args)
+		if err != nil {
+			return nil, err
+		}
 		return s.workspace.Mount(ctx, stringArg(args, "source"), stringArg(args, "mount_path"), factile.MountOptions{
-			Writable:    !boolArg(args, "read_only"),
+			Writable:    writable,
 			Title:       stringArg(args, "title"),
 			Description: stringArg(args, "description"),
+			Ref:         stringArg(args, "ref"),
+			Revision:    stringArg(args, "revision"),
+			RefSet:      hasArg(args, "ref"),
+			RevisionSet: hasArg(args, "revision"),
 		})
 	case "factile_unmount":
 		if s.opts.ReadOnly {
@@ -485,6 +501,11 @@ func resultCount(value any) int {
 		return 0
 	case factile.MountListResult:
 		return len(v.Mounts)
+	case factile.RefreshResult:
+		if v.MountPath != "" {
+			return 1
+		}
+		return 0
 	case factile.BundleInspectResult:
 		return len(v.Concepts) + len(v.Issues)
 	case factile.BundleFindResult:
@@ -502,6 +523,14 @@ func stringArg(args map[string]any, key string) string {
 		return fmt.Sprint(value)
 	}
 	return ""
+}
+
+func hasArg(args map[string]any, key string) bool {
+	if args == nil {
+		return false
+	}
+	_, ok := args[key]
+	return ok
 }
 
 func intArg(args map[string]any, key string) int {
@@ -540,6 +569,21 @@ func boolArg(args map[string]any, key string) bool {
 	default:
 		return false
 	}
+}
+
+func mountWritableArg(args map[string]any) (bool, error) {
+	_, hasWritable := args["writable"]
+	_, hasReadOnly := args["read_only"]
+	if hasWritable && hasReadOnly {
+		return false, factile.NewError(factile.ErrValidationFailed, "Mount capability inputs are contradictory.")
+	}
+	if hasWritable {
+		return boolArg(args, "writable"), nil
+	}
+	if hasReadOnly {
+		return !boolArg(args, "read_only"), nil
+	}
+	return false, nil
 }
 
 func anyMapArg(args map[string]any, key string) map[string]any {

@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/factile/factile/internal/cli/render"
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/gitsource"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 func TestReaderCuratorPerspectiveGoldens(t *testing.T) {
@@ -121,6 +127,9 @@ func TestWorkspaceViewManagement(t *testing.T) {
 	if len(list.Views) != 0 {
 		t.Fatalf("expected empty missing views file list: %#v", list.Views)
 	}
+	if list.Views == nil {
+		t.Fatal("expected missing views file to return an empty array, not null")
+	}
 	if _, err := os.Stat(filepath.Join(tmp, ".factile", "views.toml")); !os.IsNotExist(err) {
 		t.Fatalf("views file should not exist before mutation, stat err=%v", err)
 	}
@@ -193,6 +202,33 @@ func TestWorkspaceViewManagement(t *testing.T) {
 	}
 	if _, err := ws.InspectView(ctx, "security-review"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
 		t.Fatalf("expected missing deleted view to be not found, got %v", err)
+	}
+}
+
+func TestWorkspaceRejectsInternalMetadataPaths(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeRootConfig(t, root)
+	cacheFile := filepath.Join(root, ".factile", "cache", "git", "key", "snapshots", "revision", "guides", "setup.md")
+	mustWriteWorkspace(t, cacheFile, "---\ntype: Guide\n---\n\n# Original\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	path := "/.factile/cache/git/key/snapshots/revision/guides/setup"
+
+	if _, err := ws.Read(ctx, path, factile.ReadOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrInvalidPath {
+		t.Fatalf("internal read error = %v, want %s", err, factile.ErrInvalidPath)
+	}
+	if _, err := ws.Search(ctx, "/.factile/cache", "setup", factile.SearchOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrInvalidPath {
+		t.Fatalf("internal search error = %v, want %s", err, factile.ErrInvalidPath)
+	}
+	if _, err := ws.Write(ctx, path, factile.WriteConceptInput{ExpectedRevision: "ignored", Markdown: "# Changed\n"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrInvalidPath {
+		t.Fatalf("internal write error = %v, want %s", err, factile.ErrInvalidPath)
+	}
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "# Original") {
+		t.Fatalf("internal cache content was mutated: %s", data)
 	}
 }
 
@@ -432,6 +468,9 @@ writable = true
 	if _, err := ws.SetView(ctx, "bad-docs", factile.ViewInput{Paths: []string{"/broken/bad-yaml"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ws.SetView(ctx, "django", factile.ViewInput{Paths: []string{"/engineering/django"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	validated, err := ws.Validate(ctx, "/engineering", factile.ValidateOptions{View: "workflow-only"})
 	if err != nil {
@@ -443,8 +482,16 @@ writable = true
 	if hasValidationIssue(validated.Issues, "warning", "broken_link", workflowPath, "../runbooks/ocr-failure.md") {
 		t.Fatalf("existing outside-view link should not warn: %#v", validated.Issues)
 	}
-	if !hasValidationIssue(validated.Issues, "warning", "broken_link", workflowPath, "../runbooks/missing.md") {
-		t.Fatalf("missing selected-doc link should warn: %#v", validated.Issues)
+	if hasValidationIssue(validated.Issues, "warning", "broken_link", workflowPath, "../runbooks/missing.md") {
+		t.Fatalf("links outside the selected view scope should not be judged: %#v", validated.Issues)
+	}
+
+	django, err := ws.Validate(ctx, "/", factile.ValidateOptions{View: "django"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasValidationIssue(django.Issues, "warning", "broken_link", workflowPath, "../runbooks/missing.md") {
+		t.Fatalf("missing links inside the selected view scope should warn: %#v", django.Issues)
 	}
 
 	empty, err := ws.Validate(ctx, "/engineering", factile.ValidateOptions{View: "legacy-only"})
@@ -461,6 +508,102 @@ writable = true
 	}
 	if bad.Valid || !hasValidationIssue(bad.Issues, "error", factile.ErrOKFParse, "/broken/bad-yaml", "") || hasValidationIssue(bad.Issues, "error", factile.ErrOKFParse, runbookPath, "") {
 		t.Fatalf("selected malformed concepts should surface scoped errors: %#v", bad.Issues)
+	}
+}
+
+func TestWorkspaceValidateReportsInvalidGitMountsAsScopedIssues(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	good := filepath.Join(t.TempDir(), "good")
+	writeOKFFile(t, filepath.Join(good, "overview.md"), "Guide", "Good", "# Good\n")
+	mustWriteWorkspace(t, filepath.Join(root, "good.mount.toml"), "source = "+strconv.Quote(good)+"\nwritable = false\n")
+	invalidMounts := []struct {
+		mountPath  string
+		descriptor string
+		revision   string
+	}{
+		{mountPath: "/invalid", descriptor: `source = "https://example.test/coding.git"
+writable = false
+ref = ""
+`},
+		{mountPath: "/sha256-lower", revision: strings.Repeat("a", 64), descriptor: `source = "https://example.test/coding.git"
+writable = false
+revision = "` + strings.Repeat("a", 64) + `"
+`},
+		{mountPath: "/sha256-upper", revision: strings.Repeat("A", 64), descriptor: `source = "https://example.test/coding.git"
+writable = false
+revision = "` + strings.Repeat("A", 64) + `"
+`},
+	}
+	for _, invalid := range invalidMounts {
+		filename := strings.TrimPrefix(invalid.mountPath, "/") + ".mount.toml"
+		mustWriteWorkspace(t, filepath.Join(root, filename), invalid.descriptor)
+	}
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	listed, err := ws.ListMounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]*factile.SourceStatus{}
+	for _, mount := range listed.Mounts {
+		statuses[mount.MountPath] = mount.SourceStatus
+	}
+	for _, invalid := range invalidMounts {
+		status := statuses[invalid.mountPath]
+		if status == nil || status.LastErrorCode != factile.ErrValidationFailed || status.IntentRevision != invalid.revision {
+			t.Fatalf("invalid Git mount %s status = %#v", invalid.mountPath, status)
+		}
+	}
+
+	for _, invalid := range invalidMounts {
+		path := invalid.mountPath
+		result, err := ws.Validate(ctx, path, factile.ValidateOptions{})
+		if err != nil {
+			t.Fatalf("validate %s returned top-level error: %v", path, err)
+		}
+		if result.Valid || !hasIssue(result.Issues, path, factile.ErrValidationFailed) {
+			t.Fatalf("validate %s did not report the invalid Git mount: %#v", path, result)
+		}
+	}
+	rootResult, err := ws.Validate(ctx, "/", factile.ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range invalidMounts {
+		if rootResult.Valid || !hasIssue(rootResult.Issues, invalid.mountPath, factile.ErrValidationFailed) {
+			t.Fatalf("root validation did not report %s: %#v", invalid.mountPath, rootResult)
+		}
+	}
+	goodResult, err := ws.Validate(ctx, "/good", factile.ValidateOptions{})
+	if err != nil || !goodResult.Valid {
+		t.Fatalf("unrelated local mount validation = %#v, %v", goodResult, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid Git validation initialized cache: %v", err)
+	}
+}
+
+func TestWorkspaceViewValidationDoesNotHydrateGitOutsideView(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	writeOKFFile(t, filepath.Join(root, "overview.md"), "Guide", "Overview", "# Overview\n\n[Outside view](missing.md)\n")
+	mustWriteWorkspace(t, filepath.Join(root, "offline.mount.toml"), `source = "file:///definitely/missing/factile.git"
+writable = false
+`)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	if _, err := ws.SetView(ctx, "local-only", factile.ViewInput{Paths: []string{"/overview"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := ws.Validate(ctx, "/", factile.ValidateOptions{View: "local-only"})
+	if err != nil || !result.Valid || len(result.Issues) != 0 {
+		t.Fatalf("local-only view validation = %#v, %v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("out-of-view Git mount was hydrated: %v", err)
 	}
 }
 
@@ -1331,7 +1474,7 @@ func TestWorkspaceMountAndUnmountDescriptor(t *testing.T) {
 	}
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 
-	mounted, err := ws.Mount(ctx, source, "/engineering/django", factile.MountOptions{Writable: false, Title: "Django", Description: "Framework docs"})
+	mounted, err := ws.Mount(ctx, source, "/engineering/django", factile.MountOptions{Title: "Django", Description: "Framework docs"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1377,8 +1520,7 @@ func TestWorkspaceMountDescriptorRejectsUnsupportedRemoteSources(t *testing.T) {
 		mountPath string
 		opts      factile.MountOptions
 	}{
-		{name: "factile URI", source: "factile://remote/source", mountPath: "/remote", opts: factile.MountOptions{Writable: true}},
-		{name: "git URI", source: "git+https://example.test/docs.git", mountPath: "/git", opts: factile.MountOptions{Writable: false}},
+		{name: "factile URI", source: "factile://remote/source", mountPath: "/remote", opts: factile.MountOptions{}},
 		{name: "remote kind", source: "../source", mountPath: "/kind", opts: factile.MountOptions{Kind: "remote"}},
 	}
 
@@ -1392,6 +1534,530 @@ func TestWorkspaceMountDescriptorRejectsUnsupportedRemoteSources(t *testing.T) {
 				t.Fatalf("descriptor should not be written for unsupported source, err=%v", err)
 			}
 		})
+	}
+}
+
+func TestWorkspaceGitMountAndReaderIntegration(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	remote, remotePath, sourcePath := gitWorkspaceRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	for _, tc := range []struct {
+		mountPath string
+		opts      factile.MountOptions
+	}{
+		{mountPath: "/missing-ref", opts: factile.MountOptions{Ref: "missing", RefSet: true}},
+		{mountPath: "/missing-revision", opts: factile.MountOptions{Revision: strings.Repeat("1", 40), RevisionSet: true}},
+	} {
+		if _, err := ws.Mount(ctx, remote, tc.mountPath, tc.opts); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRevisionNotAvailable {
+			t.Fatalf("unavailable selector for %s error = %v", tc.mountPath, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, strings.TrimPrefix(tc.mountPath, "/")+".mount.toml")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unavailable selector wrote a descriptor for %s: %v", tc.mountPath, err)
+		}
+	}
+
+	mounted, err := ws.Mount(ctx, remote, "/git", factile.MountOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mounted.Mount.Source != remote || mounted.Mount.Kind != "git" || mounted.Mount.Writable || mounted.Mount.Title != "Git Fixture" {
+		t.Fatalf("unexpected Git mount: %#v", mounted.Mount)
+	}
+	if _, err := ws.Mount(ctx, sourcePath, "/local", factile.MountOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := filepath.Join(root, "git.mount.toml")
+	descriptorData, err := os.ReadFile(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(descriptorData), `source = "`+remote+`"`) || !strings.Contains(string(descriptorData), "writable = false") {
+		t.Fatalf("Git descriptor did not preserve source intent:\n%s", descriptorData)
+	}
+	missingReplacement := gitFileRemote(t, filepath.Join(t.TempDir(), "missing.git"))
+	if _, err := ws.Mount(ctx, missingReplacement, "/git", factile.MountOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRemoteSourceUnavailable {
+		t.Fatalf("failed Git replacement error = %v", err)
+	}
+	afterFailedReplacement, err := os.ReadFile(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterFailedReplacement) != string(descriptorData) {
+		t.Fatalf("failed Git replacement changed the descriptor:\nbefore:\n%s\nafter:\n%s", descriptorData, afterFailedReplacement)
+	}
+	mustWriteWorkspace(t, filepath.Join(root, "offline.mount.toml"), `source = "file:///definitely/missing/outside-scope.git"
+writable = false
+title = "Outside Scope"
+`)
+
+	listed, err := ws.List(ctx, "/git", factile.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Documents) != 1 || listed.Documents[0].Path != "/git/overview" || len(listed.Folders) != 1 || listed.Folders[0].Path != "/git/guides" {
+		t.Fatalf("unexpected Git list result: %#v", listed)
+	}
+	brief, err := ws.List(ctx, "/git", factile.ListOptions{Brief: true})
+	if err != nil || len(brief.Cards) != 2 {
+		t.Fatalf("unexpected Git brief list: %#v %v", brief, err)
+	}
+	read, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{})
+	if err != nil || !strings.Contains(read.Concept.Markdown, "Git Overview") {
+		t.Fatalf("unexpected Git read: %#v %v", read, err)
+	}
+	stat, err := ws.Stat(ctx, "/git/overview", factile.StatOptions{})
+	if err != nil || stat.Card.Path != read.Concept.Path || stat.Card.Title != "Git Overview" {
+		t.Fatalf("unexpected Git stat: %#v %v", stat, err)
+	}
+	search, err := ws.Search(ctx, "/git", "setup", factile.SearchOptions{})
+	if err != nil || len(search.Results) == 0 || !strings.HasPrefix(search.Results[0].Concept.Path, "/git/") {
+		t.Fatalf("unexpected Git search: %#v %v", search, err)
+	}
+	contextPack, err := ws.Context(ctx, "/git", "setup", factile.ContextOptions{Depth: 1})
+	if err != nil || len(contextPack.Concepts) == 0 {
+		t.Fatalf("unexpected Git context: %#v %v", contextPack, err)
+	}
+	graph, err := ws.Graph(ctx, "/git/overview", factile.GraphOptions{Depth: 1})
+	if err != nil || len(graph.Edges) != 1 || graph.Edges[0].To != "/git/guides/setup" {
+		t.Fatalf("unexpected Git graph: %#v %v", graph, err)
+	}
+	validated, err := ws.Validate(ctx, "/git", factile.ValidateOptions{})
+	if err != nil || !validated.Valid {
+		t.Fatalf("unexpected Git validation: %#v %v", validated, err)
+	}
+	localListed, err := ws.List(ctx, "/local", factile.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRead, err := ws.Read(ctx, "/local/overview", factile.ReadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localSearch, err := ws.Search(ctx, "/local", "setup", factile.SearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localContext, err := ws.Context(ctx, "/local", "setup", factile.ContextOptions{Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localGraph, err := ws.Graph(ctx, "/local/overview", factile.GraphOptions{Depth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	localValidated, err := ws.Validate(ctx, "/local", factile.ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, pair := range map[string][2]any{
+		"list":       {listed, localListed},
+		"read":       {read, localRead},
+		"search":     {search, localSearch},
+		"context":    {contextPack, localContext},
+		"graph":      {graph, localGraph},
+		"validation": {validated, localValidated},
+	} {
+		if gitValue, localValue := normalizedMountJSON(t, pair[0], "/git"), normalizedMountJSON(t, pair[1], "/local"); gitValue != localValue {
+			t.Fatalf("%s differs between equivalent Git and local mounts\nGit:   %s\nlocal: %s", name, gitValue, localValue)
+		}
+	}
+	if _, err := ws.SetView(ctx, "git-guides", factile.ViewInput{Title: "Git Guides", Paths: []string{"/git/guides"}}); err != nil {
+		t.Fatal(err)
+	}
+	viewSearch, err := ws.Search(ctx, "/", "setup", factile.SearchOptions{View: "git-guides"})
+	if err != nil || len(viewSearch.Results) == 0 || !strings.HasPrefix(viewSearch.Results[0].Concept.Path, "/git/guides/") {
+		t.Fatalf("unexpected Git view search: %#v %v", viewSearch, err)
+	}
+
+	if _, err := ws.Write(ctx, "/git/overview", factile.WriteConceptInput{ExpectedRevision: read.Concept.Revision, Markdown: "# changed\n"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git write error = %v", err)
+	}
+	if _, err := ws.Mkdir(ctx, "/git/new", factile.MkdirOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git mkdir error = %v", err)
+	}
+	if _, err := ws.Create(ctx, "/git/new", factile.CreateConceptInput{Type: "Guide", Title: "New", Markdown: "# New\n"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git create error = %v", err)
+	}
+	if _, err := ws.Patch(ctx, "/git/overview", factile.PatchConceptInput{ExpectedRevision: read.Concept.Revision, Set: map[string]any{"status": "draft"}}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git patch error = %v", err)
+	}
+	if _, err := ws.Rename(ctx, "/git/overview", "/git/renamed", factile.RenameOptions{ExpectedRevision: read.Concept.Revision}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git rename error = %v", err)
+	}
+	if _, err := ws.Delete(ctx, "/git/overview", factile.DeleteOptions{ExpectedRevision: read.Concept.Revision}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git delete error = %v", err)
+	}
+	if _, err := ws.Deprecate(ctx, "/git/overview", factile.DeprecateOptions{ExpectedRevision: read.Concept.Revision, Reason: "superseded"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+		t.Fatalf("Git deprecate error = %v", err)
+	}
+	if status := gitWorkspaceOutput(t, sourcePath, "status", "--porcelain"); status != "" {
+		t.Fatalf("source repository was mutated: %s", status)
+	}
+	statuses, err := ws.ListMounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gitStatus *factile.SourceStatus
+	for _, mount := range statuses.Mounts {
+		if mount.MountPath == "/git" {
+			gitStatus = mount.SourceStatus
+		}
+	}
+	if gitStatus == nil || !gitStatus.SnapshotAvailable || gitStatus.SelectedRevision == "" || gitStatus.RefreshDue {
+		t.Fatalf("unexpected generated Git status: %#v", gitStatus)
+	}
+	offlineRemote := remotePath + ".offline"
+	if err := os.Rename(remotePath, offlineRemote); err != nil {
+		t.Fatal(err)
+	}
+	statuses, err = ws.ListMounts(ctx)
+	if err != nil {
+		t.Fatalf("mount status attempted network access: %v", err)
+	}
+	refreshed, err := ws.Refresh(ctx, "/git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Outcome != "stale" || !refreshed.Status.Stale || refreshed.Warning == nil {
+		t.Fatalf("unexpected stale workspace refresh: %#v", refreshed)
+	}
+	if staleRead, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{}); err != nil || staleRead.Concept.Path != "/git/overview" {
+		t.Fatalf("stale snapshot was not readable: %#v %v", staleRead, err)
+	}
+	if _, err := ws.Refresh(ctx, "/local"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrUnsupportedSource {
+		t.Fatalf("local refresh error = %v", err)
+	}
+	if _, err := ws.Refresh(ctx, "/missing"); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrMountNotFound {
+		t.Fatalf("missing refresh error = %v", err)
+	}
+	if err := os.Rename(offlineRemote, remotePath); err != nil {
+		t.Fatal(err)
+	}
+
+	cachePath := filepath.Join(root, ".factile", "cache")
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.Unmount(ctx, "/git", factile.UnmountOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("unmount removed generated cache unexpectedly: %v", err)
+	}
+	if _, err := os.Stat(remotePath); err != nil {
+		t.Fatalf("unmount touched source repository: %v", err)
+	}
+}
+
+func TestWorkspaceGitMountUsesCachedSnapshotWhenGitIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	remote, _, _ := gitWorkspaceRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	if _, err := ws.Mount(ctx, remote, "/git", factile.MountOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := cache.Entry("/git", remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := cache.ReadState(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.LastAttemptAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := cache.WriteState(entry, state); err != nil {
+		t.Fatal(err)
+	}
+
+	uncachedRoot := filepath.Join(t.TempDir(), "uncached-root")
+	writeRootConfig(t, uncachedRoot)
+	mustWriteWorkspace(t, filepath.Join(uncachedRoot, "git.mount.toml"), "source = \""+remote+"\"\nwritable = false\n")
+	uncached := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: uncachedRoot})
+
+	t.Setenv("PATH", t.TempDir())
+	read, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{})
+	if err != nil || read.Concept.Path != "/git/overview" {
+		t.Fatalf("cached read with missing Git = %#v, %v", read, err)
+	}
+	mounts, err := ws.ListMounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts.Mounts) != 1 || mounts.Mounts[0].SourceStatus == nil || !mounts.Mounts[0].SourceStatus.Stale || mounts.Mounts[0].SourceStatus.LastErrorCode != factile.ErrRemoteSourceUnavailable {
+		t.Fatalf("missing-Git stale status = %#v", mounts)
+	}
+	refreshed, err := ws.Refresh(ctx, "/git")
+	if err != nil || refreshed.Outcome != "stale" || refreshed.Warning == nil {
+		t.Fatalf("explicit missing-Git refresh = %#v, %v", refreshed, err)
+	}
+	if _, err := uncached.Read(ctx, "/git/overview", factile.ReadOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRemoteSourceUnavailable {
+		t.Fatalf("uncached missing-Git read error = %v", err)
+	}
+}
+
+func TestWorkspaceRetriesFailedPinnedGitAcquisitionAfterInterval(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	remote, _, sourcePath := gitWorkspaceRemote(t)
+	writeOKFFile(t, filepath.Join(sourcePath, "overview.md"), "Reference", "Delayed Git Overview", "# Delayed Git Overview\n")
+	gitWorkspaceRun(t, sourcePath, "add", "--", "overview.md")
+	gitWorkspaceRun(t, sourcePath, "commit", "-m", "delayed pin")
+	revision := gitWorkspaceOutput(t, sourcePath, "rev-parse", "HEAD")
+	mustWriteWorkspace(t, filepath.Join(root, "git.mount.toml"), "source = \""+remote+"\"\nwritable = false\nrevision = \""+revision+"\"\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	if _, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRevisionNotAvailable {
+		t.Fatalf("initial unavailable pin error = %v", err)
+	}
+	gitWorkspaceRun(t, sourcePath, "push", "--", remote, "HEAD:refs/heads/delayed")
+	if _, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRevisionNotAvailable {
+		t.Fatalf("pin retried before interval: %v", err)
+	}
+
+	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := cache.Entry("/git", remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := cache.ReadState(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.LastAttemptAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := cache.WriteState(entry, state); err != nil {
+		t.Fatal(err)
+	}
+	read, err := ws.Read(ctx, "/git/overview", factile.ReadOptions{})
+	if err != nil || read.Concept.Path != "/git/overview" || !strings.Contains(read.Concept.Markdown, "Delayed Git Overview") {
+		t.Fatalf("eligible pinned acquisition = %#v, %v", read, err)
+	}
+	mounts, err := ws.ListMounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts.Mounts) != 1 || mounts.Mounts[0].SourceStatus == nil || mounts.Mounts[0].SourceStatus.RefreshDue || mounts.Mounts[0].SourceStatus.SelectedRevision != revision {
+		t.Fatalf("pinned workspace status = %#v", mounts)
+	}
+}
+
+func TestWorkspaceRedactsInvalidGitDescriptorStatus(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	source := "https://alice:correct-horse@example.test/private.git?token=hunter2"
+	mustWriteWorkspace(t, filepath.Join(root, "private.mount.toml"), "source = \""+source+"\"\nwritable = false\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	listed, err := ws.ListMounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Mounts) != 1 || listed.Mounts[0].Source != "[redacted]" || listed.Mounts[0].SourceStatus == nil || listed.Mounts[0].SourceStatus.Source != "[redacted]" || listed.Mounts[0].SourceStatus.LastErrorCode != factile.ErrValidationFailed {
+		t.Fatalf("invalid Git descriptor was not safely reported: %#v", listed)
+	}
+	encoded := normalizedMountJSON(t, listed, "")
+	for _, secret := range []string{"alice", "correct-horse", "hunter2", source} {
+		if strings.Contains(encoded, secret) {
+			t.Fatalf("mount status exposed %q: %s", secret, encoded)
+		}
+	}
+	if _, err := ws.Read(context.Background(), "/private/anything", factile.ReadOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+		t.Fatalf("invalid descriptor read error = %v", err)
+	}
+}
+
+func TestWorkspaceMountStatusDoesNotInitializeCache(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	mustWriteWorkspace(t, filepath.Join(root, "offline.mount.toml"), `source = "file:///definitely/missing/factile.git"
+writable = false
+`)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	listed, err := ws.ListMounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Mounts) != 1 || listed.Mounts[0].SourceStatus == nil || listed.Mounts[0].SourceStatus.SnapshotAvailable {
+		t.Fatalf("unexpected pristine mount status: %#v", listed)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mount status initialized cache: %v", err)
+	}
+}
+
+func TestWorkspaceGitMountFailureAndLazyRootListing(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	emptyPath := filepath.Join(t.TempDir(), "empty.git")
+	gitWorkspaceRun(t, "", "init", "--bare", "--", emptyPath)
+	emptyRemote := gitFileRemote(t, emptyPath)
+	if _, err := ws.Mount(ctx, emptyRemote, "/failed", factile.MountOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRevisionNotAvailable {
+		t.Fatalf("empty Git mount error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "failed.mount.toml")); !os.IsNotExist(err) {
+		t.Fatalf("failed Git mount wrote a descriptor: %v", err)
+	}
+
+	mustWriteWorkspace(t, filepath.Join(root, "offline.mount.toml"), `source = "file:///definitely/missing/factile.git"
+writable = false
+title = "Offline Git"
+`)
+	listed, err := ws.List(ctx, "/", factile.ListOptions{Brief: true})
+	if err != nil {
+		t.Fatalf("root listing hydrated offline Git: %v", err)
+	}
+	found := false
+	for _, card := range listed.Cards {
+		if card.Path == "/offline" && card.Title == "Offline Git" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("root listing omitted descriptor-only Git card: %#v", listed.Cards)
+	}
+	if _, err := ws.Search(ctx, "/", "anything", factile.SearchOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrRemoteSourceUnavailable {
+		t.Fatalf("broad scan did not hydrate in-scope Git mount: %v", err)
+	}
+}
+
+func TestWorkspaceRejectsInvalidGitSelectorsBeforeWritingDescriptor(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	remote, _, sourcePath := gitWorkspaceRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	for _, tc := range []struct {
+		mountPath string
+		opts      factile.MountOptions
+	}{
+		{mountPath: "/empty-ref", opts: factile.MountOptions{RefSet: true}},
+		{mountPath: "/empty-revision", opts: factile.MountOptions{RevisionSet: true}},
+		{mountPath: "/empty-version", opts: factile.MountOptions{VersionSet: true}},
+		{mountPath: "/sha256-lower", opts: factile.MountOptions{Revision: strings.Repeat("a", 64), RevisionSet: true}},
+		{mountPath: "/sha256-upper", opts: factile.MountOptions{Revision: strings.Repeat("A", 64), RevisionSet: true}},
+	} {
+		if _, err := ws.Mount(ctx, remote, tc.mountPath, tc.opts); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+			t.Fatalf("empty selector for %s error = %v", tc.mountPath, err)
+		}
+		descriptor := filepath.Join(root, strings.TrimPrefix(tc.mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("invalid selector wrote %s: %v", descriptor, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid selectors initialized Git cache: %v", err)
+	}
+	if _, err := ws.Mount(ctx, sourcePath, "/local-ref", factile.MountOptions{Ref: "main", RefSet: true}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+		t.Fatalf("local source accepted Git selector: %v", err)
+	}
+}
+
+func TestWorkspaceRejectsGitURIQueryAndFragmentDelimitersBeforeMutation(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	for _, tc := range []struct {
+		mountPath string
+		source    string
+	}{
+		{mountPath: "/native-empty-query", source: "https://example.test/repository.git?"},
+		{mountPath: "/native-query", source: "https://example.test/repository.git?token=value"},
+		{mountPath: "/native-empty-fragment", source: "https://example.test/repository.git#"},
+		{mountPath: "/native-fragment", source: "https://example.test/repository.git#private"},
+		{mountPath: "/git-plus-empty-query", source: "git+https://example.test/repository.git?"},
+		{mountPath: "/git-plus-query", source: "git+https://example.test/repository.git?token=value"},
+		{mountPath: "/git-plus-empty-fragment", source: "git+https://example.test/repository.git#"},
+		{mountPath: "/git-plus-fragment", source: "git+https://example.test/repository.git#private"},
+	} {
+		if _, err := ws.Mount(context.Background(), tc.source, tc.mountPath, factile.MountOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrValidationFailed {
+			t.Fatalf("URI delimiter source %q error = %v", tc.source, err)
+		}
+		descriptor := filepath.Join(root, strings.TrimPrefix(tc.mountPath, "/")+".mount.toml")
+		if _, err := os.Stat(descriptor); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("URI delimiter source wrote %s: %v", descriptor, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("URI delimiter sources initialized Git cache: %v", err)
+	}
+}
+
+func TestWorkspaceReportsEmptyGitURIDelimitersAsScopedInvalidDescriptors(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	invalid := []struct {
+		mountPath string
+		source    string
+	}{
+		{mountPath: "/native-query", source: "https://example.test/repository.git?"},
+		{mountPath: "/native-fragment", source: "https://example.test/repository.git#"},
+		{mountPath: "/git-plus-query", source: "git+https://example.test/repository.git?"},
+		{mountPath: "/git-plus-fragment", source: "git+https://example.test/repository.git#"},
+	}
+	for _, tc := range invalid {
+		filename := strings.TrimPrefix(tc.mountPath, "/") + ".mount.toml"
+		mustWriteWorkspace(t, filepath.Join(root, filename), "source = "+strconv.Quote(tc.source)+"\nwritable = false\n")
+	}
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	listed, err := ws.ListMounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Mounts) != len(invalid) {
+		t.Fatalf("invalid descriptor count = %d, want %d: %#v", len(listed.Mounts), len(invalid), listed)
+	}
+	for _, mount := range listed.Mounts {
+		if mount.Source != "[redacted]" || mount.SourceStatus == nil || mount.SourceStatus.Source != "[redacted]" || mount.SourceStatus.LastErrorCode != factile.ErrValidationFailed {
+			t.Fatalf("invalid URI descriptor was not safely scoped: %#v", mount)
+		}
+	}
+	validated, err := ws.Validate(context.Background(), "/", factile.ValidateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range invalid {
+		if validated.Valid || !hasIssue(validated.Issues, tc.mountPath, factile.ErrValidationFailed) {
+			t.Fatalf("root validation did not report %s: %#v", tc.mountPath, validated)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid loaded URI descriptors initialized Git cache: %v", err)
+	}
+}
+
+func TestWorkspaceRejectsWritableNonLocalMounts(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "root")
+	writeRootConfig(t, root)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+
+	for _, source := range []string{
+		"factile://remote/source",
+		"git+https://example.test/docs.git",
+		"https://github.com/senseware/coding-practice.git",
+		"git@github.com:senseware/coding-practice.git",
+	} {
+		if _, err := ws.Mount(ctx, source, "/remote", factile.MountOptions{Writable: true}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
+			t.Fatalf("writable non-local source %q should return source_read_only, got %v", source, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "remote.mount.toml")); !os.IsNotExist(err) {
+			t.Fatalf("writable non-local source %q wrote a descriptor: %v", source, err)
+		}
 	}
 }
 
@@ -1438,6 +2104,28 @@ func TestWorkspaceMountAndUnmountRegistry(t *testing.T) {
 	}
 	if !unmounted.Removed {
 		t.Fatal("unmount did not remove mount")
+	}
+}
+
+func TestWorkspaceMountFileRejectsGitBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root")
+	writeRootConfig(t, root)
+	registry := filepath.Join(tmp, "mount-registry.toml")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Root: root, MountFile: registry})
+
+	_, err := ws.Mount(ctx, "https://example.test/coding.git", "/coding", factile.MountOptions{Ref: "main", RefSet: true})
+	normalized := factile.NormalizeError(err)
+	var app *factile.AppError
+	if !errors.As(normalized, &app) || app.Code != factile.ErrUnsupportedSource || app.Message != "Git sources are not supported with --mount-file; use an active Factile root." {
+		t.Fatalf("unexpected legacy Git mount error: %v", err)
+	}
+	if _, err := os.Stat(registry); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected Git mount changed registry: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected Git mount initialized cache: %v", err)
 	}
 }
 
@@ -1602,6 +2290,64 @@ title: ` + title + `
 	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func gitWorkspaceRemote(t *testing.T) (string, string, string) {
+	t.Helper()
+	sourcePath := filepath.Join(t.TempDir(), "source")
+	mustWriteWorkspace(t, filepath.Join(sourcePath, ".factile", "config.toml"), `version = 1
+
+name = "git-fixture"
+title = "Git Fixture"
+description = "Git-backed reader fixture."
+
+[defaults]
+format = "okf"
+`)
+	writeOKFFile(t, filepath.Join(sourcePath, "overview.md"), "Reference", "Git Overview", "# Git Overview\n\n[Setup](guides/setup.md)\n")
+	writeOKFFile(t, filepath.Join(sourcePath, "guides", "setup.md"), "Guide", "Setup Guide", "# Setup\n\nConfigure the fixture.\n")
+	gitWorkspaceRun(t, "", "init", "--", sourcePath)
+	gitWorkspaceRun(t, sourcePath, "config", "--local", "--", "user.name", "Factile Test")
+	gitWorkspaceRun(t, sourcePath, "config", "--local", "--", "user.email", "factile@example.test")
+	gitWorkspaceRun(t, sourcePath, "add", "--", ".")
+	gitWorkspaceRun(t, sourcePath, "commit", "-m", "fixture")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	gitWorkspaceRun(t, "", "clone", "--bare", "--", sourcePath, remotePath)
+	return gitFileRemote(t, remotePath), remotePath, sourcePath
+}
+
+func gitFileRemote(t *testing.T, path string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String()
+}
+
+func gitWorkspaceRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := gitsource.NewRunner().Run(context.Background(), dir, args...); err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+}
+
+func gitWorkspaceOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	output, err := gitsource.NewRunner().Run(context.Background(), dir, args...)
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func normalizedMountJSON(t *testing.T, value any, mountPath string) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.ReplaceAll(string(data), mountPath, "/mount")
 }
 
 func mountFileForWorkspace(t *testing.T, writable bool) string {

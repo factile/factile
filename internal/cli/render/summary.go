@@ -119,6 +119,7 @@ func (r *Renderer) renderSummarySources(w io.Writer, sources []factile.Mount) er
 		} else {
 			line += " read-only"
 		}
+		line += renderSourceStatus(source.SourceStatus)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}

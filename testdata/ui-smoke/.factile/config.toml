@@ -1,0 +1,8 @@
+version = 1
+name = "ui-smoke"
+title = "Local Factile workspace"
+description = "Small public fixture for the embedded UI smoke."
+when_to_use = "Use only for self-contained implementation smoke tests."
+
+[defaults]
+format = "okf"

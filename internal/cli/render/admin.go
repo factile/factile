@@ -120,7 +120,11 @@ func (r *Renderer) RenderViewDelete(w io.Writer, result factile.ViewDeleteResult
 }
 
 func (r *Renderer) RenderMount(w io.Writer, result factile.MountResult) error {
-	_, err := fmt.Fprintf(w, "Mounted %s at %s\n", result.Mount.Source, result.Mount.MountPath)
+	capability := "read-only"
+	if result.Mount.Writable {
+		capability = "writable"
+	}
+	_, err := fmt.Fprintf(w, "Mounted %s at %s (%s)\n", result.Mount.Source, result.Mount.MountPath, capability)
 	return err
 }
 
@@ -151,11 +155,50 @@ func (r *Renderer) RenderMountList(w io.Writer, result factile.MountListResult) 
 		} else {
 			line += " read-only"
 		}
+		line += renderSourceStatus(mount.SourceStatus)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Renderer) RenderRefresh(w io.Writer, result factile.RefreshResult) error {
+	line := fmt.Sprintf("Refresh %s: %s", result.MountPath, result.Outcome)
+	if result.Status.SelectedRevision != "" {
+		line += " (" + result.Status.SelectedRevision + ")"
+	}
+	if _, err := fmt.Fprintln(w, line); err != nil {
+		return err
+	}
+	if result.Warning != nil {
+		_, err := fmt.Fprintln(w, "Warning: "+result.Warning.Message)
+		return err
+	}
+	return nil
+}
+
+func renderSourceStatus(status *factile.SourceStatus) string {
+	if status == nil {
+		return ""
+	}
+	state := " unavailable"
+	if status.SnapshotAvailable {
+		state = " fresh"
+	}
+	if status.RefreshDue {
+		state = " refresh-due"
+	}
+	if status.Stale {
+		state = " stale"
+	}
+	if status.SelectedRevision != "" {
+		state += " revision=" + status.SelectedRevision
+	}
+	if status.LastErrorCode != "" {
+		state += " error=" + status.LastErrorCode
+	}
+	return state
 }
 
 func (r *Renderer) RenderBundleInspect(w io.Writer, result factile.BundleInspectResult) error {

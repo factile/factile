@@ -15,16 +15,16 @@ func (w *LocalWorkspace) Stat(ctx context.Context, inputPath string, opts StatOp
 	if err != nil {
 		return StatResult{}, NormalizeError(err)
 	}
-	card, err := w.cardForPath(normalized)
+	card, err := w.cardForPath(ctx, normalized)
 	if err != nil {
 		return StatResult{}, err
 	}
 	return StatResult{Card: card}, nil
 }
 
-func (w *LocalWorkspace) listResult(path string, folders []FolderSummary, documents []DocumentSummary, opts ListOptions) (ListResult, error) {
+func (w *LocalWorkspace) listResult(ctx context.Context, path string, folders []FolderSummary, documents []DocumentSummary, opts ListOptions) (ListResult, error) {
 	if opts.Brief {
-		cards, err := w.cardsForList(folders, documents)
+		cards, err := w.cardsForList(ctx, folders, documents)
 		if err != nil {
 			return ListResult{}, err
 		}
@@ -33,17 +33,17 @@ func (w *LocalWorkspace) listResult(path string, folders []FolderSummary, docume
 	return ListResult{Path: path, Folders: folders, Documents: documents}, nil
 }
 
-func (w *LocalWorkspace) cardsForList(folders []FolderSummary, documents []DocumentSummary) ([]CardSummary, error) {
+func (w *LocalWorkspace) cardsForList(ctx context.Context, folders []FolderSummary, documents []DocumentSummary) ([]CardSummary, error) {
 	cards := make([]CardSummary, 0, len(folders)+len(documents))
 	for _, folder := range folders {
-		card, err := w.cardForPath(folder.Path)
+		card, err := w.cardForPath(ctx, folder.Path)
 		if err != nil {
 			return nil, err
 		}
 		cards = append(cards, card)
 	}
 	for _, document := range documents {
-		card, err := w.cardForPath(document.Path)
+		card, err := w.cardForPath(ctx, document.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +52,7 @@ func (w *LocalWorkspace) cardsForList(folders []FolderSummary, documents []Docum
 	return cards, nil
 }
 
-func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
+func (w *LocalWorkspace) cardForPath(ctx context.Context, normalized string) (CardSummary, error) {
 	if normalized == "/" {
 		return w.rootCard()
 	}
@@ -61,6 +61,13 @@ func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
 	if err != nil {
 		return CardSummary{}, NormalizeError(err)
 	}
+	if mount, ok := mountByPath(mounts, normalized); ok {
+		return mergeCard(card, cardFromMount(mount)), nil
+	}
+	mounts, err = w.mountsForTarget(ctx, normalized)
+	if err != nil {
+		return CardSummary{}, err
+	}
 	target, err := vfs.Resolve(mounts, normalized)
 	if err != nil {
 		if len(mountsForVirtualPath(mounts, normalized)) > 0 {
@@ -68,10 +75,10 @@ func (w *LocalWorkspace) cardForPath(normalized string) (CardSummary, error) {
 		}
 		return CardSummary{}, NormalizeError(err)
 	}
-	if target.Mount.MountPath == normalized {
-		card = mergeCard(card, cardFromMount(target.Mount))
-	}
 	if target.Kind == TargetConcept {
+		if err := ensureReadable(target.Mount); err != nil {
+			return CardSummary{}, err
+		}
 		concept, err := w.readConcept(target.Mount, target.ConceptID)
 		if err != nil {
 			return CardSummary{}, err
