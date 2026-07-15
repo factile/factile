@@ -404,13 +404,13 @@ goreleaser check
 If `goreleaser` is not installed, normal repository verification is still
 covered by `./scripts/verify.sh`.
 
-## Prepare v0.3.0
+## Prepare a release
 
-The v0.3.0 release uses the checked-in embedded UI snapshot. CLI release
+CLI releases use the checked-in embedded UI snapshot. Release
 artifacts contain the compiled browser assets, not the sibling `factile-ui`
 source workspace or its packages.
 
-Before creating the `v0.3.0` tag:
+Before releasing:
 
 ```bash
 make ui-assets
@@ -419,9 +419,18 @@ make pre-release
 git status --short
 ```
 
-Review the generated GitHub and npm artifacts, then create and push the tag in
-a separate explicit release step. Preparing the candidate does not tag or
-publish it.
+Review the candidate and confirm that `main` is clean and synchronized with
+`origin`, then run one explicit release target:
+
+```bash
+make release-fix      # patch
+make release-feature  # minor
+make release-major    # major, with confirmation
+```
+
+Each release target bumps `VERSION`, synchronizes checked-in version metadata,
+runs the release gate, creates a release commit and annotated `vX.Y.Z` tag, and
+atomically pushes both to `origin`. The tag starts the GitHub release workflow.
 
 ## Project Governance
 

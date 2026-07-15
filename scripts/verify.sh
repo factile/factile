@@ -6,6 +6,12 @@ export GOMODCACHE="${GOMODCACHE:-/tmp/factile-go-mod-cache}"
 mkdir -p "$GOCACHE" "$GOMODCACHE"
 
 repo_root="$(pwd)"
+version="$(tr -d '[:space:]' < "$repo_root/VERSION")"
+if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "VERSION must contain SemVer X.Y.Z, got: $version" >&2
+  exit 1
+fi
+
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -42,7 +48,7 @@ writable = true
 EOF2
 
 "$factile_bin" --help >/dev/null
-test "$("$factile_bin" version)" = "factile v0.3.0"
+test "$("$factile_bin" version)" = "factile v$version"
 "$factile_bin" --version >/dev/null
 "$factile_bin" skill list --json >/dev/null
 "$factile_bin" skill inspect codex --json >/dev/null
@@ -122,7 +128,7 @@ EOF3
 "$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/payment-import --json >/dev/null
 
 npm_stage="$tmpdir/npm"
-node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version 0.3.0 >/dev/null
+node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version "$version" >/dev/null
 node packaging/npm/scripts/smoke-test.mjs --root "$npm_stage" >/dev/null
 
 (

@@ -4,6 +4,8 @@ CYAN=\033[0;36m
 
 # Configuration
 GO ?= go
+GOCACHE ?= /tmp/factile-go-build-cache
+GOMODCACHE ?= /tmp/factile-go-mod-cache
 BINARY ?= factile
 ALIAS ?= ft
 BUILD_DIR ?= bin
@@ -12,10 +14,14 @@ LOCAL_BINDIR := $(HOME)/.local/bin
 BINDIR ?= $(if $(findstring :$(LOCAL_BINDIR):,:$(PATH):),$(LOCAL_BINDIR),/usr/local/bin)
 FACTILE_UI_DIR ?= ../factile-ui
 FACTILE_UI_DIST ?= $(FACTILE_UI_DIR)/apps/local/dist
+VERSION_FILE := VERSION
+
+export GOCACHE
+export GOMODCACHE
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build ui-assets smoke-ui install verify pre-release
+.PHONY: help build ui-assets smoke-ui install verify pre-release version release-fix release-feature release-major
 
 help:
 	@echo "usage: make <target> [BINDIR=$(BINDIR)]"
@@ -25,7 +31,13 @@ help:
 	@echo "    $(CYAN)ui-assets$(CLEAR) : Build factile-ui and refresh embedded UI assets"
 	@echo "    $(CYAN)smoke-ui$(CLEAR) : Build and smoke-test the embedded UI bridge"
 	@echo "    $(CYAN)verify$(CLEAR) : Run the public Go test suite"
-	@echo "    $(CYAN)pre-release$(CLEAR) : Run the complete local v0.2 release gate"
+	@echo "    $(CYAN)pre-release$(CLEAR) : Run the complete local release gate"
+	@echo ""
+	@echo "  Release:"
+	@echo "    $(CYAN)version$(CLEAR) : Print current version (X.Y.Z)"
+	@echo "    $(CYAN)release-fix$(CLEAR) : Bump patch version number and release"
+	@echo "    $(CYAN)release-feature$(CLEAR) : Bump minor version number and release"
+	@echo "    $(CYAN)release-major$(CLEAR) : Bump major version number and release"
 	@echo ""
 	@echo "  Install:"
 	@echo "    $(CYAN)install$(CLEAR) : Install $(BINARY) and $(ALIAS) alias to $(BINDIR)"
@@ -48,6 +60,18 @@ verify:
 pre-release:
 	@./scripts/verify.sh
 	@$(MAKE) smoke-ui
+
+version:
+	@cat "$(VERSION_FILE)"
+
+release-fix:
+	@./scripts/release patch
+
+release-feature:
+	@./scripts/release minor
+
+release-major:
+	@./scripts/release major
 
 install: build
 	@install -d "$(BINDIR)"
