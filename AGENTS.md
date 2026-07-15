@@ -1,21 +1,21 @@
 # Documentation rules
 
-All files under `/docs` must follow Open Knowledge Format v0.1.
+All files under `docs` must follow Open Knowledge Format v0.1.
 
-When creating or editing `/docs/**/*.md`:
+When creating or editing `docs/**/*.md`:
 
-- Treat `/docs` as one OKF bundle.
+- Treat `docs` as one OKF bundle.
 - Every non-reserved `.md` file must start with YAML frontmatter.
 - Frontmatter must include a non-empty `type`.
 - Prefer these fields: `title`, `description`, `tags`, `timestamp`.
-- Use `/docs/index.md` for navigation.
-- Use `/docs/log.md` for chronological documentation changes.
+- Use `docs/index.md` for navigation.
+- Use `docs/log.md` for chronological documentation changes.
 - Use bundle-relative links, for example `/architecture/auth.md`.
 - Use Mermaid fenced code blocks for diagrams, for example ` ```mermaid `.
-- Do not create plain Markdown files in `/docs`.
-- Do not create `README.md` under `/docs`; use `index.md`.
+- Do not create plain Markdown files in `docs`.
+- Do not create `README.md` under `docs`; use `index.md`.
 
-Before creating a new `/docs/**/*.md` file:
+Before creating a new `docs/**/*.md` file:
 
 1. Confirm that the CLI repository owns the truth being documented.
 2. Choose a short, descriptive non-empty `type`; OKF accepts domain-specific
@@ -154,9 +154,11 @@ A task is done only when:
 <!-- factile:codex:start -->
 ## Local knowledge
 
-This repository may have local Factile knowledge available by path.
+The supported root is `docs/.factile/config.toml`. It is a self-contained,
+mount-free public source for CLI concepts, guides, reference, and architecture.
 
-Reader commands work by path. A path may be backed by root-local Markdown files or mounted sources; do not classify a path before navigating it.
+Reader commands work by path. This root currently contains only root-local
+Markdown, but do not assume a path's storage kind without navigating it.
 
 A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
 

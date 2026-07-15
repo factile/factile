@@ -25,7 +25,7 @@ Run the local checks before sending a PR:
 gofmt -w .
 go test ./...
 go vet ./...
-factile validate /docs
+factile validate /
 ./scripts/verify.sh
 ```
 

@@ -2,6 +2,8 @@
 
 ## 2026-07-15
 
+- Aligned contributor and agent instructions with the self-contained `docs`
+  root and corrected the documentation validation command to target `/`.
 - Established `factile-cli/docs` as the self-contained public authority for
   current CLI architecture, concepts, workflows, command behavior, profiles,
   agents, MCP, and troubleshooting.
