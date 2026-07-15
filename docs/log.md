@@ -1,5 +1,18 @@
 # Documentation Log
 
+## 2026-07-15
+
+- Established `factile-cli/docs` as the self-contained public authority for
+  current CLI architecture, concepts, workflows, command behavior, profiles,
+  agents, MCP, and troubleshooting.
+- Rewrote retained guidance from current command help, implementation, and
+  tests instead of copying the platform archive; excluded speculative research,
+  historical execution plans, refinement evidence, and duplicate contract
+  prose.
+- Removed the obsolete document-type registry requirement from repository
+  guidance. OKF documents require a non-empty type but accept domain-specific
+  values without a central allowlist.
+
 ## 2026-07-14
 
 - Kept the public CLI self-contained by separating cross-repository

@@ -17,11 +17,13 @@ When creating or editing `/docs/**/*.md`:
 
 Before creating a new `/docs/**/*.md` file:
 
-1. Read `/docs/meta/document-types.md`.
-2. Reuse an existing `type` if one fits.
-3. If no type fits, add a new row to `/docs/meta/document-types.md` first.
-4. Use the exact `Type` value from the registry in the document frontmatter.
-5. Do not invent unregistered `type` values.
+1. Confirm that the CLI repository owns the truth being documented.
+2. Choose a short, descriptive non-empty `type`; OKF accepts domain-specific
+   values and has no central type registry.
+3. Place current architecture, guides, concepts, and reference material under
+   the existing shallow structure.
+4. Update `/docs/index.md` and `/docs/log.md` when navigation or durable current
+   guidance changes.
 
 # Factile Agent Instructions
 
@@ -66,7 +68,11 @@ pkg/search/
 pkg/contextpack/
 pkg/graph/
 pkg/patch/
+pkg/profile/
 pkg/revision/
+pkg/skill/
+pkg/trace/
+pkg/uibridge/
 ```
 
 ## CLI contract
@@ -81,12 +87,15 @@ Core commands:
 
 ```text
 factile list <path>
+factile stat <path>
 factile read <document-path>
 factile search <path> <query>
 factile context <path> <query>
 factile graph <path>
 factile validate <path>
+factile ui
 
+factile mkdir <path> [--log] [--overview] [--bundle]
 factile create <document-path> --type <type> --title <title> --body <file>
 factile write <document-path> --rev <rev> --body <file>
 factile patch <document-path> --rev <rev> [options]
@@ -98,6 +107,7 @@ factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--
 factile refresh <mount-path>
 factile unmount <mount-path>
 factile mounts
+factile view list|inspect|set|delete
 factile bundle find [path]
 factile bundle inspect <source>
 
@@ -112,7 +122,7 @@ Every task ends by running:
 gofmt -w .
 go test ./...
 go vet ./...
-factile validate /docs
+factile validate /
 ./scripts/verify.sh
 ```
 
