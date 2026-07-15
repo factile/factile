@@ -12,7 +12,7 @@ directories. It exposes Markdown documents through stable Factile paths and
 serves the same reader operations through a native Go CLI and a local stdio MCP
 server.
 
-Status: early local-first v0.3.0. JSON output is intended as the stable
+Status: early local-first v0.3.1. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
@@ -66,7 +66,7 @@ and Windows. Download the archive for your platform, unpack it, and put
 The installer script supports Linux and macOS. Pin the release tag you want:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.3.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.3.1/install.sh | bash
 ```
 
 From a checkout, build directly:
@@ -337,7 +337,7 @@ Curator mode installs write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.3.0; there is no recipe runner or `factile recipe` command.
+v0.3.1; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -354,7 +354,7 @@ ledger.
 
 ## Known Limitations
 
-Factile v0.3.0 is intentionally local-first:
+Factile v0.3.1 is intentionally local-first:
 
 - There is no hosted service, hosted `factile://` source resolution, auth
   product, marketplace, billing, publication workflow, or cloud MCP in this

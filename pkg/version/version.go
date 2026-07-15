@@ -6,7 +6,7 @@ import (
 
 const (
 	Name           = "factile"
-	defaultVersion = "v0.3.0"
+	defaultVersion = "v0.3.1"
 )
 
 var (
