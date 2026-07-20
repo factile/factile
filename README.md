@@ -17,7 +17,7 @@ contract; CLI text and command ergonomics may still evolve before v1.0.
 
 Root Layout v2 is the current contract in this checkout. Legacy layouts receive
 an explicit migration diagnostic; Factile does not silently reinterpret them.
-Published v0.3.1 artifacts predate this cutover, so build the current source to
+Published v0.4.0 artifacts predate this cutover, so build the current source to
 use the v2 behavior documented here until a newer release is available.
 
 Factile reads one workspace's root bundle and explicitly mounted bundles, and
@@ -71,7 +71,7 @@ and Windows. Download the archive for your platform, unpack it, and put
 The installer script supports Linux and macOS. Pin the release tag you want:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.3.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/factile/factile/v0.4.0/install.sh | bash
 ```
 
 From a checkout, build directly:
@@ -357,7 +357,7 @@ Curator mode installs write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.3.1; there is no recipe runner or `factile recipe` command.
+v0.4.0; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -374,7 +374,7 @@ ledger.
 
 ## Known Limitations
 
-Factile v0.3.1 is intentionally local-first:
+Factile v0.4.0 is intentionally local-first:
 
 - There is no hosted service, hosted `factile://` source resolution, auth
   product, marketplace, billing, publication workflow, or cloud MCP in this
