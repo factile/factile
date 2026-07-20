@@ -8,10 +8,9 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Getting Started
 
-> **Implementation status:** the Root Layout v2 setup below is the accepted
-> target under `ft-qhg`. Released v0.3.1 still creates the legacy
-> `.factile/config.toml` layout; check current executable help until the v2
-> implementation lands.
+> The current source implements the Root Layout v2 setup below. Published
+> v0.3.1 artifacts predate the cutover; build this checkout to use v2 until a
+> newer release is available.
 
 Factile is one native binary. The recommended installation is:
 

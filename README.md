@@ -12,12 +12,13 @@ directories. It exposes Markdown documents through stable Factile paths and
 serves the same reader operations through a native Go CLI and a local stdio MCP
 server.
 
-Status: early local-first v0.3.1. JSON output is intended as the stable
-agent/script contract; CLI text and command ergonomics may still evolve before
-v1.0.
+Status: early local-first. JSON output is intended as the stable agent/script
+contract; CLI text and command ergonomics may still evolve before v1.0.
 
 Root Layout v2 is the current contract in this checkout. Legacy layouts receive
 an explicit migration diagnostic; Factile does not silently reinterpret them.
+Published v0.3.1 artifacts predate this cutover, so build the current source to
+use the v2 behavior documented here until a newer release is available.
 
 Factile reads one workspace's root bundle and explicitly mounted bundles, and
 can materialize read-only Git repositories into a generated per-workspace
@@ -34,9 +35,9 @@ and using the CLI never requires a separate specification checkout.
 
 Factile is one Go binary named `factile`.
 
-Local roots and directory mounts need no external runtime. Git mounts require a
-system `git` executable on `PATH`; SSH remotes also require the normal SSH
-client and agent or key configuration used by Git.
+Local workspaces and directory mounts need no external runtime. Git mounts
+require a system `git` executable on `PATH`; SSH remotes also require the normal
+SSH client and agent or key configuration used by Git.
 
 The recommended install method is npm:
 
@@ -389,11 +390,10 @@ Factile v0.3.1 is intentionally local-first:
 - Recipes are seed guidance data, not executable workflows.
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
-- The accepted Root Layout v2 target is a clean cutover: contextual commands
-  require a workspace; only explicitly physical `bundle find` and
-  `bundle inspect` are workspace-free. Released v0.3.1 retains the legacy
-  behavior called out above. Hosted authentication and `factile://` transport
-  remain out of scope.
+- Root Layout v2 is a clean cutover: contextual commands require a workspace;
+  only explicitly physical `bundle find` and `bundle inspect` are
+  workspace-free. Hosted authentication and `factile://` transport remain out
+  of scope.
 
 ## Supported Platforms
 

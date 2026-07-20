@@ -117,7 +117,7 @@ func (w *LocalWorkspace) rootCard() (CardSummary, error) {
 	}
 	title := metadata.Title
 	if title == "" {
-		title = "Factile Root"
+		title = "Factile Root Bundle"
 	}
 	return CardSummary{Path: "/", Title: title, Description: metadata.Description, WhenToUse: metadata.WhenToUse}, nil
 }

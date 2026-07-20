@@ -34,11 +34,11 @@ read-only Git sources.
 
 - Build one native Go binary named `factile`.
 - Keep CLI and MCP as thin adapters over the core workspace API.
-- Keep read-only Git acquisition local to the active root. Do not add hosted `factile://` resolution, writable Git, auth products, subscriptions, billing, hosted MCP, marketplace search, publisher portals, publication, or cloud sync.
+- Keep read-only Git acquisition local to the workspace. Do not add hosted `factile://` resolution, writable Git, auth products, subscriptions, billing, hosted MCP, marketplace search, publisher portals, publication, or cloud sync.
 - Public knowledge operations use virtual Factile paths, for example `/product-docs/workflows/invoice-import`.
 - Mount commands accept local source paths and native Git remote syntax; `git+` remains compatibility syntax rather than a requirement.
-- Every explicit mount defaults to read-only. Only local mounts may opt into `--writable`; Git mounts are always read-only and the implicit active root remains writable in curator mode.
-- Floating Git sources check at most once per 24 hours unless explicitly refreshed. Generated cache state stays under the active root's `.factile/cache/` directory.
+- Every explicit mount defaults to read-only. Only local mounts may opt into `--writable`; Git mounts are always read-only and the workspace root bundle remains writable in curator mode.
+- Floating Git sources check at most once per 24 hours unless explicitly refreshed. Generated cache state stays under the workspace's `.factile/cache/` directory.
 - JSON output is the stable agent contract.
 - Text output is presentation only.
 - Preserve human-readable Markdown.

@@ -8,10 +8,6 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Agents and Local MCP
 
-> **Implementation status:** mandatory workspace discovery below is the
-> accepted Root Layout v2 target. Released v0.3.1 still uses its legacy root
-> marker.
-
 Factile can install repository- or user-scoped Codex guidance and expose the
 same explicit local workspace and root-bundle tree through stdio MCP. Neither surface connects to a hosted
 Factile service.

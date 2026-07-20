@@ -8,10 +8,6 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Troubleshooting
 
-> **Implementation status:** workspace errors below describe the accepted Root
-> Layout v2 target. Released v0.3.1 still emits `no_active_root` for its legacy
-> `.factile/config.toml` layout.
-
 Start with structured state:
 
 ```bash

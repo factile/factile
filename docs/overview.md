@@ -16,12 +16,6 @@ owns:
 - local CLI architecture and contributor-facing boundaries; and
 - agent, MCP, profile, and troubleshooting guidance for this repository.
 
-> **Root Layout v2 implementation status (2026-07-19):** this documentation
-> describes the accepted workspace-and-bundle target being implemented under
-> `ft-qhg`. The released v0.3.1 binary still uses `.factile/config.toml`,
-> `.factile/views.toml`, `--root`, and `no_active_root`; use its command help for
-> executable legacy syntax until the v2 implementation lands.
-
 Factile reads one workspace's root bundle, mounted local bundles, and read-only
 Git bundles materialized in generated workspace-local state. The CLI, local
 stdio MCP server, and embedded browser use the same workspace operations.

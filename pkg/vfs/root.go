@@ -146,8 +146,8 @@ func parseRootString(raw string, key string, lineNo int) (string, error) {
 	return value, nil
 }
 
-// FindRoot implements retained Root Layout v1 discovery for callers awaiting
-// the ft-qhg.3 runtime cutover.
+// FindRoot implements retained Root Layout v1 discovery for compatibility
+// callers and tests.
 // Deprecated: use ResolveWorkspace for Root Layout v2.
 func FindRoot(opts LoadOptions) (string, bool, error) {
 	if opts.Root != "" {

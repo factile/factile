@@ -126,6 +126,22 @@ title = "Component Knowledge"
 	}
 }
 
+func TestWorkspaceV2RootCardDefaultNamesTheBundle(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	mustWriteV2(t, filepath.Join(workspace, "factile.toml"), "version = 2\n\n[workspace]\nroot = \"docs\"\n")
+	mustWriteV2(t, filepath.Join(rootBundle, "factile.toml"), "version = 2\n\n[bundle]\nname = \"docs\"\n")
+
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspace})
+	result, err := ws.Stat(context.Background(), "/", factile.StatOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Card.Title != "Factile Root Bundle" {
+		t.Fatalf("root card title = %q", result.Card.Title)
+	}
+}
+
 func TestWorkspaceV2ExplicitSelectionUsesWorkspaceOptionOnly(t *testing.T) {
 	workspace := newWorkspaceV2Fixture(t)
 	ctx := context.Background()
