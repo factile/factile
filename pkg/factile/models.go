@@ -197,8 +197,10 @@ type SummaryResult struct {
 }
 
 type WorkspaceSummary struct {
-	Path    string `json:"path"`
-	Version string `json:"version"`
+	WorkspaceDir  string `json:"workspace_dir"`
+	RootBundleDir string `json:"root_bundle_dir"`
+	StateDir      string `json:"state_dir"`
+	Version       string `json:"version"`
 }
 
 type HealthSummary struct {

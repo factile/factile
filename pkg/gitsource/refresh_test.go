@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/factile/factile/pkg/vfs"
 )
 
 func TestLazyFreshnessExplicitRefreshAndStaleFallback(t *testing.T) {
@@ -20,7 +18,7 @@ func TestLazyFreshnessExplicitRefreshAndStaleFallback(t *testing.T) {
 	var fetches atomic.Int32
 	runner := fixture.runner
 	runner.command = countingGitFactory(&fetches, nil, nil)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +98,7 @@ func TestLazyFreshnessExplicitRefreshAndStaleFallback(t *testing.T) {
 func TestRefreshSetupFailureUsesCachedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +162,7 @@ func TestRefreshSetupFailureUsesCachedSnapshot(t *testing.T) {
 func TestRefreshSetupCommandFailureUsesCachedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +193,7 @@ func TestMissingGitWithoutSnapshotRecordsAndSuppressesFailure(t *testing.T) {
 		commands.Add(1)
 		return exec.CommandContext(ctx, name, args...)
 	}
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +226,7 @@ func TestMissingGitWithoutSnapshotRecordsAndSuppressesFailure(t *testing.T) {
 func TestRefreshSetupFailureDoesNotHideUnsafeSnapshotState(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +258,7 @@ func TestFreshnessHandlesClockSkewAndSuppressesMissingCacheFailures(t *testing.T
 	var fetches atomic.Int32
 	runner := fixture.runner
 	runner.command = countingGitFactory(&fetches, nil, nil)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +301,7 @@ func TestPinnedStatusAndRefreshRemainStable(t *testing.T) {
 	var fetches atomic.Int32
 	runner := fixture.runner
 	runner.command = countingGitFactory(&fetches, nil, nil)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +338,7 @@ func TestFailedPinnedAcquisitionRetriesAfterInterval(t *testing.T) {
 	var fetches atomic.Int32
 	runner := fixture.runner
 	runner.command = countingGitFactory(&fetches, nil, nil)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +422,7 @@ func TestMissingSnapshotAndCorruptStateRecoverSafely(t *testing.T) {
 	var fetches atomic.Int32
 	runner := fixture.runner
 	runner.command = countingGitFactory(&fetches, nil, nil)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +470,7 @@ func TestConcurrentExplicitRefreshCoalescesOneFetch(t *testing.T) {
 	fixture := newResolutionFixture(t)
 	var fetches atomic.Int32
 	runner := fixture.runner
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}

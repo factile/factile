@@ -14,9 +14,9 @@ func applyMountMetadataDefaults(sourcePath string, mountPath string, opts MountO
 		return opts
 	}
 
-	if config, err := vfs.LoadRootConfig(sourcePath); err == nil {
-		setIfBlank(&opts.Title, config.Title)
-		setIfBlank(&opts.Description, config.Description)
+	if manifest, err := vfs.LoadManifest(sourcePath); err == nil && manifest.Bundle != nil {
+		setIfBlank(&opts.Title, manifest.Bundle.Title)
+		setIfBlank(&opts.Description, manifest.Bundle.Description)
 	}
 
 	if !hasText(opts.Title) || !hasText(opts.Description) {
@@ -47,7 +47,7 @@ func overviewMetadata(sourcePath string) (string, string) {
 	return okf.StringField(document.Frontmatter, "title"), okf.StringField(document.Frontmatter, "description")
 }
 
-func resolveMountSourcePath(source string, baseDir string, allowWorkingDirFallback bool) (string, error) {
+func resolveMountSourcePath(source string, baseDir string) (string, error) {
 	candidate := source
 	if !filepath.IsAbs(candidate) {
 		candidate = filepath.Join(baseDir, candidate)
@@ -55,11 +55,6 @@ func resolveMountSourcePath(source string, baseDir string, allowWorkingDirFallba
 	abs, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", err
-	}
-	if allowWorkingDirFallback && !filepath.IsAbs(source) && !fileExists(abs) {
-		if workingDirSource, workingDirErr := filepath.Abs(source); workingDirErr == nil && fileExists(workingDirSource) {
-			abs = workingDirSource
-		}
 	}
 	return filepath.Clean(abs), nil
 }

@@ -12,8 +12,12 @@ import (
 )
 
 const (
-	ErrInvalidPath             = "invalid_path"
-	ErrMountNotFound           = "mount_not_found"
+	ErrInvalidPath       = "invalid_path"
+	ErrMountNotFound     = "mount_not_found"
+	ErrNoActiveWorkspace = vfs.ErrNoActiveWorkspace
+	ErrInvalidWorkspace  = vfs.ErrInvalidWorkspace
+	ErrInvalidBundle     = vfs.ErrInvalidBundle
+	// Deprecated: retained only for Root Layout v1 compatibility evidence.
 	ErrNoActiveRoot            = "no_active_root"
 	ErrAmbiguousTarget         = "ambiguous_target"
 	ErrConceptNotFound         = "concept_not_found"
@@ -68,7 +72,14 @@ func NormalizeError(err error) error {
 	}
 	var vfsErr *vfs.Error
 	if errors.As(err, &vfsErr) {
-		return &AppError{Code: vfsErr.Code, Message: vfsErr.Message}
+		var details map[string]any
+		if len(vfsErr.Details) > 0 {
+			details = make(map[string]any, len(vfsErr.Details))
+			for key, value := range vfsErr.Details {
+				details[key] = value
+			}
+		}
+		return &AppError{Code: vfsErr.Code, Message: vfsErr.Message, Details: details}
 	}
 	if errors.Is(err, os.ErrNotExist) {
 		return NewError(ErrConceptNotFound, "Concept not found")

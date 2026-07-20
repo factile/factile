@@ -130,7 +130,7 @@ func TestRunnerBoundsExecutionAndHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestRunnerSanitizesAndTruncatesGitErrors(t *testing.T) {
+func TestRunnerDoesNotExposeGitOrCredentialHelperErrors(t *testing.T) {
 	t.Setenv("FACTILE_GIT_HELPER", "secret-error")
 	runner := helperRunner(5 * time.Second)
 	_, err := runner.Run(context.Background(), "", "fetch")
@@ -143,8 +143,8 @@ func TestRunnerSanitizesAndTruncatesGitErrors(t *testing.T) {
 			t.Fatalf("Git error exposed %q: %s", secret, message)
 		}
 	}
-	if !strings.Contains(message, "[redacted]") || len(message) > maxGitErrorLength+100 {
-		t.Fatalf("Git error was not sanitized and bounded: len=%d %s", len(message), message)
+	if message != ErrGitCommand.Error() {
+		t.Fatalf("Git subprocess output escaped the error boundary: %s", message)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestGitSourceCommandHelper(t *testing.T) {
 	case "sleep":
 		time.Sleep(5 * time.Second)
 	case "secret-error":
-		_, _ = fmt.Fprint(os.Stderr, "fatal: https://alice:correct-horse@example.test/repo.git?token=hunter2 Authorization: Bearer bearer-secret "+strings.Repeat("x", maxGitErrorLength*2))
+		_, _ = fmt.Fprint(os.Stderr, "fatal: https://alice:correct-horse@example.test/repo.git?token=hunter2 Authorization: Bearer bearer-secret opaque-helper-secret")
 		os.Exit(2)
 	default:
 		os.Exit(2)

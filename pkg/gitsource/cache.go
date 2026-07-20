@@ -24,10 +24,11 @@ var ErrInvalidCache = errors.New("invalid Git cache")
 const cacheStateVersion = 1
 
 type Cache struct {
-	Root   string
-	base   string
-	runner Runner
-	now    func() time.Time
+	WorkspaceDir string
+	StateDir     string
+	base         string
+	runner       Runner
+	now          func() time.Time
 }
 
 type Entry struct {
@@ -66,13 +67,13 @@ type RepositoryInfo struct {
 	Remote      string `json:"remote,omitempty"`
 }
 
-func OpenCache(opts vfs.LoadOptions, runner Runner) (*Cache, error) {
-	return openCache(opts, runner, true)
+func OpenCache(workspace vfs.WorkspaceContext, runner Runner) (*Cache, error) {
+	return openCache(workspace, runner, true)
 }
 
 // OpenCacheWithClock opens an initialized cache with an injected refresh clock.
-func OpenCacheWithClock(opts vfs.LoadOptions, runner Runner, now func() time.Time) (*Cache, error) {
-	cache, err := openCache(opts, runner, true)
+func OpenCacheWithClock(workspace vfs.WorkspaceContext, runner Runner, now func() time.Time) (*Cache, error) {
+	cache, err := openCache(workspace, runner, true)
 	if err != nil {
 		return nil, err
 	}
@@ -83,47 +84,42 @@ func OpenCacheWithClock(opts vfs.LoadOptions, runner Runner, now func() time.Tim
 }
 
 // OpenCacheForStatus opens the cache layout without creating or modifying it.
-func OpenCacheForStatus(opts vfs.LoadOptions, runner Runner) (*Cache, error) {
-	return openCache(opts, runner, false)
+func OpenCacheForStatus(workspace vfs.WorkspaceContext, runner Runner) (*Cache, error) {
+	return openCache(workspace, runner, false)
 }
 
-func openCache(opts vfs.LoadOptions, runner Runner, initialize bool) (*Cache, error) {
-	root, err := vfs.RequireRoot(opts)
+func openCache(workspace vfs.WorkspaceContext, runner Runner, initialize bool) (*Cache, error) {
+	base, err := vfs.StatePath(workspace, "cache/git")
 	if err != nil {
 		return nil, err
 	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
-	root = filepath.Clean(root)
-	if err := requireSafeDirectory(root); err != nil {
-		return nil, err
-	}
-	factileDir := filepath.Join(root, ".factile")
-	if err := requireSafeDirectory(factileDir); err != nil {
-		return nil, err
-	}
-	cacheDir := filepath.Join(factileDir, "cache")
-	base := filepath.Join(cacheDir, "git")
+	cacheDir := filepath.Dir(base)
 	if initialize {
-		if err := ensurePrivateDirectory(cacheDir); err != nil {
+		cacheDir, err = vfs.EnsureStateDirectory(workspace, "cache")
+		if err != nil {
 			return nil, err
 		}
 		if err := atomicWriteFile(filepath.Join(cacheDir, ".gitignore"), []byte("*\n"), 0o600); err != nil {
 			return nil, err
 		}
-		if err := ensurePrivateDirectory(base); err != nil {
+		base, err = vfs.EnsureStateDirectory(workspace, "cache/git")
+		if err != nil {
 			return nil, err
 		}
 	} else {
-		for _, dir := range []string{cacheDir, base} {
+		for _, dir := range []string{workspace.StateDir, cacheDir, base} {
 			if err := requireSafeDirectory(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, err
 			}
 		}
 	}
-	return &Cache{Root: root, base: base, runner: runner, now: time.Now}, nil
+	return &Cache{
+		WorkspaceDir: workspace.WorkspaceDir,
+		StateDir:     workspace.StateDir,
+		base:         base,
+		runner:       runner,
+		now:          time.Now,
+	}, nil
 }
 
 func (c *Cache) Entry(mountPath, source string) (Entry, error) {
@@ -337,14 +333,14 @@ func (c *Cache) validateEntry(entry Entry) error {
 }
 
 func (c *Cache) validateManagedDirectories() error {
-	expectedBase := filepath.Join(c.Root, ".factile", "cache", "git")
+	expectedBase := filepath.Join(c.StateDir, "cache", "git")
 	if filepath.Clean(c.base) != filepath.Clean(expectedBase) {
 		return fmt.Errorf("%w: cache root identity mismatch", ErrInvalidCache)
 	}
 	for _, path := range []string{
-		c.Root,
-		filepath.Join(c.Root, ".factile"),
-		filepath.Join(c.Root, ".factile", "cache"),
+		c.WorkspaceDir,
+		c.StateDir,
+		filepath.Join(c.StateDir, "cache"),
 		c.base,
 	} {
 		if err := requireSafeDirectory(path); err != nil {

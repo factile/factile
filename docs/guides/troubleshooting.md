@@ -1,12 +1,16 @@
 ---
 type: Guide
 title: Troubleshooting
-description: Diagnose active-root, path, revision, writability, Git, validation, skill, and MCP failures.
+description: Diagnose workspace, bundle, path, revision, writability, Git, validation, skill, and MCP failures.
 tags: [factile, cli, troubleshooting, errors]
 timestamp: 2026-07-15T00:00:00+02:00
 ---
 
 # Troubleshooting
+
+> **Implementation status:** workspace errors below describe the accepted Root
+> Layout v2 target. Released v0.3.1 still emits `no_active_root` for its legacy
+> `.factile/config.toml` layout.
 
 Start with structured state:
 
@@ -18,18 +22,28 @@ factile validate / --json
 
 JSON errors contain a stable `code`, message, and optional details.
 
-## No active root
+## No active workspace
 
-`no_active_root` means Factile found no `.factile/config.toml` from the selected
-working directory or `--root` location.
+`no_active_workspace` means implicit discovery found no ancestor
+`factile.toml` containing `[workspace]`.
 
 ```bash
 factile init
 factile status
 ```
 
-Use `factile init --here` only if the current directory should be the root.
-Otherwise allow the default `docs/` root.
+Use `factile init --here` only for a standalone workspace whose current
+directory is also its root bundle. Otherwise initialize a repository-level
+workspace selecting its `docs/` bundle.
+
+Factile does not search a nearby `docs/` directory, stop at or infer a Git root,
+or promote a bundle-only `factile.toml`. If only `.factile/config.toml` exists,
+migrate it explicitly; v2 does not treat `--root` as a `--workspace` alias.
+
+`invalid_workspace` means a discovered boundary is malformed or unsafe, or the
+exact directory supplied through `--workspace` has no valid `[workspace]`.
+`invalid_bundle` means the selected root or mounted bundle lacks a valid v2
+`[bundle]` manifest.
 
 ## Missing or ambiguous paths
 
@@ -64,7 +78,7 @@ revision.
 
 `source_read_only` is expected for Git mounts and ordinary explicit mounts.
 Edit the authoritative source instead. Only a local mount intentionally created
-with `--writable` can be curated through the consuming root.
+with `--writable` can be curated through the consuming workspace.
 
 ## Git source failures
 

@@ -1,15 +1,15 @@
 ---
 type: Guide
 title: Reading Knowledge
-description: Navigate, read, search, assemble context, inspect links, and validate a Factile root.
+description: Navigate, read, search, assemble context, inspect links, and validate a Factile workspace.
 tags: [factile, cli, reader, context]
 timestamp: 2026-07-15T00:00:00+02:00
 ---
 
 # Reading Knowledge
 
-Reader commands use logical Factile paths and work the same across root-local,
-mounted local, and cached Git sources.
+Reader commands use logical Factile paths and work the same across root-bundle
+content, mounted local bundles, and cached Git bundles.
 
 ## Start shallow
 
@@ -73,7 +73,7 @@ does not infer relationships absent from the authored documents.
 
 ## Narrow with a view
 
-When a root defines a relevant view, inspect it before using it:
+When a workspace defines a relevant view, inspect it before using it:
 
 ```bash
 factile view list

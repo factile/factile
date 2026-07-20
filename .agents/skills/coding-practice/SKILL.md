@@ -43,7 +43,7 @@ factile read <mapped-path> --json
 If `/coding` is unavailable, strip that prefix and use the canonical checkout:
 
 ```bash
-factile --root "${CODING_PRACTICE_ROOT:-/srv/knowledge/coding}" \
+factile --workspace "${CODING_PRACTICE_WORKSPACE:-/srv/knowledge/coding}" \
   read <mapped-path-without-/coding> --json
 ```
 

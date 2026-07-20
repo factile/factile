@@ -1,14 +1,20 @@
 ---
 type: Reference
-title: Command Reference
-description: Compact syntax reference for the implemented Factile CLI surface.
+title: Root Layout v2 Command Reference
+description: Accepted command syntax for the explicit Factile workspace and bundle model.
 tags: [factile, cli, commands, reference]
 timestamp: 2026-07-15T00:00:00+02:00
 ---
 
-# Command Reference
+# Root Layout v2 Command Reference
 
-The current command shape is:
+> **Implementation status:** this page is the accepted Root Layout v2 target
+> under `ft-qhg`. The released v0.3.1 help still reports `--root`,
+> `.factile/config.toml`, and `no_active_root`. V2 intentionally does not alias
+> those inputs. Run the installed binary's `--help` for executable v0.3.1
+> syntax until the cutover is complete.
+
+The Root Layout v2 command shape is:
 
 ```text
 factile [global options] (<command> [args] | <path>)
@@ -21,8 +27,7 @@ Global options may appear before or after a command.
 
 | Option | Purpose |
 |---|---|
-| `--root <path>` | Select the exact Factile root containing `.factile/config.toml`. |
-| `--mount-file <path>` | Use the legacy local-source registry. Git mounts still require an active root. |
+| `--workspace <directory>` | Select exactly one directory containing `factile.toml` with `[workspace]`; do not search from it. |
 | `--json` | Emit stable structured results. |
 | `--format text\|json` | Select output explicitly; JSON is the compatibility-equivalent of `--json`. |
 | `--color auto\|always\|never` | Control human terminal styling. |
@@ -40,10 +45,15 @@ factile version
 factile <path>
 ```
 
-`init` creates or reuses a root; `--here` uses the current directory instead of
-the default `docs/` root. `--agent codex` installs supported agent guidance as
-part of initialization. A lone `/path` reads a document first and lists only
-when no document exists at that path.
+`init` creates or reuses a workspace manifest plus a `docs/factile.toml` root
+bundle. `--here` writes one combined manifest with `[workspace] root = "."` and
+`[bundle]`. `--agent codex` installs supported agent guidance as part of
+initialization. A lone `/path` reads a document first and lists only when no
+document exists at that path.
+
+All commands below are contextual and require a workspace except the two
+explicitly physical bundle commands. Missing context returns
+`no_active_workspace`.
 
 ## Reader commands
 
@@ -119,11 +129,13 @@ document revision.
 
 ```text
 factile bundle find [path]
-factile bundle inspect <source>
+factile bundle inspect <directory>
 ```
 
-These commands discover and inspect local OKF directories. They do not publish
-or install remote bundles.
+`bundle find` searches the named physical directory for valid bundle manifests;
+`bundle inspect` validates one physical bundle directory. They require
+`[bundle]`, need no workspace or logical `/`, create no `.factile/` state, and
+do not publish or install remote bundles.
 
 ## Skills and MCP
 
@@ -146,10 +158,23 @@ factile mcp serve --stdio [--read-only]
 | `1` | general failure or an unsuccessful doctor check |
 | `2` | invalid path syntax, unsupported command, or command usage |
 | `3` | validation or OKF parsing failure |
-| `4` | missing root, mount, path, concept, or wrong path kind |
+| `4` | missing workspace, invalid bundle context, mount, path, concept, or wrong path kind |
 | `5` | existing destination, missing/stale revision, or missing patch section |
 | `6` | read-only, unsafe, unsupported, or unavailable source/revision |
 | `7` | partial failure |
 | `8` | lock timeout |
 
 Use JSON error codes rather than parsing human messages.
+
+## V1 migration
+
+| Legacy v0.3 input | Root Layout v2 |
+|---|---|
+| `.factile/config.toml` | Bundle `[bundle]` metadata in `factile.toml`, plus an enclosing workspace manifest. |
+| `.factile/views.toml` | Workspace-level `factile.views.toml`. |
+| `--root <path>` | `--workspace <directory>`. |
+| `--mount-file <path>` | Spatial `<name>.mount.toml` descriptors in the root bundle. |
+| `no_active_root` | `no_active_workspace`. |
+
+`--root` and `--mount-file` may produce targeted migration diagnostics, but
+they do not activate compatibility behavior in v2.

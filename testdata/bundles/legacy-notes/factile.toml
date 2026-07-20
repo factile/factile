@@ -1,0 +1,8 @@
+version = 2
+
+[bundle]
+name = "legacy-notes"
+title = "Legacy Notes"
+
+[defaults]
+format = "okf"

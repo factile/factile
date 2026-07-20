@@ -41,7 +41,18 @@ func NewLocal(root string) (Local, error) {
 	if err != nil {
 		return Local{}, err
 	}
-	return Local{Root: filepath.Clean(abs)}, nil
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return Local{}, err
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return Local{}, err
+	}
+	if !info.IsDir() {
+		return Local{}, fmt.Errorf("%w: root is not a directory", ErrUnsafePath)
+	}
+	return Local{Root: filepath.Clean(canonical)}, nil
 }
 
 func (s Local) ConceptFile(conceptID string) (string, error) {
@@ -68,7 +79,35 @@ func (s Local) safeJoin(rel string) (string, error) {
 	if cleanTarget != s.Root && !strings.HasPrefix(cleanTarget, s.Root+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: %s", ErrUnsafePath, rel)
 	}
+	if err := rejectSymlinkComponents(s.Root, cleanTarget); err != nil {
+		return "", err
+	}
 	return cleanTarget, nil
+}
+
+func rejectSymlinkComponents(root string, target string) error {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: symlink path component %s", ErrUnsafePath, current)
+		}
+	}
+	return nil
 }
 
 func (s Local) ReadConcept(conceptID string) ([]byte, string, error) {
@@ -318,7 +357,7 @@ func WithFileLocks(targets []string, fn func() error) error {
 			return err
 		}
 		for {
-			f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			f, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 			if err == nil {
 				_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
 				_ = f.Close()

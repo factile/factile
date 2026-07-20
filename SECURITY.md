@@ -1,8 +1,13 @@
 # Security Policy
 
 Factile is local-first software. It reads and writes local OKF content, can
-materialize read-only Git repositories beneath an active root, and can expose
-that content through the local UI and stdio MCP server.
+materialize read-only Git repositories beneath an explicit workspace, and can
+expose that workspace's composed root-bundle tree through the local UI and
+stdio MCP server.
+
+Factile requires an explicit workspace manifest and root-bundle manifest for
+contextual commands. Detached bundle inspection remains read-only and does not
+create workspace state.
 
 ## Git Source Boundary
 
@@ -12,17 +17,20 @@ downloads, does not initialize submodules, and does not execute hooks supplied
 by a remote repository. Repository symlinks are rejected rather than followed.
 
 Resolved commits are materialized as immutable generated snapshots under the
-active root's `.factile/cache/git/` directory. Cache directories are private to
-the current user and ignored by the root repository. Git mounts remain
+workspace's `.factile/cache/git/` directory. Cache directories are private to
+the current user and ignored by the workspace repository. Git mounts remain
 read-only at the workspace boundary even if a descriptor is hand-edited.
+V2 initialization records `/.factile/` in the workspace-root `.gitignore`
+without eagerly creating the state directory.
 
 Factile rejects Git URI passwords, HTTP(S) userinfo, and every literal `?`
 query or `#` fragment delimiter before Git execution or descriptor creation,
 including an empty trailing delimiter and `git+` compatibility sources.
 Percent-encoded `%3F` and `%23` path data remain valid. Use Git's normal
-credential helper or SSH agent/key configuration instead. Errors, traces, and
-source status redact rejected sources. Do not include secrets in a mount
-command, descriptor, or repository URL.
+credential helper, OS keychain, SSH agent/key configuration, or process
+environment instead. Errors, traces, and source status redact rejected sources.
+Do not include secrets in a mount command, `factile.toml`,
+`factile.views.toml`, `<name>.mount.toml`, `.factile/` state, or repository URL.
 
 Automatic floating-source checks occur no more than once per 24 hours. An
 explicit `factile refresh <mount-path>` performs an immediate check. If the

@@ -8,6 +8,10 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Editing Documents Safely
 
+> **Implementation status:** the workspace/root-bundle terminology below is the
+> accepted Root Layout v2 target. Released v0.3.1 still names its writable local
+> source the active root.
+
 Document mutation is explicit. Existing-document operations require the
 revision observed by the caller so a concurrent change is not overwritten.
 
@@ -90,9 +94,10 @@ intentional.
 
 ## Safety boundary
 
-Writes are allowed only in the active root or an explicitly writable local
+Writes are allowed only in the workspace's root bundle or an explicitly writable local
 mount. Git and ordinary explicit mounts return `source_read_only`. The
-workspace locks mutable state before its final read and revision check, then
+workspace keeps locks beneath its ignored `.factile/` state directory, locks
+before its final read and revision check, then
 validates before returning the saved result.
 
 Finish with a focused read and validation:

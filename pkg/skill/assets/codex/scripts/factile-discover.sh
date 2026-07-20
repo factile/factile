@@ -6,6 +6,7 @@ if ! command -v factile >/dev/null 2>&1; then
   exit 1
 fi
 
+factile status --json
 factile list / --json
 factile list / --brief --json
 if [ "$#" -gt 0 ]; then

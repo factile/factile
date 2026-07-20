@@ -21,8 +21,9 @@ const (
 )
 
 type Error struct {
-	Code    string
-	Message string
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Details map[string]string `json:"details,omitempty"`
 }
 
 func (e *Error) Error() string {
@@ -107,7 +108,12 @@ func NormalizePath(input string) (string, error) {
 	}
 	for _, part := range strings.Split(strings.TrimPrefix(clean, "/"), "/") {
 		if strings.EqualFold(part, ".factile") || strings.EqualFold(part, ".git") {
-			return "", &Error{Code: "invalid_path", Message: "Factile path must not address internal .factile or .git directories"}
+			private := strings.ToLower(part)
+			return "", &Error{
+				Code:    "invalid_path",
+				Message: "Private path segment " + private + " is not addressable.",
+				Details: map[string]string{"path": clean},
+			}
 		}
 	}
 	return clean, nil
@@ -143,12 +149,88 @@ func LoadMounts(opts LoadOptions) ([]Mount, error) {
 	if len(descriptorMounts) > 0 {
 		merged = overlayMounts(merged, descriptorMounts)
 	}
-	if err := validateRootMountConflicts(workDir, merged); err != nil {
+	return composeRootMounts(workDir, merged)
+}
+
+// LoadWorkspaceMounts builds the logical tree for a resolved Root Layout v2
+// workspace. Only the selected root bundle contributes local content and mount
+// descriptors; the caller's working directory has no role after resolution.
+func LoadWorkspaceMounts(context WorkspaceContext) ([]Mount, error) {
+	descriptorMounts, err := LoadDescriptorMounts(context.RootBundleDir)
+	if err != nil {
 		return nil, err
 	}
-	merged = append(merged, rootMount(workDir))
-	sortMounts(merged)
-	return merged, nil
+	if err := validateLocalBundleMounts(context, descriptorMounts); err != nil {
+		return nil, err
+	}
+	return composeRootMounts(context.RootBundleDir, descriptorMounts)
+}
+
+func composeRootMounts(root string, mounts []Mount) ([]Mount, error) {
+	if err := validateRootMountConflicts(root, mounts); err != nil {
+		return nil, err
+	}
+	mounts = append(mounts, rootMount(root))
+	sortMounts(mounts)
+	return mounts, nil
+}
+
+func validateLocalBundleMounts(context WorkspaceContext, mounts []Mount) error {
+	for index := range mounts {
+		mount, err := ValidateWorkspaceMount(context, mounts[index])
+		if err != nil {
+			return err
+		}
+		mounts[index] = mount
+	}
+	return nil
+}
+
+// ValidateWorkspaceMount validates and canonicalizes the physical source of a
+// mount before it participates in a Root Layout v2 composition.
+func ValidateWorkspaceMount(context WorkspaceContext, mount Mount) (Mount, error) {
+	if mount.Kind != SourceKindLocal {
+		return mount, nil
+	}
+	if mount.SourcePath == "" {
+		return Mount{}, invalidMountedBundle(mount)
+	}
+	sourceDir, err := canonicalDir(mount.SourcePath)
+	if err != nil {
+		return Mount{}, invalidMountedBundle(mount)
+	}
+	if privateWorkspaceSource(context, mount.SourcePath) || privateWorkspaceSource(context, sourceDir) {
+		return Mount{}, layoutError(
+			ErrInvalidBundle,
+			"Mounted local source must not use private .factile or .git directories.",
+			map[string]string{"mount_path": mount.MountPath, "source": mount.Source},
+		)
+	}
+	manifest, err := LoadManifest(sourceDir)
+	if err != nil || manifest.Bundle == nil {
+		return Mount{}, invalidMountedBundle(mount)
+	}
+	mount.SourcePath = sourceDir
+	return mount, nil
+}
+
+func privateWorkspaceSource(context WorkspaceContext, sourceDir string) bool {
+	if contained, err := pathContainedBy(context.StateDir, sourceDir); err == nil && contained {
+		return true
+	}
+	if contained, err := pathContainedBy(context.WorkspaceDir, sourceDir); err == nil && contained {
+		rel, err := filepath.Rel(context.WorkspaceDir, sourceDir)
+		return err != nil || hasPrivatePathSegment(rel)
+	}
+	return false
+}
+
+func invalidMountedBundle(mount Mount) error {
+	return layoutError(
+		ErrInvalidBundle,
+		"Mounted local source has no valid factile.toml.",
+		map[string]string{"mount_path": mount.MountPath, "source": mount.Source},
+	)
 }
 
 func overlayMounts(base []Mount, overlay []Mount) []Mount {
@@ -196,6 +278,8 @@ func defaultWorkDir(workDir string) (string, error) {
 	return filepath.Abs(workDir)
 }
 
+// RequireRoot resolves the retained Root Layout v1 context.
+// Deprecated: use ResolveWorkspace for Root Layout v2.
 func RequireRoot(opts LoadOptions) (string, error) {
 	root, ok, err := FindRoot(opts)
 	if err != nil {
@@ -396,6 +480,7 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 	}
 	if fileExists {
 		target.Kind = TargetConcept
+		target.RelPath = rel + ".md"
 		target.Exists = true
 		return target, nil
 	}

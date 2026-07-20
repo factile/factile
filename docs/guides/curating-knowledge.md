@@ -1,15 +1,19 @@
 ---
 type: Guide
-title: Curating Roots, Mounts, and Views
-description: Safely compose local and Git sources, refresh snapshots, manage views, and scaffold directories.
+title: Curating Workspaces, Mounts, and Views
+description: Safely compose bundle and Git sources, refresh workspace snapshots, manage views, and scaffold directories.
 tags: [factile, cli, curator, mounts, views]
 timestamp: 2026-07-15T00:00:00+02:00
 ---
 
-# Curating Roots, Mounts, and Views
+# Curating Workspaces, Mounts, and Views
+
+> **Implementation status:** this guide describes the accepted Root Layout v2
+> target. Released v0.3.1 still stores root and view metadata below
+> `.factile/`.
 
 Curate only when you own the composition. Reader work normally needs no mount,
-view, or root mutation.
+view, or workspace-composition mutation.
 
 ## Mount a local source
 
@@ -28,8 +32,9 @@ factile mount ./reference /reference \
   --description "Approved local reference material."
 ```
 
-When omitted, title and description can be derived from source-root metadata or
-its `overview.md`; the mount path supplies a final title fallback. The resolved
+When omitted, title and description can be derived from source bundle
+`factile.toml` metadata or its `overview.md`; the mount path supplies a final
+title fallback. The resolved
 values are written into the descriptor rather than inherited live.
 
 ## Mount a Git source
@@ -45,8 +50,10 @@ Omitting a selector follows remote `HEAD`. `--ref` follows a branch or tag.
 `--revision` pins one full 40-hex SHA-1 commit. The selectors are mutually
 exclusive, and Git mounts cannot be writable.
 
-Use credentials through normal Git credential helpers or SSH configuration.
-Do not put credentials, query strings, or fragments in recorded source URIs.
+Use credentials through normal Git credential helpers, an OS keychain, SSH
+agent/key, or the process environment. Do not put credentials, query strings,
+or fragments in workspace or bundle manifests, descriptors, state, or recorded
+source URIs.
 
 ## Inspect, refresh, and remove
 
@@ -75,7 +82,8 @@ factile view delete onboarding
 ```
 
 `view set` creates or replaces one view. Repeat `--path` to select multiple
-scopes. Views are lenses only; never use one to hide private material.
+scopes in workspace-level `factile.views.toml`. Views are lenses only; never
+use one to hide private material.
 
 ## Scaffold a directory
 

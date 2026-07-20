@@ -8,6 +8,10 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Human Text and JSON Interfaces
 
+> **Implementation status:** workspace status fields below are the accepted
+> Root Layout v2 target. Released v0.3.1 still renders its legacy active-root
+> summary.
+
 Factile serves two command-line audiences from the same results:
 
 - text output helps a person scan and act; and
@@ -34,8 +38,10 @@ changing structured automation behavior.
 
 ## Workspace summary
 
-Bare `factile` and `factile status` show the same concise summary: active root,
-visible knowledge, views, sources, health, and useful next commands.
+Bare `factile` and `factile status` show the same concise summary:
+`workspace_dir`, `root_bundle_dir`, `state_dir`, visible knowledge, views,
+sources, health, and useful next commands. `current_bundle_dir` may be shown as
+informational context, but it never changes the selected logical `/`.
 
 The summary is a starting point, not a recursive dump. Use `list`, `stat`, or
 `context` to inspect more.

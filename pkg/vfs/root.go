@@ -24,10 +24,14 @@ type RootDefaults struct {
 	Format string `json:"format,omitempty"`
 }
 
+// RootConfigPath returns the retained Root Layout v1 config path.
+// Deprecated: use ManifestPath for Root Layout v2.
 func RootConfigPath(root string) string {
 	return filepath.Join(root, filepath.FromSlash(rootConfigRelativePath))
 }
 
+// LoadRootConfig loads retained Root Layout v1 metadata.
+// Deprecated: use LoadManifest for Root Layout v2.
 func LoadRootConfig(root string) (RootConfig, error) {
 	filename := RootConfigPath(root)
 	file, err := os.Open(filename)
@@ -142,6 +146,9 @@ func parseRootString(raw string, key string, lineNo int) (string, error) {
 	return value, nil
 }
 
+// FindRoot implements retained Root Layout v1 discovery for callers awaiting
+// the ft-qhg.3 runtime cutover.
+// Deprecated: use ResolveWorkspace for Root Layout v2.
 func FindRoot(opts LoadOptions) (string, bool, error) {
 	if opts.Root != "" {
 		root, err := filepath.Abs(opts.Root)

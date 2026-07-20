@@ -1,4 +1,9 @@
-version = 1
+version = 2
+
+[workspace]
+root = "."
+
+[bundle]
 name = "ui-smoke"
 title = "Local Factile workspace"
 description = "Small public fixture for the embedded UI smoke."

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 const TargetCodex = "codex"
@@ -194,7 +195,7 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	if err := validateTarget(target); err != nil {
 		return DoctorResult{}, err
 	}
-	workDir, err := defaultWorkDir(opts.WorkDir)
+	workDir, err := doctorWorkDir(opts.WorkDir)
 	if err != nil {
 		return DoctorResult{}, err
 	}
@@ -213,6 +214,7 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	} else {
 		add("factile_on_path", "fail", "factile is not on PATH")
 	}
+	addWorkspaceLayoutCheck(workDir, opts.WorkDir != "", add)
 	repoSkill := filepath.Join(workDir, ".agents", "skills", "factile", "SKILL.md")
 	userSkill := filepath.Join(codexHome(), "skills", "factile", "SKILL.md")
 	repoSkillExists := fileExists(repoSkill)
@@ -234,9 +236,13 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	} else {
 		add("agents_managed_block", "warning", "Repo-scope Factile guidance is not installed")
 	}
+	addGuidanceLayoutCheck(repoSkill, userSkill, agentsPath, repoSkillExists, userSkillExists, agentsHasBlock, add)
 	configPath := filepath.Join(workDir, ".codex", "config.toml")
 	configOK := fileContains(configPath, "[mcp_servers.factile]") && fileContains(configPath, "mcp") && fileContains(configPath, "serve")
-	if repoExpected && configOK {
+	configLegacy := managedFileBlockContains(configPath, MCPBlockStart, MCPBlockEnd, "--root", "--mount-file")
+	if configLegacy {
+		add("mcp_config", "fail", "Local Factile MCP config uses a legacy selector; rerun `factile skill install codex --scope repo`.")
+	} else if repoExpected && configOK {
 		add("mcp_config", "pass", ".codex/config.toml contains a local Factile MCP server entry")
 	} else if repoExpected {
 		add("mcp_config", "fail", "Repo skill exists but .codex/config.toml does not contain the Factile MCP server entry")
@@ -251,7 +257,7 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 }
 
 func installRepo(opts InstallOptions) (InstallResult, error) {
-	workDir, err := defaultWorkDir(opts.WorkDir)
+	workDir, err := repoWorkDir(opts.WorkDir)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -296,7 +302,7 @@ func installUser(opts InstallOptions) (InstallResult, error) {
 }
 
 func uninstallRepo(opts InstallOptions) (UninstallResult, error) {
-	workDir, err := defaultWorkDir(opts.WorkDir)
+	workDir, err := repoWorkDir(opts.WorkDir)
 	if err != nil {
 		return UninstallResult{}, err
 	}
@@ -378,13 +384,13 @@ func skillModeSection(mode string) string {
 		b.WriteString("Curator mode is installed. Use Factile to manage local and read-only Git path mounts, views, and OKF documents when the user asks for curation work.\n\n")
 		b.WriteString("- Use `factile mount`, `factile unmount`, and `factile mounts` to manage `<name>.mount.toml` path mounts.\n")
 		b.WriteString("- Git mounts are always read-only; use `factile refresh <mount-path>` only for an immediate upstream check.\n")
-		b.WriteString("- Use `factile view list`, `factile view inspect`, `factile view set`, and `factile view delete` to manage `.factile/views.toml` views.\n")
+		b.WriteString("- Use `factile view list`, `factile view inspect`, `factile view set`, and `factile view delete` to manage workspace-level `factile.views.toml`.\n")
 		b.WriteString("- Use `factile list --brief`, `factile stat`, `factile validate`, and `factile context` before changing knowledge.\n")
 		b.WriteString("- Use narrower paths or `--view <id>` when the task needs a smaller reader scope.\n")
 		b.WriteString("- Use write commands only with required revisions and only when the user asked to change knowledge.\n")
 		b.WriteString("- Validate the affected path after mount, view, or content changes.\n")
 	default:
-		b.WriteString("Reader mode is installed. Use Factile to discover and consume local knowledge without mutating root config, mount descriptors, views, or OKF documents.\n\n")
+		b.WriteString("Reader mode is installed. Use Factile to discover and consume workspace knowledge without mutating workspace or bundle manifests, mount descriptors, views, or OKF documents.\n\n")
 		b.WriteString("- Prefer `factile list / --brief --json`, `factile stat <path> --json`, and `factile context / '<task>' --json`.\n")
 		b.WriteString("- Use a narrower path or `--view <id>` when the task scope is specific.\n")
 		b.WriteString("- Inspect Git mount status with `factile mounts --json`; explicit refresh changes generated cache state, not source content.\n")
@@ -412,9 +418,9 @@ func agentsManagedBlock(mode string, profile string) string {
 
 func agentsModeBlock(mode string) string {
 	if mode == ModeCurator {
-		return "Mode: curator. Curation may use `factile mount`, `factile unmount`, `factile mounts`, `factile view ...`, and revision-aware write commands when the user asks to change knowledge. Mounts are `<name>.mount.toml`; views live in `.factile/views.toml`. Validate affected paths after changes."
+		return "Mode: curator. Curation may use `factile mount`, `factile unmount`, `factile mounts`, `factile view ...`, and revision-aware write commands when the user asks to change knowledge. Mounts are `<name>.mount.toml`; views live in workspace-level `factile.views.toml`. Validate affected paths after changes."
 	}
-	return "Mode: reader. Do not edit Factile/OKF documents, `.factile/views.toml`, `<name>.mount.toml`, or root config unless the user explicitly asks to curate knowledge."
+	return "Mode: reader. Do not edit Factile/OKF documents, `factile.toml`, `factile.views.toml`, or `<name>.mount.toml` unless the user explicitly asks to curate knowledge. Never put authored files in `.factile/`."
 }
 
 func agentsProfileBlock(profile string) string {
@@ -443,11 +449,163 @@ func validateTarget(target string) error {
 	return nil
 }
 
+func repoWorkDir(workDir string) (string, error) {
+	if workDir != "" {
+		workspace, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{Workspace: workDir})
+		if err != nil {
+			return "", factile.NormalizeError(err)
+		}
+		return workspace.WorkspaceDir, nil
+	}
+	cwd, err := defaultWorkDir("")
+	if err != nil {
+		return "", err
+	}
+	workspace, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: cwd})
+	if err == nil {
+		return workspace.WorkspaceDir, nil
+	}
+	if factile.ErrorCode(factile.NormalizeError(err)) == factile.ErrNoActiveWorkspace {
+		return cwd, nil
+	}
+	return "", factile.NormalizeError(err)
+}
+
+func doctorWorkDir(workDir string) (string, error) {
+	base, err := defaultWorkDir(workDir)
+	if err != nil {
+		return "", err
+	}
+	opts := vfs.ResolveWorkspaceOptions{WorkDir: base}
+	if workDir != "" {
+		opts = vfs.ResolveWorkspaceOptions{Workspace: base}
+	}
+	workspace, err := vfs.ResolveWorkspace(opts)
+	if err == nil {
+		return workspace.WorkspaceDir, nil
+	}
+	return base, nil
+}
+
 func defaultWorkDir(workDir string) (string, error) {
 	if workDir != "" {
 		return filepath.Abs(workDir)
 	}
 	return os.Getwd()
+}
+
+func addWorkspaceLayoutCheck(workDir string, exact bool, add func(string, string, string)) {
+	resolveOptions := vfs.ResolveWorkspaceOptions{WorkDir: workDir}
+	if exact {
+		resolveOptions = vfs.ResolveWorkspaceOptions{Workspace: workDir}
+	}
+	workspace, err := vfs.ResolveWorkspace(resolveOptions)
+	if err == nil {
+		root := workspace.RootBundleDir
+		if rel, relErr := filepath.Rel(workspace.WorkspaceDir, root); relErr == nil {
+			root = filepath.ToSlash(rel)
+		}
+		add("workspace_layout", "pass", "Workspace factile.toml selects root bundle "+root)
+		return
+	}
+
+	normalized := factile.NormalizeError(err)
+	if legacyPath, migration := legacyLayoutDetails(workDir, normalized); legacyPath != "" {
+		message := "Legacy Factile layout found at " + legacyPath + "."
+		if migration != "" {
+			message += " " + migration
+		} else {
+			message += " Create a workspace factile.toml and root-bundle factile.toml, then move views to workspace-level factile.views.toml."
+		}
+		add("workspace_layout", "fail", message)
+		return
+	}
+
+	if factile.ErrorCode(normalized) == factile.ErrNoActiveWorkspace {
+		add("workspace_layout", "warning", "No Factile workspace is active; run `factile init` before using contextual reader or MCP commands.")
+		return
+	}
+	add("workspace_layout", "fail", normalized.Error())
+}
+
+func legacyLayoutDetails(workDir string, err error) (string, string) {
+	if app, ok := err.(*factile.AppError); ok {
+		legacy, _ := app.Details["legacy_path"].(string)
+		migration, _ := app.Details["migration"].(string)
+		if legacy != "" {
+			return legacy, migration
+		}
+	}
+	for _, filename := range []string{
+		filepath.Join(workDir, ".factile", "config.toml"),
+		filepath.Join(workDir, ".factile", "views.toml"),
+		filepath.Join(workDir, "docs", ".factile", "config.toml"),
+		filepath.Join(workDir, "docs", ".factile", "views.toml"),
+	} {
+		if fileExists(filename) {
+			return filename, ""
+		}
+	}
+	return "", ""
+}
+
+func addGuidanceLayoutCheck(repoSkill, userSkill, agentsPath string, repoSkillExists, userSkillExists, agentsHasBlock bool, add func(string, string, string)) {
+	if !repoSkillExists && !userSkillExists && !agentsHasBlock {
+		add("guidance_layout", "warning", "No installed Factile guidance is available to check")
+		return
+	}
+	var stale []string
+	if repoSkillExists && fileContainsAny(repoSkill, legacyGuidanceMarkers()...) {
+		stale = append(stale, "repo skill")
+	}
+	if userSkillExists && fileContainsAny(userSkill, legacyGuidanceMarkers()...) {
+		stale = append(stale, "user skill")
+	}
+	if agentsHasBlock && managedFileBlockContains(agentsPath, AgentsBlockStart, AgentsBlockEnd, legacyGuidanceMarkers()...) {
+		stale = append(stale, "AGENTS.md block")
+	}
+	if len(stale) > 0 {
+		add("guidance_layout", "fail", "Legacy Factile guidance remains in "+strings.Join(stale, ", ")+"; rerun `factile skill install codex --scope repo` or `--scope user` for the affected scope.")
+		return
+	}
+	add("guidance_layout", "pass", "Installed Factile guidance describes workspace and bundle layout")
+}
+
+func legacyGuidanceMarkers() []string {
+	return []string{".factile/config.toml", ".factile/views.toml", "`--root", "no_active_root", "A Factile root is marked"}
+}
+
+func fileContainsAny(filename string, needles ...string) bool {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return false
+	}
+	for _, needle := range needles {
+		if strings.Contains(string(data), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func managedFileBlockContains(filename, start, end string, needles ...string) bool {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return false
+	}
+	content := string(data)
+	startIndex := strings.Index(content, start)
+	endIndex := strings.Index(content, end)
+	if startIndex < 0 || endIndex <= startIndex {
+		return false
+	}
+	block := content[startIndex : endIndex+len(end)]
+	for _, needle := range needles {
+		if strings.Contains(block, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func codexHome() string {

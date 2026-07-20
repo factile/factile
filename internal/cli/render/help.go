@@ -22,7 +22,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		return err
 	}
 	if err := r.renderHelpSection(w, "Start here", []helpItem{
-		{command: "factile init", description: "Create or reuse the active Factile root"},
+		{command: "factile init", description: "Create or reuse a workspace and root bundle"},
 		{command: "factile", description: "Show this workspace summary"},
 		{command: "factile status", description: "Show this workspace summary"},
 		{command: "factile /", description: "Browse or read from a path"},
@@ -43,10 +43,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "  factile [global options] (<command> [args] | <path>)"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "  global options: --root <path>, --mount-file <path>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "  --mount-file is a legacy local-source registry; Git mounts require an active Factile root."); err != nil {
+	if _, err := fmt.Fprintln(w, "  global options: --workspace <directory>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, "  Global options may appear before or after the command."); err != nil {
@@ -91,7 +88,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		}},
 		{title: "Bundle admin", items: []helpItem{
 			{command: "bundle find [path]", description: "Find local OKF bundles"},
-			{command: "bundle inspect <source>", description: "Inspect a source directory"},
+			{command: "bundle inspect <directory>", description: "Inspect one physical bundle"},
 		}},
 		{title: "Agents and MCP", items: []helpItem{
 			{command: "skill install codex --scope repo|user", description: "Install agent guidance"},

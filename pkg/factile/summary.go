@@ -5,18 +5,19 @@ import (
 	"fmt"
 
 	"github.com/factile/factile/pkg/version"
-	"github.com/factile/factile/pkg/vfs"
 )
 
 func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
-	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	workspace, err := w.resolvedWorkspace()
 	if err != nil {
 		return SummaryResult{}, err
 	}
 	result := SummaryResult{
 		Workspace: WorkspaceSummary{
-			Path:    root,
-			Version: version.Current().Version,
+			WorkspaceDir:  workspace.WorkspaceDir,
+			RootBundleDir: workspace.RootBundleDir,
+			StateDir:      workspace.StateDir,
+			Version:       version.Current().Version,
 		},
 	}
 	var health []HealthSummary

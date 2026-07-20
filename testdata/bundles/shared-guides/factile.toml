@@ -1,0 +1,8 @@
+version = 2
+
+[bundle]
+name = "shared-guides"
+title = "Shared Guides"
+
+[defaults]
+format = "okf"

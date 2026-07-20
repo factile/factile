@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -20,7 +19,6 @@ var (
 
 const (
 	defaultGitTimeout  = 2 * time.Minute
-	maxGitErrorLength  = 4096
 	maxGitOutputLength = 16 << 20
 )
 
@@ -84,11 +82,10 @@ func (r Runner) run(ctx context.Context, dir, indexPath string, args ...string) 
 	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return nil, ErrGitUnavailable
 	}
-	message := sanitizeGitError(output.String())
-	if message == "" {
-		return nil, ErrGitCommand
-	}
-	return nil, fmt.Errorf("%w: %s", ErrGitCommand, message)
+	// Git and credential helpers share stderr. Returning subprocess output could
+	// expose helper-provided secrets that cannot be reliably recognized, so
+	// failed commands expose only the stable error category.
+	return nil, ErrGitCommand
 }
 
 var repositoryEnvironment = map[string]struct{}{
@@ -164,27 +161,4 @@ func (b *boundedBuffer) Write(data []byte) (int, error) {
 	}
 	_, _ = b.Buffer.Write(data)
 	return written, nil
-}
-
-var (
-	credentialURLPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+@`)
-	secretValuePattern   = regexp.MustCompile(`(?i)\b(password|passwd|token|secret|access_token)=([^&\s]+)`)
-	authorizationPattern = regexp.MustCompile(`(?i)(authorization\s*:\s*(?:basic|bearer)\s+)[^\s]+`)
-)
-
-func sanitizeGitError(message string) string {
-	message = credentialURLPattern.ReplaceAllString(message, `${1}[redacted]@`)
-	message = secretValuePattern.ReplaceAllString(message, `${1}=[redacted]`)
-	message = authorizationPattern.ReplaceAllString(message, `${1}[redacted]`)
-	message = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
-			return r
-		}
-		return -1
-	}, message)
-	message = strings.TrimSpace(message)
-	if len(message) > maxGitErrorLength {
-		message = message[:maxGitErrorLength] + "..."
-	}
-	return message
 }

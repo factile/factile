@@ -1,0 +1,8 @@
+version = 2
+
+[bundle]
+name = "product-docs"
+title = "Product Docs"
+
+[defaults]
+format = "okf"

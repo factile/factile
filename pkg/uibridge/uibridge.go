@@ -62,6 +62,9 @@ type curatorWorkspace interface {
 }
 
 func Start(ws factile.Workspace, opts Options) (*Server, error) {
+	if _, err := ws.Summary(context.Background()); err != nil {
+		return nil, factile.NormalizeError(err)
+	}
 	listener, err := listenLoopback(opts.Port)
 	if err != nil {
 		return nil, err
@@ -241,24 +244,13 @@ func sourceHandler(ws readerWorkspace, opts Options) http.HandlerFunc {
 		}
 		summary, err := ws.Summary(r.Context())
 		if err != nil {
-			if factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrNoActiveRoot {
-				writeError(w, errorStatus(err), err)
-				return
-			}
-			writeJSON(w, map[string]any{
-				"source": map[string]any{
-					"title":       "Local Factile workspace",
-					"description": "Active local workspace",
-					"writable":    opts.Curator,
-					"metadata":    map[string]any{},
-				},
-			})
+			writeError(w, errorStatus(err), err)
 			return
 		}
 		writeJSON(w, map[string]any{
 			"source": map[string]any{
 				"title":       "Local Factile workspace",
-				"description": summary.Workspace.Path,
+				"description": summary.Workspace.WorkspaceDir,
 				"writable":    opts.Curator,
 				"metadata": map[string]any{
 					"workspace": summary.Workspace,
@@ -280,10 +272,6 @@ func viewsHandler(ws readerWorkspace) http.HandlerFunc {
 		}
 		result, err := ws.ListViews(r.Context())
 		if err != nil {
-			if factile.ErrorCode(factile.NormalizeError(err)) == factile.ErrNoActiveRoot {
-				writeJSON(w, factile.ViewListResult{Views: []factile.View{}})
-				return
-			}
 			writeError(w, errorStatus(err), err)
 			return
 		}
@@ -846,7 +834,7 @@ func intQuery(r *http.Request, name string, fallback int) (int, error) {
 }
 
 func writeUnsupportedSource(w http.ResponseWriter) {
-	writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrUnsupportedSource, "Local UI bridge reads the active root only"))
+	writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrUnsupportedSource, "Local UI bridge reads the active workspace only"))
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
@@ -871,7 +859,8 @@ func errorStatus(err error) int {
 	switch factile.ErrorCode(factile.NormalizeError(err)) {
 	case factile.ErrInvalidPath:
 		return http.StatusBadRequest
-	case factile.ErrConceptNotFound, factile.ErrMountNotFound, factile.ErrPathIsNotConcept, factile.ErrPathIsNotBundle:
+	case factile.ErrNoActiveWorkspace, factile.ErrInvalidWorkspace, factile.ErrInvalidBundle,
+		factile.ErrConceptNotFound, factile.ErrMountNotFound, factile.ErrPathIsNotConcept, factile.ErrPathIsNotBundle:
 		return http.StatusNotFound
 	case factile.ErrConceptAlreadyExist, factile.ErrRevisionMismatch:
 		return http.StatusConflict

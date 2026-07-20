@@ -36,8 +36,8 @@ jobs:
       - name: Prepare npm packages
         run: node packaging/npm/scripts/prepare-packages.mjs --dist dist --out dist/npm --version "${GITHUB_REF_NAME#v}"
       - name: Smoke test npm packages
-        run: node packaging/npm/scripts/smoke-test.mjs --root dist/npm
+        run: node packaging/npm/scripts/smoke-test.mjs --packages-dir dist/npm
       - name: Publish npm packages
-        run: node packaging/npm/scripts/publish.mjs --root dist/npm
+        run: node packaging/npm/scripts/publish.mjs --packages-dir dist/npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

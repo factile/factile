@@ -103,16 +103,17 @@ func (w *LocalWorkspace) cardForPath(ctx context.Context, normalized string) (Ca
 }
 
 func (w *LocalWorkspace) rootCard() (CardSummary, error) {
-	if w.opts.MountFile != "" {
-		return CardSummary{Path: "/", Title: "Factile Root"}, nil
-	}
-	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	workspace, err := w.resolvedWorkspace()
 	if err != nil {
 		return CardSummary{}, err
 	}
-	metadata, err := vfs.LoadRootConfig(root)
+	manifest, err := vfs.LoadManifest(workspace.RootBundleDir)
 	if err != nil {
 		return CardSummary{}, NormalizeError(err)
+	}
+	metadata := manifest.Bundle
+	if metadata == nil {
+		return CardSummary{}, NormalizeError(&vfs.Error{Code: vfs.ErrInvalidBundle, Message: "Workspace root bundle has no valid factile.toml."})
 	}
 	title := metadata.Title
 	if title == "" {

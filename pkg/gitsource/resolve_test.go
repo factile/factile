@@ -8,14 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/factile/factile/pkg/vfs"
 )
 
 func TestResolveDefaultHeadNamedRefTagAndPinnedRevision(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +90,7 @@ func TestResolveRejectsSHA256RevisionBeforeGitOrEntryMutation(t *testing.T) {
 	root := writeGitSourceRoot(t)
 	runner := NewRunner()
 	runner.GitPath = filepath.Join(t.TempDir(), "missing-git")
-	cache, err := OpenCache(vfs.LoadOptions{Root: root}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, root), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +131,7 @@ func TestResolveRejectsURIQueryAndFragmentDelimitersBeforeGit(t *testing.T) {
 		gitCalls++
 		return exec.CommandContext(ctx, name, args...)
 	}
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +184,7 @@ func TestResolveSHA256RepositoryReturnsStableNoSnapshotFailure(t *testing.T) {
 	remotePath := filepath.Join(t.TempDir(), "remote.git")
 	gitRun(t, runner, "", "clone", "--bare", "--", workPath, remotePath)
 	remote := fileRemote(t, remotePath)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +219,7 @@ func TestResolveSHA256RepositoryReturnsStableNoSnapshotFailure(t *testing.T) {
 func TestResolveMovedRefAndFailureRetainsSelectedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +300,7 @@ func TestResolveMovedRefAndFailureRetainsSelectedSnapshot(t *testing.T) {
 
 func TestResolveRejectsInvalidIntentAndRepositorySymlinks(t *testing.T) {
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +351,7 @@ func TestResolveEmptyRemoteAndMissingPinnedCommit(t *testing.T) {
 	if _, err := runner.Run(ctx, "", "init", "--bare", "--", remotePath); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +367,7 @@ func TestResolveEmptyRemoteAndMissingPinnedCommit(t *testing.T) {
 func TestDeletedSelectedRefUsesStaleSnapshot(t *testing.T) {
 	ctx := context.Background()
 	fixture := newResolutionFixture(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +461,7 @@ func TestResolveDoesNotRunRemoteHooksInitializeSubmodulesOrDownloadLFS(t *testin
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,10 +564,7 @@ func (f *resolutionFixture) createSymlinkBranch(t *testing.T) error {
 
 func writeResolutionContent(t *testing.T, root, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".factile"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte("version = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "factile.toml"), []byte("version = 2\n\n[bundle]\nname = \"git-fixture\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "overview.md"), []byte("# "+content+"\n"), 0o644); err != nil {

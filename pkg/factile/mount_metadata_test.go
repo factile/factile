@@ -16,8 +16,9 @@ func TestMountMetadataDefaultsPreferExplicitValuesThenRootConfig(t *testing.T) {
 	root := filepath.Join(tmp, "root")
 	source := filepath.Join(tmp, "source")
 	writeRootConfig(t, root)
-	mustWriteWorkspace(t, filepath.Join(source, ".factile", "config.toml"), `version = 1
+	mustWriteWorkspace(t, filepath.Join(source, "factile.toml"), `version = 2
 
+[bundle]
 name = "shared-engineering"
 title = "Shared Engineering Practice"
 description = "Portable engineering defaults."
@@ -78,6 +79,7 @@ func TestMountMetadataDefaultsUseOverviewThenMountPath(t *testing.T) {
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 
 	overviewSource := filepath.Join(tmp, "overview-source")
+	mustWriteWorkspace(t, filepath.Join(overviewSource, "factile.toml"), "version = 2\n\n[bundle]\nname = \"overview-source\"\n")
 	mustWriteWorkspace(t, filepath.Join(overviewSource, "overview.md"), `---
 type: Reference
 title: Engineering Handbook
@@ -98,6 +100,7 @@ description: Shared engineering workflows and principles.
 	if err := os.MkdirAll(plainSource, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	mustWriteWorkspace(t, filepath.Join(plainSource, "factile.toml"), "version = 2\n\n[bundle]\nname = \"plain-source\"\n")
 	plain, err := ws.Mount(ctx, plainSource, "/plain-notes", factile.MountOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +110,7 @@ description: Shared engineering workflows and principles.
 	}
 
 	malformedSource := filepath.Join(tmp, "malformed-source")
-	mustWriteWorkspace(t, filepath.Join(malformedSource, ".factile", "config.toml"), "not valid root config\n")
+	mustWriteWorkspace(t, filepath.Join(malformedSource, "factile.toml"), "version = 2\n\n[bundle]\nname = \"malformed-source\"\n")
 	mustWriteWorkspace(t, filepath.Join(malformedSource, "overview.md"), "# Missing frontmatter\n")
 	malformed, err := ws.Mount(ctx, malformedSource, "/malformed-source", factile.MountOptions{})
 	if err != nil {
@@ -118,11 +121,12 @@ description: Shared engineering workflows and principles.
 	}
 }
 
-func TestMountMetadataDefaultsPersistInLegacyRegistry(t *testing.T) {
+func TestMountMetadataLegacyRegistryCannotBypassWorkspace(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 	registry := filepath.Join(tmp, "mounts.toml")
 	source := filepath.Join(tmp, "source")
+	mustWriteWorkspace(t, filepath.Join(source, "factile.toml"), "version = 2\n\n[bundle]\nname = \"source\"\n")
 	mustWriteWorkspace(t, filepath.Join(source, "overview.md"), `---
 type: Reference
 title: Shared Reference
@@ -132,15 +136,10 @@ description: Reusable reference material.
 # Shared Reference
 `)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: registry})
-	if _, err := ws.Mount(ctx, source, "/reference", factile.MountOptions{Writable: true}); err != nil {
-		t.Fatal(err)
+	if _, err := ws.Mount(ctx, source, "/reference", factile.MountOptions{Writable: true}); factile.ErrorCode(factile.NormalizeError(err)) != "invalid_workspace" {
+		t.Fatalf("legacy registry bypass error = %v", err)
 	}
-
-	mounts, err := ws.ListMounts(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mounts.Mounts) != 1 || mounts.Mounts[0].Title != "Shared Reference" || mounts.Mounts[0].Description != "Reusable reference material." {
-		t.Fatalf("registry did not preserve inferred metadata: %#v", mounts.Mounts)
+	if _, err := os.Stat(registry); !os.IsNotExist(err) {
+		t.Fatalf("legacy registry was mutated: %v", err)
 	}
 }

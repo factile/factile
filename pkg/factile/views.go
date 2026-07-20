@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -65,7 +64,7 @@ func (w *LocalWorkspace) SetView(ctx context.Context, id string, input ViewInput
 		return ViewResult{}, err
 	}
 	action := "created"
-	err = storage.WithFileLock(viewsPath, func() error {
+	err = w.withWorkspaceLocks([]string{viewsPath}, func() error {
 		views, err := loadViewsAllowMissing(viewsPath)
 		if err != nil {
 			return err
@@ -96,7 +95,7 @@ func (w *LocalWorkspace) DeleteView(ctx context.Context, id string) (ViewDeleteR
 	if err != nil {
 		return ViewDeleteResult{}, err
 	}
-	err = storage.WithFileLock(viewsPath, func() error {
+	err = w.withWorkspaceLocks([]string{viewsPath}, func() error {
 		views, err := loadViewsAllowMissing(viewsPath)
 		if err != nil {
 			return err

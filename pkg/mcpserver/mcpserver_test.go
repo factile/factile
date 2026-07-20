@@ -88,7 +88,7 @@ func TestToolsRespectReadOnly(t *testing.T) {
 }
 
 func TestReadOnlyRejectsHiddenWriteToolCalls(t *testing.T) {
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: t.TempDir()})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: mcpWorkspace(t)})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"./docs","mount_path":"/docs"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_unmount","arguments":{"mount_path":"/docs"}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_create","arguments":{"path":"/engineering/note","type":"Note","title":"Note","markdown":"Body"}}}
@@ -106,8 +106,8 @@ func TestReadOnlyRejectsHiddenWriteToolCalls(t *testing.T) {
 }
 
 func TestServeToolsListAndReadCall(t *testing.T) {
-	mountFile := mcpMountFile(t)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	workspace := mcpWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/product-docs/workflows/invoice-import"}}}
@@ -139,10 +139,10 @@ func TestServeToolsListAndReadCall(t *testing.T) {
 
 func TestServeV2MountToolsAndReaderCards(t *testing.T) {
 	tmp := t.TempDir()
-	writeMCPRootConfig(t, tmp)
+	writeMCPCombinedWorkspace(t, tmp)
 	writeMCPConceptFile(t, filepath.Join(tmp, "overview.md"), "Guide", "Overview", "# Overview\n\nRoot-local docs are readable.\n")
-	product := filepath.Join(tmp, "product-docs")
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
+	product := filepath.Join(t.TempDir(), "product-docs")
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product, "product-docs")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + product + `","mount_path":"/engineering/docs","title":"Product Docs","read_only":true}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mounts","arguments":{}}}
@@ -192,9 +192,9 @@ func TestServeV2MountToolsAndReaderCards(t *testing.T) {
 
 func TestMCPMountCapabilityCompatibility(t *testing.T) {
 	tmp := t.TempDir()
-	writeMCPRootConfig(t, tmp)
-	source := filepath.Join(tmp, "source")
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	writeMCPCombinedWorkspace(t, tmp)
+	source := filepath.Join(t.TempDir(), "source")
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source, "product-docs")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/default"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + source + `","mount_path":"/writable","writable":true}}}
@@ -233,7 +233,7 @@ func TestMCPMountCapabilityCompatibility(t *testing.T) {
 
 func TestMCPGitMountRefreshAndReadOnlyVisibility(t *testing.T) {
 	tmp := t.TempDir()
-	writeMCPRootConfig(t, tmp)
+	writeMCPCombinedWorkspace(t, tmp)
 	remote := mcpGitRemote(t)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"` + remote + `","mount_path":"/git","ref":"main"}}}
@@ -327,13 +327,16 @@ func TestMCPGitMountRefreshAndReadOnlyVisibility(t *testing.T) {
 
 func TestMCPGitMountUsesCachedSnapshotWhenGitIsUnavailable(t *testing.T) {
 	root := t.TempDir()
-	writeMCPRootConfig(t, root)
+	writeMCPCombinedWorkspace(t, root)
 	remote := mcpGitRemote(t)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 	if _, err := ws.Mount(context.Background(), remote, "/git", factile.MountOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	cache, err := gitsource.OpenCache(vfs.WorkspaceContext{
+		WorkspaceDir: root,
+		StateDir:     filepath.Join(root, vfs.StateDirname),
+	}, gitsource.NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +386,7 @@ func TestMCPGitMountUsesCachedSnapshotWhenGitIsUnavailable(t *testing.T) {
 
 func TestMCPRejectsEmptyGitURIDelimitersBeforeMutation(t *testing.T) {
 	root := t.TempDir()
-	writeMCPRootConfig(t, root)
+	writeMCPCombinedWorkspace(t, root)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"https://example.test/repository.git?","mount_path":"/native-query"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_mount","arguments":{"source":"https://example.test/repository.git#","mount_path":"/native-fragment"}}}
@@ -418,7 +421,7 @@ func TestMCPRejectsEmptyGitURIDelimitersBeforeMutation(t *testing.T) {
 
 func TestMCPGitStatusRedactsInvalidHandAuthoredSource(t *testing.T) {
 	root := t.TempDir()
-	writeMCPRootConfig(t, root)
+	writeMCPCombinedWorkspace(t, root)
 	source := "https://alice:correct-horse@example.test/private.git?token=hunter2"
 	if err := os.WriteFile(filepath.Join(root, "private.mount.toml"), []byte("source = \""+source+"\"\nwritable = false\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -441,8 +444,8 @@ func TestMCPGitStatusRedactsInvalidHandAuthoredSource(t *testing.T) {
 }
 
 func TestServeMkdirTool(t *testing.T) {
-	mountFile := mcpMountFile(t)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	workspace := mcpWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_mkdir","arguments":{"path":"/product-docs/guides","title":"Guides","bundle":true}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/product-docs/guides/overview"}}}
 `)
@@ -489,9 +492,9 @@ func TestServeMountedSourceReaderToolsUseAllSources(t *testing.T) {
 
 func TestServeViewToolsAndReaderFilters(t *testing.T) {
 	workspaceDir := t.TempDir()
-	writeMCPRootConfig(t, workspaceDir)
-	product := filepath.Join(workspaceDir, "product-docs")
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
+	writeMCPCombinedWorkspace(t, workspaceDir)
+	product := filepath.Join(t.TempDir(), "product-docs")
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product, "product-docs")
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "engineering"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -518,8 +521,8 @@ title = "Django"
 	if set.Action != "created" || set.View.ID != "invoice" || len(set.View.Paths) != 3 {
 		t.Fatalf("unexpected MCP view set: %#v", set)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceDir, ".factile", "views.toml")); err != nil {
-		t.Fatalf("expected MCP view set to write views.toml: %v", err)
+	if _, err := os.Stat(filepath.Join(workspaceDir, "factile.views.toml")); err != nil {
+		t.Fatalf("expected MCP view set to write factile.views.toml: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceDir, ".factile", "library.toml")); !os.IsNotExist(err) {
 		t.Fatalf("MCP view set should not create library.toml, err=%v", err)
@@ -581,9 +584,121 @@ title = "Django"
 	}
 }
 
+func TestServeUsesOneWorkspaceFromEveryInvocationContext(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	secondary := filepath.Join(workspace, "bundles", "reference")
+	writeMCPWorkspaceManifest(t, workspace, "docs")
+	writeMCPBundleManifest(t, rootBundle, "docs")
+	writeMCPBundleManifest(t, secondary, "reference")
+	writeMCPConceptFile(t, filepath.Join(rootBundle, "overview.md"), "Reference", "Outer Overview", "# Outer Overview\n")
+	writeMCPConceptFile(t, filepath.Join(secondary, "guide.md"), "Guide", "Reference Guide", "# Reference Guide\n")
+	writeMCPFile(t, filepath.Join(rootBundle, "reference.mount.toml"), `source = "../bundles/reference"
+writable = false
+title = "Reference"
+`)
+	writeMCPFile(t, filepath.Join(workspace, "factile.views.toml"), `[[views]]
+id = "all"
+title = "All"
+paths = ["/overview", "/reference"]
+`)
+
+	workDirs := []string{
+		workspace,
+		filepath.Join(rootBundle, "guides", "deep"),
+		filepath.Join(secondary, "notes", "deep"),
+	}
+	for _, workDir := range workDirs {
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(filepath.ToSlash(workDir), func(t *testing.T) {
+			ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workDir})
+			input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/overview"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/reference/guide"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_view_list","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_mounts","arguments":{}}}
+`)
+			var out bytes.Buffer
+			if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
+				t.Fatal(err)
+			}
+			responses := mcpResponses(t, out.String())
+			root := mcpStructured[factile.ConceptResult](t, responses[1])
+			mounted := mcpStructured[factile.ConceptResult](t, responses[2])
+			views := mcpStructured[factile.ViewListResult](t, responses[3])
+			mounts := mcpStructured[factile.MountListResult](t, responses[4])
+			if root.Concept.Frontmatter["title"] != "Outer Overview" || mounted.Concept.Frontmatter["title"] != "Reference Guide" {
+				t.Fatalf("invocation context changed logical knowledge: root=%#v mounted=%#v", root.Concept, mounted.Concept)
+			}
+			if len(views.Views) != 1 || views.Views[0].ID != "all" || !mcpHasMountPath(mounts.Mounts, "/reference") {
+				t.Fatalf("invocation context changed workspace views or mounts: views=%#v mounts=%#v", views, mounts)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(workspace, vfs.StateDirname)); !os.IsNotExist(err) {
+		t.Fatalf("read-only MCP workspace access created state: %v", err)
+	}
+}
+
+func TestServeSelectsNestedWorkspaceAndHonorsExplicitOverride(t *testing.T) {
+	base := t.TempDir()
+	outer := filepath.Join(base, "outer")
+	nested := filepath.Join(outer, "nested")
+	writeMCPCombinedWorkspace(t, outer)
+	writeMCPCombinedWorkspace(t, nested)
+	writeMCPConceptFile(t, filepath.Join(outer, "overview.md"), "Reference", "Outer", "# Outer\n")
+	writeMCPConceptFile(t, filepath.Join(nested, "overview.md"), "Reference", "Nested", "# Nested\n")
+	workDir := filepath.Join(nested, "src", "deep")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		opts      factile.WorkspaceOptions
+		wantTitle string
+	}{
+		{name: "nearest nested", opts: factile.WorkspaceOptions{WorkDir: workDir}, wantTitle: "Nested"},
+		{name: "explicit outer", opts: factile.WorkspaceOptions{Workspace: outer, WorkDir: workDir}, wantTitle: "Outer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/overview"}}}
+`)
+			var out bytes.Buffer
+			if err := Serve(context.Background(), factile.NewWorkspace(tc.opts), input, &out, Options{ReadOnly: true}); err != nil {
+				t.Fatal(err)
+			}
+			result := mcpStructured[factile.ConceptResult](t, mcpResponses(t, out.String())[1])
+			if result.Concept.Frontmatter["title"] != tc.wantTitle {
+				t.Fatalf("selected title = %v, want %s", result.Concept.Frontmatter["title"], tc.wantTitle)
+			}
+		})
+	}
+}
+
+func TestServeRejectsMissingWorkspaceBeforeProtocolOutput(t *testing.T) {
+	workDir := t.TempDir()
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workDir})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}
+`)
+	var out bytes.Buffer
+	err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true})
+	if factile.ErrorCode(err) != factile.ErrNoActiveWorkspace {
+		t.Fatalf("Serve error = %T %v, want no_active_workspace", err, err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("missing workspace produced protocol output: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(workDir, vfs.StateDirname)); !os.IsNotExist(err) {
+		t.Fatalf("rejected MCP startup created state: %v", err)
+	}
+}
+
 func TestServeStructuredContentContracts(t *testing.T) {
-	mountFile := mcpMountFile(t)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	workspace := mcpWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/product-docs/workflows/invoice-import"}}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/product-docs"}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/product-docs","query":"invoice"}}}
@@ -624,8 +739,8 @@ func TestServeStructuredContentContracts(t *testing.T) {
 }
 
 func TestServeIgnoresInitializedNotification(t *testing.T) {
-	mountFile := mcpMountFile(t)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	workspace := mcpWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex","version":"test"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
@@ -647,10 +762,10 @@ func TestServeIgnoresInitializedNotification(t *testing.T) {
 }
 
 func TestServeTraceFile(t *testing.T) {
-	mountFile := mcpMountFile(t)
+	workspace := mcpWorkspace(t)
 	traceFile := filepath.Join(t.TempDir(), "usage.jsonl")
 	t.Setenv("FACTILE_TRACE_FILE", traceFile)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
 	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/product-docs/workflows/invoice-import"}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_list","arguments":{"path":"/product-docs","brief":true}}}
@@ -671,28 +786,26 @@ func TestServeTraceFile(t *testing.T) {
 	}
 }
 
-func mcpMountFile(t *testing.T) string {
+func mcpWorkspace(t *testing.T) string {
 	t.Helper()
-	tmp := t.TempDir()
-	product := filepath.Join(tmp, "product-docs")
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
-	mountFile := filepath.Join(tmp, "mount-registry.toml")
-	if err := os.WriteFile(mountFile, []byte(`[mounts."/product-docs"]
-source = "`+product+`"
-kind = "local"
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	product := filepath.Join(parent, "product-docs")
+	writeMCPCombinedWorkspace(t, workspace)
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product, "product-docs")
+	writeMCPFile(t, filepath.Join(workspace, "product-docs.mount.toml"), `source = "../product-docs"
 writable = true
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return mountFile
+`)
+	return workspace
 }
 
 func mcpV2Workspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	writeMCPRootConfig(t, workspace)
-	copyMCPDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	writeMCPCombinedWorkspace(t, workspace)
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), filepath.Join(tmp, "bundles", "product-docs"), "product-docs")
+	copyMCPBundle(t, filepath.Join("..", "..", "testdata", "bundles", "shared-guides"), filepath.Join(tmp, "bundles", "shared-guides"), "shared-guides")
 	writeMCPFile(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
 writable = false
 title = "Common Engineering Guides"
@@ -726,21 +839,36 @@ func writeMCPFile(t *testing.T, filename string, data string) {
 	}
 }
 
-func writeMCPRootConfig(t *testing.T, root string) {
+func writeMCPCombinedWorkspace(t *testing.T, root string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".factile"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte(`version = 1
+	writeMCPFile(t, filepath.Join(root, "factile.toml"), `version = 2
 
+[workspace]
+root = "."
+
+[bundle]
 name = "test"
 title = "Test"
+`)
+}
 
-[defaults]
-format = "okf"
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+func writeMCPWorkspaceManifest(t *testing.T, root, bundleRoot string) {
+	t.Helper()
+	writeMCPFile(t, filepath.Join(root, "factile.toml"), `version = 2
+
+[workspace]
+root = "`+bundleRoot+`"
+`)
+}
+
+func writeMCPBundleManifest(t *testing.T, root string, name string) {
+	t.Helper()
+	writeMCPFile(t, filepath.Join(root, "factile.toml"), `version = 2
+
+[bundle]
+name = "`+name+`"
+title = "Test Bundle"
+`)
 }
 
 func writeMCPConceptFile(t *testing.T, filename string, typ string, title string, markdown string) {
@@ -762,7 +890,7 @@ title: ` + title + `
 func mcpGitRemote(t *testing.T) string {
 	t.Helper()
 	source := filepath.Join(t.TempDir(), "source")
-	writeMCPRootConfig(t, source)
+	writeMCPBundleManifest(t, source, "git-fixture")
 	writeMCPConceptFile(t, filepath.Join(source, "overview.md"), "Reference", "Git Fixture", "# Git Fixture\n")
 	mcpGitRun(t, "", "init", "--", source)
 	mcpGitRun(t, source, "config", "--local", "--", "user.name", "Factile Test")
@@ -810,6 +938,12 @@ func copyMCPDir(t *testing.T, src, dst string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func copyMCPBundle(t *testing.T, src, dst, name string) {
+	t.Helper()
+	copyMCPDir(t, src, dst)
+	writeMCPBundleManifest(t, dst, name)
 }
 
 type mcpTestResponse struct {
@@ -906,6 +1040,15 @@ func mcpHasCardPath(cards []factile.CardSummary, path string) bool {
 func mcpHasMount(mounts []factile.Mount, mountPath string, source string) bool {
 	for _, mount := range mounts {
 		if mount.MountPath == mountPath && mount.Source == source {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpHasMountPath(mounts []factile.Mount, mountPath string) bool {
+	for _, mount := range mounts {
+		if mount.MountPath == mountPath {
 			return true
 		}
 	}

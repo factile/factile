@@ -1,5 +1,17 @@
 # Documentation Log
 
+## 2026-07-19
+
+- Published the accepted Root Layout v2 target before implementation: explicit
+  repository workspaces, portable bundle manifests, one CWD-invariant logical
+  root bundle, separate spatial mount descriptors, and no docs or Git fallback.
+- Documented workspace-level `factile.views.toml`, ignored `.factile/` state,
+  workspace-local immutable Git snapshots, external credential handling,
+  `--workspace`, `no_active_workspace`, and stateless bundle inspection.
+- Added prominent transition notes so v2 examples are not mistaken for the
+  released v0.3.1 `.factile/config.toml`, `--root`, and `no_active_root`
+  behavior while implementation is in progress.
+
 ## 2026-07-15
 
 - Aligned contributor and agent instructions with the self-contained `docs`

@@ -49,17 +49,20 @@ Run the complete repository gate:
 ```
 
 It checks formatting, Go tests and vet, target builds, CLI behavior, skills,
-roots, mounts, views, writes, npm packaging, and the public Factile docs root.
+workspaces, bundles, mounts, views, writes, npm packaging, and the public
+Factile documentation bundle.
 
 For a documentation-only change, also inspect the diff and run:
 
 ```bash
-factile validate /
+factile --workspace . validate /
 ```
 
-The command should resolve `docs/` as the active root when run from the
-repository. Do not add a sibling checkout, private mount, credential, or host
-path to make public verification pass.
+Under Root Layout v2, the repository's `factile.toml` selects `docs/` as its
+root bundle. While v2 is being implemented under `ft-qhg`, the released v0.3.1
+binary instead needs `factile --root docs validate /`; use the syntax matching
+the binary under test. Do not add a sibling checkout, private mount,
+credential, or host path to make public verification pass.
 
 Update command help, tests, and current docs together when public behavior
 changes. Use `docs/log.md` for durable documentation changes; use the issue

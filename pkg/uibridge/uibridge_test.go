@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 type fakeReader struct{}
@@ -107,7 +110,12 @@ func (fakeReader) Validate(ctx context.Context, path string, opts factile.Valida
 func (fakeReader) Summary(ctx context.Context) (factile.SummaryResult, error) {
 	_ = ctx
 	return factile.SummaryResult{
-		Workspace: factile.WorkspaceSummary{Path: "/tmp/factile", Version: "test"},
+		Workspace: factile.WorkspaceSummary{
+			WorkspaceDir:  "/tmp/factile",
+			RootBundleDir: "/tmp/factile/docs",
+			StateDir:      "/tmp/factile/.factile",
+			Version:       "test",
+		},
 		Sources: []factile.Mount{
 			{MountPath: "/", Source: ".", Kind: "local", Writable: true},
 			{
@@ -201,7 +209,7 @@ func conceptResult(path string, markdown string) factile.ConceptResult {
 	}
 }
 
-type noActiveRootReader struct {
+type noActiveWorkspaceReader struct {
 	fakeReader
 }
 
@@ -214,14 +222,14 @@ func (nilViewsReader) ListViews(ctx context.Context) (factile.ViewListResult, er
 	return factile.ViewListResult{}, nil
 }
 
-func (noActiveRootReader) Summary(ctx context.Context) (factile.SummaryResult, error) {
+func (noActiveWorkspaceReader) Summary(ctx context.Context) (factile.SummaryResult, error) {
 	_ = ctx
-	return factile.SummaryResult{}, factile.NewError(factile.ErrNoActiveRoot, "No active Factile root")
+	return factile.SummaryResult{}, factile.NewError(factile.ErrNoActiveWorkspace, "No active Factile workspace.")
 }
 
-func (noActiveRootReader) ListViews(ctx context.Context) (factile.ViewListResult, error) {
+func (noActiveWorkspaceReader) ListViews(ctx context.Context) (factile.ViewListResult, error) {
 	_ = ctx
-	return factile.ViewListResult{}, factile.NewError(factile.ErrNoActiveRoot, "No active Factile root")
+	return factile.ViewListResult{}, factile.NewError(factile.ErrNoActiveWorkspace, "No active Factile workspace.")
 }
 
 func TestHandlerHealthCapabilitiesAndRead(t *testing.T) {
@@ -300,23 +308,146 @@ func TestHandlerSourceIncludesCachedGitStatus(t *testing.T) {
 	}
 }
 
-func TestHandlerSourceFallsBackWithoutActiveRoot(t *testing.T) {
-	handler := NewHandler(noActiveRootReader{}, Options{})
+func TestHandlerUsesOneWorkspaceFromEveryInvocationContext(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	secondary := filepath.Join(workspace, "bundles", "reference")
+	writeUIWorkspaceManifest(t, workspace, "docs")
+	writeUIBundleManifest(t, rootBundle, "docs")
+	writeUIBundleManifest(t, secondary, "reference")
+	writeUIConcept(t, filepath.Join(rootBundle, "overview.md"), "Outer Overview")
+	writeUIConcept(t, filepath.Join(secondary, "guide.md"), "Reference Guide")
+	writeUITestFile(t, filepath.Join(rootBundle, "reference.mount.toml"), `source = "../bundles/reference"
+writable = false
+title = "Reference"
+`)
+	writeUITestFile(t, filepath.Join(workspace, "factile.views.toml"), `[[views]]
+id = "all"
+title = "All"
+paths = ["/overview", "/reference"]
+`)
+
+	workDirs := []string{
+		workspace,
+		filepath.Join(rootBundle, "guides", "deep"),
+		filepath.Join(secondary, "notes", "deep"),
+	}
+	for _, workDir := range workDirs {
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(filepath.ToSlash(workDir), func(t *testing.T) {
+			handler := NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workDir}), Options{})
+			source := request(handler, http.MethodGet, APIPrefix+"/source")
+			if source.Code != http.StatusOK {
+				t.Fatalf("source status = %d body=%s", source.Code, source.Body.String())
+			}
+			var sourceResult struct {
+				Source struct {
+					Description string `json:"description"`
+					Metadata    struct {
+						Workspace factile.WorkspaceSummary `json:"workspace"`
+						Sources   []factile.Mount          `json:"sources"`
+					} `json:"metadata"`
+				} `json:"source"`
+			}
+			if err := json.Unmarshal(source.Body.Bytes(), &sourceResult); err != nil {
+				t.Fatal(err)
+			}
+			if sourceResult.Source.Description != workspace || sourceResult.Source.Metadata.Workspace.WorkspaceDir != workspace || sourceResult.Source.Metadata.Workspace.RootBundleDir != rootBundle || sourceResult.Source.Metadata.Workspace.StateDir != filepath.Join(workspace, vfs.StateDirname) || !uiHasMount(sourceResult.Source.Metadata.Sources, "/reference") {
+				t.Fatalf("invocation context changed UI source: %#v", sourceResult)
+			}
+
+			for _, tc := range []struct {
+				path  string
+				title string
+			}{
+				{path: "/overview", title: "Outer Overview"},
+				{path: "/reference/guide", title: "Reference Guide"},
+			} {
+				read := request(handler, http.MethodGet, APIPrefix+"/reader/read?path="+tc.path)
+				if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"title":"`+tc.title+`"`) {
+					t.Fatalf("read %s = %d %s", tc.path, read.Code, read.Body.String())
+				}
+			}
+			views := request(handler, http.MethodGet, APIPrefix+"/views")
+			if views.Code != http.StatusOK || !strings.Contains(views.Body.String(), `"id":"all"`) {
+				t.Fatalf("views = %d %s", views.Code, views.Body.String())
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(workspace, vfs.StateDirname)); !os.IsNotExist(err) {
+		t.Fatalf("read-only UI access created state: %v", err)
+	}
+
+	secret := "ui-state-secret-canary"
+	writeUITestFile(t, filepath.Join(workspace, vfs.StateDirname, "private.json"), secret)
+	source := request(NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace}), Options{}), http.MethodGet, APIPrefix+"/source")
+	if source.Code != http.StatusOK || strings.Contains(source.Body.String(), secret) {
+		t.Fatalf("source endpoint leaked private state: %d %s", source.Code, source.Body.String())
+	}
+}
+
+func TestHandlerSelectsNestedWorkspaceAndHonorsExplicitOverride(t *testing.T) {
+	base := t.TempDir()
+	outer := filepath.Join(base, "outer")
+	nested := filepath.Join(outer, "nested")
+	writeUICombinedWorkspace(t, outer)
+	writeUICombinedWorkspace(t, nested)
+	writeUIConcept(t, filepath.Join(outer, "overview.md"), "Outer")
+	writeUIConcept(t, filepath.Join(nested, "overview.md"), "Nested")
+	workDir := filepath.Join(nested, "src", "deep")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		opts      factile.WorkspaceOptions
+		wantTitle string
+	}{
+		{name: "nearest nested", opts: factile.WorkspaceOptions{WorkDir: workDir}, wantTitle: "Nested"},
+		{name: "explicit outer", opts: factile.WorkspaceOptions{Workspace: outer, WorkDir: workDir}, wantTitle: "Outer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewHandler(factile.NewWorkspace(tc.opts), Options{})
+			read := request(handler, http.MethodGet, APIPrefix+"/reader/read?path=/overview")
+			if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"title":"`+tc.wantTitle+`"`) {
+				t.Fatalf("read = %d %s, want %s", read.Code, read.Body.String(), tc.wantTitle)
+			}
+		})
+	}
+}
+
+func TestStartRequiresWorkspaceBeforeListening(t *testing.T) {
+	missing := t.TempDir()
+	server, err := Start(factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: missing}), Options{})
+	if server != nil || factile.ErrorCode(err) != factile.ErrNoActiveWorkspace {
+		t.Fatalf("missing workspace Start = %#v, %T %v", server, err, err)
+	}
+	if _, err := os.Stat(filepath.Join(missing, vfs.StateDirname)); !os.IsNotExist(err) {
+		t.Fatalf("rejected UI startup created state: %v", err)
+	}
+}
+
+func TestHandlerRejectsMissingWorkspace(t *testing.T) {
+	handler := NewHandler(noActiveWorkspaceReader{}, Options{})
 
 	response := request(handler, http.MethodGet, APIPrefix+"/source")
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusNotFound {
 		t.Fatalf("source status = %d body=%s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"title":"Local Factile workspace"`) {
-		t.Fatalf("source response missing local title: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"code":"no_active_workspace"`) {
+		t.Fatalf("source response hid missing workspace: %s", response.Body.String())
 	}
 
 	views := request(handler, http.MethodGet, APIPrefix+"/views")
-	if views.Code != http.StatusOK {
+	if views.Code != http.StatusNotFound {
 		t.Fatalf("views status = %d body=%s", views.Code, views.Body.String())
 	}
-	if !strings.Contains(views.Body.String(), `"views":[]`) {
-		t.Fatalf("views response should be empty without active root: %s", views.Body.String())
+	if !strings.Contains(views.Body.String(), `"code":"no_active_workspace"`) {
+		t.Fatalf("views response hid missing workspace: %s", views.Body.String())
 	}
 }
 
@@ -503,4 +634,60 @@ func requestWithBody(handler http.Handler, method string, target string, body st
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	return recorder
+}
+
+func writeUIWorkspaceManifest(t *testing.T, root, bundleRoot string) {
+	t.Helper()
+	writeUITestFile(t, filepath.Join(root, "factile.toml"), `version = 2
+
+[workspace]
+root = "`+bundleRoot+`"
+`)
+}
+
+func writeUIBundleManifest(t *testing.T, root, name string) {
+	t.Helper()
+	writeUITestFile(t, filepath.Join(root, "factile.toml"), `version = 2
+
+[bundle]
+name = "`+name+`"
+title = "Test Bundle"
+`)
+}
+
+func writeUICombinedWorkspace(t *testing.T, root string) {
+	t.Helper()
+	writeUITestFile(t, filepath.Join(root, "factile.toml"), `version = 2
+
+[workspace]
+root = "."
+
+[bundle]
+name = "test"
+title = "Test"
+`)
+}
+
+func writeUIConcept(t *testing.T, filename, title string) {
+	t.Helper()
+	writeUITestFile(t, filename, "---\ntype: Reference\ntitle: "+title+"\n---\n\n# "+title+"\n")
+}
+
+func writeUITestFile(t *testing.T, filename, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func uiHasMount(mounts []factile.Mount, mountPath string) bool {
+	for _, mount := range mounts {
+		if mount.MountPath == mountPath {
+			return true
+		}
+	}
+	return false
 }

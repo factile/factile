@@ -52,7 +52,7 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 				t.Fatalf("help for %v missing %q:\n%s", args, expected, help)
 			}
 		}
-		for _, expected := range []string{"--json", "--color auto|always|never", "--quiet"} {
+		for _, expected := range []string{"--workspace <directory>", "--json", "--color auto|always|never", "--quiet"} {
 			if !strings.Contains(help, expected) {
 				t.Fatalf("help for %v missing global option %q:\n%s", args, expected, help)
 			}
@@ -85,7 +85,7 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 				t.Fatalf("help for %v missing mkdir row %q:\n%s", args, expected, help)
 			}
 		}
-		for _, stale := range []string{"kb list", "Knowledge Bases", "Bundle link"} {
+		for _, stale := range []string{"kb list", "Knowledge Bases", "Bundle link", "--root <path>", "--mount-file <path>", "active Factile root"} {
 			if strings.Contains(help, stale) {
 				t.Fatalf("help for %v still exposes stale curator row %q:\n%s", args, stale, help)
 			}
@@ -97,10 +97,10 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 		assertNoTerminalEscapes(t, help)
 	}
 
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--format", "json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("read exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -120,7 +120,7 @@ func TestCLIBareWorkspaceSummary(t *testing.T) {
 		t.Fatalf("bare summary exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	output := stdout.String()
-	for _, want := range []string{"Factile Workspace:\n  " + workspace + " (", "Knowledge:", "/engineering", "Views:", "invoice  Invoice", "Sources:", "/engineering/django ->", "Health:", "Next:", "factile context / \"<task>\" --view invoice"} {
+	for _, want := range []string{"Factile Workspace:", "Workspace:   " + workspace + " (", "Root bundle: " + workspace, "Local state: " + filepath.Join(workspace, ".factile"), "Knowledge:", "/engineering", "Views:", "invoice  Invoice", "Sources:", "/engineering/django ->", "Health:", "Next:", "factile context / \"<task>\" --view invoice"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("bare summary missing %q:\n%s", want, output)
 		}
@@ -150,8 +150,20 @@ func TestCLIBareWorkspaceSummary(t *testing.T) {
 	}
 
 	summary := runCLIJSON[factile.SummaryResult](t, "status", "--json")
-	if summary.Workspace.Path != workspace || len(summary.Knowledge) == 0 || len(summary.Views) != 1 || len(summary.Sources) == 0 || len(summary.NextCommands) == 0 {
+	if summary.Workspace.WorkspaceDir != workspace || summary.Workspace.RootBundleDir != workspace || summary.Workspace.StateDir != filepath.Join(workspace, ".factile") || len(summary.Knowledge) == 0 || len(summary.Views) != 1 || len(summary.Sources) == 0 || len(summary.NextCommands) == 0 {
 		t.Fatalf("unexpected status JSON summary: %#v", summary)
+	}
+	workspaceJSON, err := json.Marshal(summary.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"workspace_dir"`, `"root_bundle_dir"`, `"state_dir"`} {
+		if !strings.Contains(string(workspaceJSON), field) {
+			t.Fatalf("status workspace JSON missing %s: %s", field, workspaceJSON)
+		}
+	}
+	if strings.Contains(string(workspaceJSON), `"path"`) {
+		t.Fatalf("status workspace JSON retained ambiguous path field: %s", workspaceJSON)
 	}
 
 	empty := t.TempDir()
@@ -162,8 +174,8 @@ func TestCLIBareWorkspaceSummary(t *testing.T) {
 	if code != 4 {
 		t.Fatalf("empty summary exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "No active Factile root") || !strings.Contains(stderr.String(), "factile init") {
-		t.Fatalf("empty summary should report no active library, stdout=%s stderr=%s", stdout.String(), stderr.String())
+	if stdout.Len() != 0 || strings.TrimSpace(stderr.String()) != "No active Factile workspace." {
+		t.Fatalf("empty summary should report no active workspace, stdout=%s stderr=%s", stdout.String(), stderr.String())
 	}
 }
 
@@ -226,14 +238,14 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
 		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]"},
 		{name: "ui", args: []string{"ui", "--help"}, want: "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]"},
-		{name: "mount", args: []string{"mount", "--help"}, want: "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]\n\n--mount-file is a legacy local-source registry; Git mounts require an active Factile root."},
+		{name: "mount", args: []string{"mount", "--help"}, want: "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]"},
 		{name: "unmount", args: []string{"unmount", "--help"}, want: "factile unmount <mount-path>"},
 		{name: "mounts", args: []string{"mounts", "--help"}, want: "factile mounts"},
 		{name: "refresh", args: []string{"refresh", "--help"}, want: "factile refresh <mount-path>"},
 		{name: "view group", args: []string{"view", "--help"}, want: "factile view list|inspect|set|delete"},
 		{name: "view leaf", args: []string{"view", "set", "--help"}, want: "factile view set <id> --title <title> --path <path> [--description <text>]"},
 		{name: "bundle group", args: []string{"bundle", "--help"}, want: "factile bundle find|inspect"},
-		{name: "bundle leaf", args: []string{"bundle", "inspect", "--help"}, want: "factile bundle inspect <source>"},
+		{name: "bundle leaf", args: []string{"bundle", "inspect", "--help"}, want: "factile bundle inspect <directory>"},
 		{name: "skill group", args: []string{"skill", "--help"}, want: "factile skill list|inspect|install|uninstall|doctor"},
 		{name: "skill leaf", args: []string{"skill", "install", "--help"}, want: "factile skill install codex --scope repo|user [--mode reader|curator] [--profile software]"},
 		{name: "mcp", args: []string{"mcp", "--help"}, want: "factile mcp serve --stdio [--read-only]"},
@@ -274,7 +286,7 @@ func TestCLIInvalidUsageStillFails(t *testing.T) {
 }
 
 func TestCLICreateRequiresTitle(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	body := filepath.Join(t.TempDir(), "body.md")
 	if err := os.WriteFile(body, []byte("# Untitled\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -282,7 +294,7 @@ func TestCLICreateRequiresTitle(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "create", "/product-docs/workflows/untitled", "--type", "Workflow", "--body", body}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "create", "/product-docs/workflows/untitled", "--type", "Workflow", "--body", body}, nil, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("create without title exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -295,16 +307,16 @@ func TestCLICreateRequiresTitle(t *testing.T) {
 }
 
 func TestCLIJSONFlagMatchesFormatJSON(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var jsonFlagOut, jsonFlagErr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--json"}, nil, &jsonFlagOut, &jsonFlagErr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--json"}, nil, &jsonFlagOut, &jsonFlagErr)
 	if code != 0 {
 		t.Fatalf("--json read exit code = %d stderr=%s", code, jsonFlagErr.String())
 	}
 
 	var formatOut, formatErr bytes.Buffer
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--format", "json"}, nil, &formatOut, &formatErr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--format", "json"}, nil, &formatOut, &formatErr)
 	if code != 0 {
 		t.Fatalf("--format json read exit code = %d stderr=%s", code, formatErr.String())
 	}
@@ -321,7 +333,7 @@ func TestCLIJSONFlagMatchesFormatJSON(t *testing.T) {
 	}
 
 	var trailingGlobalOut, trailingGlobalErr bytes.Buffer
-	code = Run(context.Background(), []string{"read", "/product-docs/workflows/invoice-import", "--mount-file", mountFile, "--json"}, nil, &trailingGlobalOut, &trailingGlobalErr)
+	code = Run(context.Background(), []string{"read", "/product-docs/workflows/invoice-import", "--workspace", fixture, "--json"}, nil, &trailingGlobalOut, &trailingGlobalErr)
 	if code != 0 {
 		t.Fatalf("trailing global options read exit code = %d stderr=%s", code, trailingGlobalErr.String())
 	}
@@ -330,7 +342,7 @@ func TestCLIJSONFlagMatchesFormatJSON(t *testing.T) {
 	}
 
 	var coloredJSONOut, coloredJSONErr bytes.Buffer
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--json", "--color", "always"}, nil, &coloredJSONOut, &coloredJSONErr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--json", "--color", "always"}, nil, &coloredJSONOut, &coloredJSONErr)
 	if code != 0 {
 		t.Fatalf("--json --color always read exit code = %d stderr=%s", code, coloredJSONErr.String())
 	}
@@ -338,7 +350,7 @@ func TestCLIJSONFlagMatchesFormatJSON(t *testing.T) {
 }
 
 func TestCLIPathShortcut(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	tests := []struct {
 		name string
@@ -368,7 +380,7 @@ func TestCLIPathShortcut(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"--mount-file", mountFile}, tc.args...)
+			args := append([]string{"--workspace", fixture}, tc.args...)
 			var stdout, stderr bytes.Buffer
 			code := Run(context.Background(), args, nil, &stdout, &stderr)
 			if code != 0 {
@@ -387,7 +399,7 @@ func TestCLIPathShortcut(t *testing.T) {
 
 	t.Run("folder json matches list shape", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), []string{"--mount-file", mountFile, "/product-docs", "--json"}, nil, &stdout, &stderr)
+		code := Run(context.Background(), []string{"--workspace", fixture, "/product-docs", "--json"}, nil, &stdout, &stderr)
 		if code != 0 {
 			t.Fatalf("path JSON list exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
@@ -398,7 +410,7 @@ func TestCLIPathShortcut(t *testing.T) {
 
 	t.Run("document json matches read shape", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), []string{"--mount-file", mountFile, "/product-docs/workflows/invoice-import", "--json"}, nil, &stdout, &stderr)
+		code := Run(context.Background(), []string{"--workspace", fixture, "/product-docs/workflows/invoice-import", "--json"}, nil, &stdout, &stderr)
 		if code != 0 {
 			t.Fatalf("path JSON read exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
@@ -409,7 +421,7 @@ func TestCLIPathShortcut(t *testing.T) {
 
 	t.Run("missing path reports path not found", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), []string{"--mount-file", mountFile, "/product-docs/missing"}, nil, &stdout, &stderr)
+		code := Run(context.Background(), []string{"--workspace", fixture, "/product-docs/missing"}, nil, &stdout, &stderr)
 		if code != 4 {
 			t.Fatalf("missing path exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
@@ -420,15 +432,15 @@ func TestCLIPathShortcut(t *testing.T) {
 }
 
 func TestCLIJSONAliasMatrix(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	cases := []struct {
 		name string
 		args []string
 	}{
-		{name: "list", args: []string{"--mount-file", mountFile, "list", "/"}},
-		{name: "read", args: []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import"}},
-		{name: "search", args: []string{"--mount-file", mountFile, "search", "/product-docs", "invoice"}},
-		{name: "validate", args: []string{"--mount-file", mountFile, "validate", "/product-docs"}},
+		{name: "list", args: []string{"--workspace", fixture, "list", "/"}},
+		{name: "read", args: []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import"}},
+		{name: "search", args: []string{"--workspace", fixture, "search", "/product-docs", "invoice"}},
+		{name: "validate", args: []string{"--workspace", fixture, "validate", "/product-docs"}},
 		{name: "skill inspect", args: []string{"skill", "inspect", "codex"}},
 	}
 	for _, tc := range cases {
@@ -460,9 +472,9 @@ func TestCLIJSONAliasMatrix(t *testing.T) {
 }
 
 func TestCLIJSONReaderContractShapes(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
-	list := runCLIJSON[factile.ListResult](t, "--mount-file", mountFile, "list", "/", "--json")
+	list := runCLIJSON[factile.ListResult](t, "--workspace", fixture, "list", "/", "--json")
 	if list.Path != "/" || !hasFolderPath(list.Folders, "/product-docs") || !hasFolderPath(list.Folders, "/broken-docs") {
 		t.Fatalf("unexpected list contract: %#v", list)
 	}
@@ -470,7 +482,7 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 		t.Fatalf("list reader JSON leaked legacy fields: %#v", list)
 	}
 
-	read := runCLIJSON[factile.ConceptResult](t, "--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--json")
+	read := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--json")
 	if read.Concept.Path != "/product-docs/workflows/invoice-import" ||
 		read.Concept.ConceptID != "workflows/invoice-import" ||
 		!strings.HasPrefix(read.Concept.Revision, "sha256:") ||
@@ -481,7 +493,7 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 		t.Fatalf("unexpected read contract: %#v", read.Concept)
 	}
 
-	search := runCLIJSON[factile.SearchResults](t, "--mount-file", mountFile, "search", "/product-docs", "invoice", "--json")
+	search := runCLIJSON[factile.SearchResults](t, "--workspace", fixture, "search", "/product-docs", "invoice", "--json")
 	if search.Path != "/product-docs" || search.Query != "invoice" || len(search.Results) == 0 {
 		t.Fatalf("unexpected search contract: %#v", search)
 	}
@@ -493,19 +505,19 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 		t.Fatalf("unexpected first search result: %#v", first)
 	}
 
-	contextPack := runCLIJSON[factile.ContextPack](t, "--mount-file", mountFile, "context", "/product-docs", "invoice import workflow", "--json")
+	contextPack := runCLIJSON[factile.ContextPack](t, "--workspace", fixture, "context", "/product-docs", "invoice import workflow", "--json")
 	if contextPack.Path != "/product-docs" || contextPack.Query != "invoice import workflow" || !hasConceptPath(contextPack.Concepts, "/product-docs/workflows/invoice-import") {
 		t.Fatalf("unexpected context contract: %#v", contextPack)
 	}
 
-	graph := runCLIJSON[factile.GraphResult](t, "--mount-file", mountFile, "graph", "/product-docs", "--json")
+	graph := runCLIJSON[factile.GraphResult](t, "--workspace", fixture, "graph", "/product-docs", "--json")
 	if graph.Path != "/product-docs" ||
 		!hasGraphNodePath(graph.Nodes, "/product-docs/workflows/invoice-import") ||
 		!hasGraphEdge(graph.Edges, "/product-docs/workflows/invoice-import", "/product-docs/runbooks/ocr-failure", "markdown_link") {
 		t.Fatalf("unexpected graph contract: %#v", graph)
 	}
 
-	validation := runCLIJSONWithCode[factile.ValidationResult](t, 3, "--mount-file", mountFile, "validate", "/broken-docs", "--json")
+	validation := runCLIJSONWithCode[factile.ValidationResult](t, 3, "--workspace", fixture, "validate", "/broken-docs", "--json")
 	if validation.Path != "/broken-docs" || validation.Valid || !hasValidationIssue(validation.Issues, "error", "missing_type", "/broken-docs/bad-frontmatter") {
 		t.Fatalf("unexpected validation contract: %#v", validation)
 	}
@@ -523,7 +535,7 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 }
 
 func TestCLIJSONWriterContractShapes(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	body := filepath.Join(t.TempDir(), "body.md")
 	if err := os.WriteFile(body, []byte("# Payment Import\n\nPayments are imported.\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -531,16 +543,16 @@ func TestCLIJSONWriterContractShapes(t *testing.T) {
 	path := "/product-docs/workflows/payment-import"
 
 	mkdirPath := "/product-docs/guides"
-	made := runCLIJSON[factile.DirectoryResult](t, "--mount-file", mountFile, "mkdir", mkdirPath, "--title", "Guides", "--bundle", "--json")
+	made := runCLIJSON[factile.DirectoryResult](t, "--workspace", fixture, "mkdir", mkdirPath, "--title", "Guides", "--bundle", "--json")
 	if made.Directory.Path != mkdirPath || !made.Directory.Created || !hasString(made.Directory.Files, mkdirPath+"/index.md") || !hasString(made.Directory.Files, mkdirPath+"/log.md") || !hasString(made.Directory.Files, mkdirPath+"/overview.md") {
 		t.Fatalf("unexpected mkdir contract: %#v", made.Directory)
 	}
-	overview := runCLIJSON[factile.ConceptResult](t, "--mount-file", mountFile, "read", mkdirPath+"/overview", "--json")
+	overview := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", mkdirPath+"/overview", "--json")
 	if overview.Concept.Path != mkdirPath+"/overview" || overview.Concept.Frontmatter["title"] != "Guides Overview" {
 		t.Fatalf("unexpected mkdir overview concept: %#v", overview.Concept)
 	}
 
-	created := runCLIJSON[factile.ConceptResult](t, "--mount-file", mountFile, "create", path, "--type", "Workflow", "--title", "Payment Import", "--body", body, "--json")
+	created := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "create", path, "--type", "Workflow", "--title", "Payment Import", "--body", body, "--json")
 	if created.Concept.Path != path || created.Concept.Frontmatter["type"] != "Workflow" || created.Concept.Frontmatter["title"] != "Payment Import" || !strings.HasPrefix(created.Concept.Revision, "sha256:") {
 		t.Fatalf("unexpected create contract: %#v", created.Concept)
 	}
@@ -548,17 +560,17 @@ func TestCLIJSONWriterContractShapes(t *testing.T) {
 	if err := os.WriteFile(body, []byte("# Payment Import\n\nPayments are settled.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	written := runCLIJSON[factile.ConceptResult](t, "--mount-file", mountFile, "write", path, "--rev", created.Concept.Revision, "--body", body, "--json")
+	written := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "write", path, "--rev", created.Concept.Revision, "--body", body, "--json")
 	if written.Concept.Path != path || !strings.Contains(written.Concept.Markdown, "Payments are settled.") || written.Concept.Revision == created.Concept.Revision {
 		t.Fatalf("unexpected write contract: %#v", written.Concept)
 	}
 
-	patched := runCLIJSON[factile.ConceptResult](t, "--mount-file", mountFile, "patch", path, "--rev", written.Concept.Revision, "--set", "status=draft", "--json")
+	patched := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "patch", path, "--rev", written.Concept.Revision, "--set", "status=draft", "--json")
 	if patched.Concept.Path != path || patched.Concept.Frontmatter["status"] != "draft" || patched.Concept.Revision == written.Concept.Revision {
 		t.Fatalf("unexpected patch contract: %#v", patched.Concept)
 	}
 
-	deleted := runCLIJSON[factile.DeleteResult](t, "--mount-file", mountFile, "delete", path, "--rev", patched.Concept.Revision, "--json")
+	deleted := runCLIJSON[factile.DeleteResult](t, "--workspace", fixture, "delete", path, "--rev", patched.Concept.Revision, "--json")
 	if deleted.Path != path || !deleted.Deleted {
 		t.Fatalf("unexpected delete contract: %#v", deleted)
 	}
@@ -568,8 +580,9 @@ func TestCLIJSONMountAndBundleContracts(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "django-docs")
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	writeCLIBundleManifest(t, source, "django-docs", "Django Docs")
 	t.Chdir(tmp)
-	writeCLIRootConfig(t, ".")
+	writeCLICombinedWorkspace(t, ".")
 
 	inspectBundle := runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", source, "--json")
 	if inspectBundle.Source != source || inspectBundle.Kind != "local" || !inspectBundle.PlausibleOKF || !hasConceptSummaryPath(inspectBundle.Concepts, "workflows/invoice-import") {
@@ -611,8 +624,9 @@ func TestCLIMountCapabilityFlags(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "source")
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	writeCLIBundleManifest(t, source, "source", "Source")
 	t.Chdir(tmp)
-	writeCLIRootConfig(t, ".")
+	writeCLICombinedWorkspace(t, ".")
 
 	writable := runCLIJSON[factile.MountResult](t, "mount", source, "/writable", "--writable", "--json")
 	if !writable.Mount.Writable {
@@ -641,30 +655,23 @@ func TestCLIMountCapabilityFlags(t *testing.T) {
 	}
 }
 
-func TestCLIMountFileRejectsGitAndExplainsRestriction(t *testing.T) {
-	mountFile := filepath.Join(t.TempDir(), "mount-registry.toml")
-	assertCLIJSONError(
-		t,
-		6,
-		factile.ErrUnsupportedSource,
-		"Git sources are not supported with --mount-file; use an active Factile root.",
-		"--mount-file", mountFile,
-		"mount", "https://example.test/coding.git", "/coding", "--ref", "main", "--json",
-	)
-	if _, err := os.Stat(mountFile); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected CLI Git mount changed registry: %v", err)
+func TestCLILegacyMountFileReturnsMigrationDiagnostic(t *testing.T) {
+	registry := filepath.Join(t.TempDir(), "mount-registry.toml")
+	assertCLIJSONError(t, 2, factile.ErrUnsupportedCommand, "--mount-file is no longer supported", "--mount-file", registry, "list", "/", "--json")
+	if _, err := os.Stat(registry); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected legacy option changed registry: %v", err)
 	}
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"mount", "--help"}, nil, &stdout, &stderr)
-	if code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "--mount-file is a legacy local-source registry") {
-		t.Fatalf("mount help omitted legacy restriction: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	if code != 0 || stderr.Len() != 0 || strings.Contains(stdout.String(), "--mount-file") || strings.Contains(stdout.String(), "active Factile root") {
+		t.Fatalf("mount help still exposes legacy composition: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
 func TestCLIGitMountRefreshAndStatus(t *testing.T) {
 	root := t.TempDir()
-	writeCLIRootConfig(t, root)
+	writeCLICombinedWorkspace(t, root)
 	remote := cliGitRemote(t)
 	httpsSource := "https://github.com/senseware/coding-practice.git"
 	scpSource := "git@github.com:senseware/coding-practice.git"
@@ -799,7 +806,10 @@ func TestCLIGitMountRefreshAndStatus(t *testing.T) {
 		}
 	}
 
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	cache, err := gitsource.OpenCache(vfs.WorkspaceContext{
+		WorkspaceDir: root,
+		StateDir:     filepath.Join(root, vfs.StateDirname),
+	}, gitsource.NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -841,7 +851,7 @@ func TestCLIGitMountRefreshAndStatus(t *testing.T) {
 
 func TestCLIGitMountTraceDoesNotExposeCredentials(t *testing.T) {
 	root := t.TempDir()
-	writeCLIRootConfig(t, root)
+	writeCLICombinedWorkspace(t, root)
 	t.Chdir(root)
 	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
 	t.Setenv("FACTILE_TRACE_FILE", tracePath)
@@ -882,7 +892,7 @@ func TestCLIGitMountTraceDoesNotExposeCredentials(t *testing.T) {
 
 func TestCLIRejectsEmptyGitURIDelimitersBeforeMutation(t *testing.T) {
 	root := t.TempDir()
-	writeCLIRootConfig(t, root)
+	writeCLICombinedWorkspace(t, root)
 	t.Chdir(root)
 	for _, tc := range []struct {
 		mountPath string
@@ -986,7 +996,7 @@ func TestCLIJSONSkillContracts(t *testing.T) {
 	}
 
 	inspect := runCLIJSON[skill.InspectResult](t, "skill", "inspect", "codex", "--json")
-	if inspect.Target != "codex" || inspect.Name != "factile" || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, ".factile/views.toml") {
+	if inspect.Target != "codex" || inspect.Name != "factile" || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[workspace]") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[bundle]") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, "factile.views.toml") || strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") {
 		t.Fatalf("unexpected skill inspect contract: %#v", inspect)
 	}
 
@@ -1017,35 +1027,36 @@ func TestCLIJSONSkillContracts(t *testing.T) {
 }
 
 func TestCLIJSONErrorContractShapes(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	body := filepath.Join(t.TempDir(), "body.md")
 	if err := os.WriteFile(body, []byte("# Updated\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	assertCLIJSONError(t, 2, factile.ErrUnsupportedCommand, "Unsupported command: --verbose", "--verbose", "--json")
-	assertCLIJSONError(t, 4, factile.ErrConceptNotFound, "Concept not found: /product-docs/missing", "--mount-file", mountFile, "read", "/product-docs/missing", "--json")
-	assertCLIJSONError(t, 5, factile.ErrRevisionRequired, "Expected revision is required", "--mount-file", mountFile, "write", "/product-docs/workflows/invoice-import", "--body", body, "--json")
+	assertCLIJSONError(t, 4, factile.ErrConceptNotFound, "Concept not found: /product-docs/missing", "--workspace", fixture, "read", "/product-docs/missing", "--json")
+	assertCLIJSONError(t, 5, factile.ErrRevisionRequired, "Expected revision is required", "--workspace", fixture, "write", "/product-docs/workflows/invoice-import", "--body", body, "--json")
 
 }
 
 func TestCLITextModeNoJSONFallbackMatrix(t *testing.T) {
-	mountFile := cliMountFile(t)
-	source := filepath.Join("..", "..", "testdata", "bundles", "product-docs")
+	fixture := cliFixtureWorkspace(t)
+	bundles := filepath.Join(filepath.Dir(fixture), "bundles")
+	source := filepath.Join(bundles, "product-docs")
 	cases := []struct {
 		name string
 		args []string
 	}{
-		{name: "list", args: []string{"--mount-file", mountFile, "list", "/", "--color", "never"}},
-		{name: "brief list", args: []string{"--mount-file", mountFile, "list", "/", "--brief", "--color", "never"}},
-		{name: "stat", args: []string{"--mount-file", mountFile, "stat", "/product-docs", "--color", "never"}},
-		{name: "read", args: []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--color", "never"}},
-		{name: "search", args: []string{"--mount-file", mountFile, "search", "/product-docs", "invoice", "--color", "never"}},
-		{name: "context", args: []string{"--mount-file", mountFile, "context", "/product-docs", "invoice import", "--color", "never"}},
-		{name: "graph", args: []string{"--mount-file", mountFile, "graph", "/product-docs", "--color", "never"}},
-		{name: "validate", args: []string{"--mount-file", mountFile, "validate", "/product-docs", "--color", "never"}},
+		{name: "list", args: []string{"--workspace", fixture, "list", "/", "--color", "never"}},
+		{name: "brief list", args: []string{"--workspace", fixture, "list", "/", "--brief", "--color", "never"}},
+		{name: "stat", args: []string{"--workspace", fixture, "stat", "/product-docs", "--color", "never"}},
+		{name: "read", args: []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--color", "never"}},
+		{name: "search", args: []string{"--workspace", fixture, "search", "/product-docs", "invoice", "--color", "never"}},
+		{name: "context", args: []string{"--workspace", fixture, "context", "/product-docs", "invoice import", "--color", "never"}},
+		{name: "graph", args: []string{"--workspace", fixture, "graph", "/product-docs", "--color", "never"}},
+		{name: "validate", args: []string{"--workspace", fixture, "validate", "/product-docs", "--color", "never"}},
 		{name: "bundle inspect", args: []string{"bundle", "inspect", source, "--color", "never"}},
-		{name: "bundle find", args: []string{"bundle", "find", filepath.Join("..", "..", "testdata", "bundles"), "--color", "never"}},
+		{name: "bundle find", args: []string{"bundle", "find", bundles, "--color", "never"}},
 		{name: "skill list", args: []string{"skill", "list", "--color", "never"}},
 		{name: "skill inspect", args: []string{"skill", "inspect", "codex", "--color", "never"}},
 	}
@@ -1080,10 +1091,10 @@ func TestCLITextModeNoJSONFallbackMatrix(t *testing.T) {
 func TestCLIColorFlagsAffectTextOnly(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("TERM", "xterm-256color")
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--color", "always"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--color", "always"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("color always read exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1093,7 +1104,7 @@ func TestCLIColorFlagsAffectTextOnly(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("color never read exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1101,7 +1112,7 @@ func TestCLIColorFlagsAffectTextOnly(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--json", "--color", "always"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--json", "--color", "always"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("json color always read exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1109,10 +1120,10 @@ func TestCLIColorFlagsAffectTextOnly(t *testing.T) {
 }
 
 func TestCLIOutputModeAndColorValidation(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--format", "text"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--format", "text"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("--format text read exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1122,7 +1133,7 @@ func TestCLIOutputModeAndColorValidation(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "--json", "--color", "sepia", "list", "/"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "--json", "--color", "sepia", "list", "/"}, nil, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), `"code":"invalid_path"`) || !strings.Contains(stderr.String(), "unsupported color mode: sepia") {
 		t.Fatalf("expected structured invalid color error, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1136,10 +1147,10 @@ func TestCLIOutputModeAndColorValidation(t *testing.T) {
 }
 
 func TestCLIJSONAndTextErrors(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/missing", "--json", "--color", "always"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/missing", "--json", "--color", "always"}, nil, &stdout, &stderr)
 	if code != 4 || !strings.Contains(stderr.String(), `"code":"concept_not_found"`) {
 		t.Fatalf("expected structured missing concept error, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1147,7 +1158,7 @@ func TestCLIJSONAndTextErrors(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/missing"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/missing"}, nil, &stdout, &stderr)
 	if code != 4 || strings.Contains(stderr.String(), `"code"`) || !strings.Contains(stderr.String(), "Concept not found") {
 		t.Fatalf("expected text missing concept error, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1243,7 +1254,7 @@ func TestCLINormalizedErrorExitCodeMappings(t *testing.T) {
 }
 
 func TestCLIWriteContractErrorExitCodes(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	body := filepath.Join(t.TempDir(), "body.md")
 	if err := os.WriteFile(body, []byte("# Updated\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1251,38 +1262,38 @@ func TestCLIWriteContractErrorExitCodes(t *testing.T) {
 	path := "/product-docs/workflows/invoice-import"
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "write", path, "--body", body, "--json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "write", path, "--body", body, "--json"}, nil, &stdout, &stderr)
 	if code != 5 || !strings.Contains(stderr.String(), `"code":"revision_required"`) {
 		t.Fatalf("expected revision_required exit 5, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "create", path, "--type", "Workflow", "--title", "Invoice Import", "--body", body, "--json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "create", path, "--type", "Workflow", "--title", "Invoice Import", "--body", body, "--json"}, nil, &stdout, &stderr)
 	if code != 5 || !strings.Contains(stderr.String(), `"code":"concept_already_exists"`) {
 		t.Fatalf("expected concept_already_exists exit 5, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "mkdir", "/product-docs/workflows", "--json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "mkdir", "/product-docs/workflows", "--json"}, nil, &stdout, &stderr)
 	if code != 5 || !strings.Contains(stderr.String(), `"code":"path_already_exists"`) {
 		t.Fatalf("expected path_already_exists exit 5, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
-	rev := cliRevision(t, mountFile, path)
+	rev := cliRevision(t, fixture, path)
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "patch", path, "--rev", rev, "--replace-section", "Does Not Exist", body, "--json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "patch", path, "--rev", rev, "--replace-section", "Does Not Exist", body, "--json"}, nil, &stdout, &stderr)
 	if code != 5 || !strings.Contains(stderr.String(), `"code":"section_not_found"`) {
 		t.Fatalf("expected section_not_found exit 5, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
 func TestCLIValidateInvalidExitsThree(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "validate", "/broken-docs", "--format", "json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "validate", "/broken-docs", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 3 {
 		t.Fatalf("validate exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1292,9 +1303,9 @@ func TestCLIValidateInvalidExitsThree(t *testing.T) {
 }
 
 func TestCLIListDefaultsToRoot(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "list", "--format", "json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "list", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("list exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -1303,25 +1314,162 @@ func TestCLIListDefaultsToRoot(t *testing.T) {
 	}
 }
 
-func TestCLIExplicitRoot(t *testing.T) {
+func TestCLIExplicitWorkspaceAndLegacyRootDiagnostic(t *testing.T) {
 	workspace := cliV2Workspace(t)
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--root", workspace, "list", "/", "--brief", "--json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", workspace, "list", "/", "--brief", "--json"}, nil, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("explicit root list exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		t.Fatalf("explicit workspace list exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"/engineering"`) {
-		t.Fatalf("explicit root list missing engineering card:\n%s", stdout.String())
+		t.Fatalf("explicit workspace list missing engineering card:\n%s", stdout.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--root", filepath.Join(tmp, "missing-root"), "list", "/", "--json"}, nil, &stdout, &stderr)
-	if code != 4 || !strings.Contains(stderr.String(), `"code":"no_active_root"`) || !strings.Contains(stderr.String(), "factile init") {
-		t.Fatalf("missing explicit root should fail with no_active_root, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	code = Run(context.Background(), []string{"--root", workspace, "list", "/", "--json"}, nil, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), `"code":"unsupported_command"`) || !strings.Contains(stderr.String(), "use --workspace") {
+		t.Fatalf("legacy --root should not select a workspace, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--workspace", filepath.Join(tmp, "missing-workspace"), "list", "/", "--json"}, nil, &stdout, &stderr)
+	if code != 4 || !strings.Contains(stderr.String(), `"code":"invalid_workspace"`) {
+		t.Fatalf("missing explicit workspace should fail with invalid_workspace, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"--workspace", filepath.Join(workspace, "engineering"), "list", "/", "--json"}, nil, &stdout, &stderr)
+	if code != 4 || !strings.Contains(stderr.String(), `"code":"invalid_workspace"`) {
+		t.Fatalf("explicit selection searched for an ancestor workspace, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCLIStatusUsesOneWorkspaceBoundaryFromEveryCWD(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	secondary := filepath.Join(workspace, "bundles", "secondary")
+	writeCLIWorkspaceManifest(t, workspace, "docs")
+	writeCLIBundleManifest(t, rootBundle, "docs", "Docs")
+	writeCLIBundleManifest(t, secondary, "secondary", "Secondary")
+	writeCLITestFile(t, filepath.Join(rootBundle, "overview.md"), `---
+type: Reference
+title: Workspace Overview
+---
+
+# Workspace Overview
+`)
+
+	for _, workDir := range []string{workspace, filepath.Join(rootBundle, "guides", "deep"), filepath.Join(secondary, "notes", "deep")} {
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(filepath.Base(filepath.Dir(workDir))+"-"+filepath.Base(workDir), func(t *testing.T) {
+			t.Chdir(workDir)
+			status := runCLIJSON[factile.SummaryResult](t, "status", "--json")
+			if status.Workspace.WorkspaceDir != workspace || status.Workspace.RootBundleDir != rootBundle || status.Workspace.StateDir != filepath.Join(workspace, ".factile") {
+				t.Fatalf("CWD changed workspace status from %s: %#v", workDir, status.Workspace)
+			}
+			if !hasCardPath(status.Knowledge, "/overview") {
+				t.Fatalf("CWD lost root-bundle knowledge from %s: %#v", workDir, status.Knowledge)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".factile")); !os.IsNotExist(err) {
+		t.Fatalf("read-only status created workspace state: %v", err)
+	}
+}
+
+func TestCLIDetachedBundleAllowsOnlyPhysicalBundleCommands(t *testing.T) {
+	bundle := t.TempDir()
+	writeCLIBundleManifest(t, bundle, "detached", "Detached")
+	writeCLITestFile(t, filepath.Join(bundle, "overview.md"), `---
+type: Reference
+title: Detached Overview
+---
+
+# Detached Overview
+`)
+	t.Chdir(bundle)
+
+	inspected := runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", ".", "--json")
+	if !inspected.PlausibleOKF || len(inspected.Concepts) != 1 {
+		t.Fatalf("unexpected detached bundle inspection: %#v", inspected)
+	}
+	found := runCLIJSON[factile.BundleFindResult](t, "bundle", "find", ".", "--json")
+	if len(found.Sources) != 1 || found.Sources[0] != bundle {
+		t.Fatalf("unexpected detached bundle discovery: %#v", found)
+	}
+	plainDirectory := t.TempDir()
+	writeCLITestFile(t, filepath.Join(plainDirectory, "index.md"), "# Not a bundle\n")
+	assertCLIJSONError(t, 4, factile.ErrInvalidBundle, "no valid bundle factile.toml", "bundle", "inspect", plainDirectory, "--json")
+	plainFound := runCLIJSON[factile.BundleFindResult](t, "bundle", "find", plainDirectory, "--json")
+	if len(plainFound.Sources) != 0 {
+		t.Fatalf("bundle find accepted an index-only directory: %#v", plainFound)
+	}
+
+	body := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(body, []byte("# New\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"status", "--json"},
+		{"list", "/", "--json"},
+		{"mount", ".", "/self", "--json"},
+		{"create", "/new", "--type", "Reference", "--title", "New", "--body", body, "--json"},
+		{"view", "list", "--json"},
+		{"ui", "--no-open", "--json"},
+		{"mcp", "serve", "--stdio", "--read-only", "--json"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), args, nil, &stdout, &stderr)
+		if code != 4 || stdout.Len() != 0 || !strings.Contains(stderr.String(), `"code":"no_active_workspace"`) {
+			t.Fatalf("detached contextual command %v: code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(bundle, ".factile")); !os.IsNotExist(err) {
+		t.Fatalf("detached operations created local state: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle, "self.mount.toml")); !os.IsNotExist(err) {
+		t.Fatalf("rejected detached mount wrote a descriptor: %v", err)
+	}
+}
+
+func TestCLILegacyLayoutReportsWorkspaceMigration(t *testing.T) {
+	repository := t.TempDir()
+	legacy := filepath.Join(repository, "docs", ".factile", "config.toml")
+	writeCLITestFile(t, legacy, "version = 1\n")
+	workDir := filepath.Join(repository, "src", "deep")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workDir)
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"status", "--json"}, nil, &stdout, &stderr)
+	if code != 4 || stdout.Len() != 0 {
+		t.Fatalf("legacy status exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var payload struct {
+		Error factile.AppError `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Error.Code != factile.ErrNoActiveWorkspace || payload.Error.Details["legacy_path"] != legacy || !strings.Contains(fmt.Sprint(payload.Error.Details["migration"]), "factile.toml") {
+		t.Fatalf("legacy migration details missing: %#v", payload.Error)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"status"}, nil, &stdout, &stderr)
+	if code != 4 || !strings.Contains(stderr.String(), "No active Factile workspace.") || !strings.Contains(stderr.String(), "Migration: Create") || strings.Contains(stderr.String(), "no_active_root") {
+		t.Fatalf("legacy text diagnostic is not actionable: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -1358,14 +1506,19 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(string(skillFile), "Reader mode is installed") ||
 		!strings.Contains(string(skillFile), "Reader commands work on paths") ||
-		!strings.Contains(string(skillFile), ".factile/config.toml") ||
+		!strings.Contains(string(skillFile), "factile.toml` with `[workspace]") ||
+		!strings.Contains(string(skillFile), "factile.toml` with `[bundle]") ||
 		!strings.Contains(string(skillFile), "<name>.mount.toml") ||
-		!strings.Contains(string(skillFile), ".factile/views.toml") ||
+		!strings.Contains(string(skillFile), "factile.views.toml") ||
 		!strings.Contains(string(skillFile), "Use a narrower path or `--view <id>` when the task scope is specific.") ||
 		!strings.Contains(string(skillFile), "factile context / '<task>' --json") ||
 		strings.Contains(string(skillFile), "--format json") ||
 		strings.Contains(string(skillFile), "Knowledge Base") ||
 		strings.Contains(string(skillFile), ".factile/mounts.toml") ||
+		strings.Contains(string(skillFile), ".factile/config.toml") ||
+		strings.Contains(string(skillFile), ".factile/views.toml") ||
+		strings.Contains(string(skillFile), "`--root") ||
+		strings.Contains(string(skillFile), "no_active_root") ||
 		strings.Contains(string(skillFile), "`factile kb") {
 		t.Fatalf("reader mode guidance missing:\n%s", string(skillFile))
 	}
@@ -1373,10 +1526,10 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(discoverScript), "factile list / --json") || strings.Contains(string(discoverScript), "--format json") {
+	if !strings.Contains(string(discoverScript), "factile status --json") || !strings.Contains(string(discoverScript), "factile list / --json") || strings.Contains(string(discoverScript), "--format json") {
 		t.Fatalf("discover script should prefer --json:\n%s", string(discoverScript))
 	}
-	if !strings.Contains(string(agents), "factile context / '<task summary>' --json") || !strings.Contains(string(agents), ".factile/views.toml") || strings.Contains(string(agents), "--format json") || strings.Contains(string(agents), "Knowledge Base") || strings.Contains(string(agents), ".factile/mounts.toml") {
+	if !strings.Contains(string(agents), "factile status --json") || !strings.Contains(string(agents), "factile context / '<task summary>' --json") || !strings.Contains(string(agents), "factile.views.toml") || strings.Contains(string(agents), "--format json") || strings.Contains(string(agents), "Knowledge Base") || strings.Contains(string(agents), ".factile/mounts.toml") || strings.Contains(string(agents), ".factile/views.toml") {
 		t.Fatalf("AGENTS managed block should prefer --json:\n%s", string(agents))
 	}
 	stdout.Reset()
@@ -1419,7 +1572,7 @@ func TestCLISkillInstallCuratorModeWithProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(skillFile), "Curator mode is installed") || !strings.Contains(string(skillFile), "Profile: `software`") || !strings.Contains(string(skillFile), "factile mount") || !strings.Contains(string(skillFile), ".factile/views.toml") {
+	if !strings.Contains(string(skillFile), "Curator mode is installed") || !strings.Contains(string(skillFile), "Profile: `software`") || !strings.Contains(string(skillFile), "factile mount") || !strings.Contains(string(skillFile), "factile.views.toml") || strings.Contains(string(skillFile), ".factile/views.toml") {
 		t.Fatalf("curator/profile guidance missing:\n%s", string(skillFile))
 	}
 	agents, err := os.ReadFile("AGENTS.md")
@@ -1528,9 +1681,10 @@ func TestCLIInitCreatesDefaultKnowledgeAndDetectsCodex(t *testing.T) {
 		t.Fatalf("init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	for _, filename := range []string{
-		filepath.Join("docs", ".factile", "config.toml"),
+		".gitignore",
+		"factile.toml",
+		filepath.Join("docs", "factile.toml"),
 		filepath.Join("docs", "index.md"),
-		filepath.Join("docs", "log.md"),
 		filepath.Join("docs", "overview.md"),
 		filepath.Join(".agents", "skills", "factile", "SKILL.md"),
 		filepath.Join(".codex", "config.toml"),
@@ -1540,27 +1694,29 @@ func TestCLIInitCreatesDefaultKnowledgeAndDetectsCodex(t *testing.T) {
 			t.Fatalf("expected %s: %v", filename, err)
 		}
 	}
-	config, err := os.ReadFile(filepath.Join("docs", ".factile", "config.toml"))
+	workspaceManifest, err := vfs.LoadManifest(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(config), "version = 1") || !strings.Contains(string(config), "[defaults]") {
-		t.Fatalf("unexpected root config:\n%s", string(config))
+	bundleManifest, err := vfs.LoadManifest("docs")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, filename := range []string{
-		filepath.Join(".factile", "knowledge"),
-		filepath.Join(".factile", "library.toml"),
-		filepath.Join(".factile", "knowledge-bases", "project.toml"),
-		filepath.Join(".factile", "mounts.toml"),
-	} {
-		if _, err := os.Stat(filename); !os.IsNotExist(err) {
-			t.Fatalf("fresh v2 init should not create %s, err=%v", filename, err)
-		}
+	if workspaceManifest.Workspace == nil || workspaceManifest.Workspace.Root != "docs" || bundleManifest.Bundle == nil {
+		t.Fatalf("unexpected initialized manifests: workspace=%#v bundle=%#v", workspaceManifest, bundleManifest)
+	}
+	ignore, err := os.ReadFile(".gitignore")
+	if err != nil || !strings.Contains(string(ignore), "/.factile/") {
+		t.Fatalf("workspace state ignore missing: %q, %v", ignore, err)
+	}
+	if _, err := os.Stat(".factile"); !os.IsNotExist(err) {
+		t.Fatalf("fresh init created local state: %v", err)
 	}
 
 	var result struct {
-		RootPath string `json:"root_path"`
-		Files    []struct {
+		WorkspacePath  string `json:"workspace_path"`
+		RootBundlePath string `json:"root_bundle_path"`
+		Files          []struct {
 			Path   string `json:"path"`
 			Action string `json:"action"`
 		} `json:"files"`
@@ -1571,7 +1727,7 @@ func TestCLIInitCreatesDefaultKnowledgeAndDetectsCodex(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("init JSON did not parse: %v\n%s", err, stdout.String())
 	}
-	if result.RootPath != "docs" || !hasInitFile(result.Files, filepath.Join("docs", ".factile", "config.toml"), "created") || !hasInitFile(result.Files, filepath.Join("docs", "overview.md"), "created") {
+	if result.WorkspacePath != "." || result.RootBundlePath != "docs" || !hasInitFile(result.Files, "factile.toml", "created") || !hasInitFile(result.Files, filepath.Join("docs", "factile.toml"), "created") || !hasInitFile(result.Files, filepath.Join("docs", "overview.md"), "created") {
 		t.Fatalf("unexpected init JSON: %#v\n%s", result, stdout.String())
 	}
 	if len(result.Agents) != 1 || result.Agents[0].Agent != "codex" {
@@ -1593,13 +1749,15 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 	}
 	first := stdout.String()
 	for _, want := range []string{
-		"Initialized Factile knowledge",
-		"Root:           docs",
-		"Config:         docs/.factile/config.toml (created)",
-		"Index:          docs/index.md (created)",
-		"Log:            docs/log.md (created)",
-		"Overview:       docs/overview.md (created)",
-		"Agent guidance: Codex reader mode (detected, installed)",
+		"Initialized Factile workspace",
+		"Workspace:          .",
+		"Root bundle:        docs",
+		"Ignore:             .gitignore (created)",
+		"Workspace manifest: factile.toml (created)",
+		"Bundle manifest:    docs/factile.toml (created)",
+		"Index:              docs/index.md (created)",
+		"Overview:           docs/overview.md (created)",
+		"Agent guidance:     Codex reader mode (detected, installed)",
 		"Next:",
 		"factile list /",
 		"factile read /overview",
@@ -1621,13 +1779,15 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 	}
 	repeated := stdout.String()
 	for _, want := range []string{
-		"Factile knowledge is ready",
-		"Root:           docs",
-		"Config:         docs/.factile/config.toml (reused)",
-		"Index:          docs/index.md (reused)",
-		"Log:            docs/log.md (reused)",
-		"Overview:       docs/overview.md (reused)",
-		"Agent guidance: Codex reader mode (detected, already installed)",
+		"Factile workspace is ready",
+		"Workspace:          .",
+		"Root bundle:        docs",
+		"Ignore:             .gitignore (reused)",
+		"Workspace manifest: factile.toml (reused)",
+		"Bundle manifest:    docs/factile.toml (reused)",
+		"Index:              docs/index.md (reused)",
+		"Overview:           docs/overview.md (reused)",
+		"Agent guidance:     Codex reader mode (detected, already installed)",
 	} {
 		if !strings.Contains(repeated, want) {
 			t.Fatalf("repeated init text missing %q:\n%s", want, repeated)
@@ -1635,15 +1795,14 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 	}
 }
 
-func TestCLIInitFromChildUsesExistingRoot(t *testing.T) {
+func TestCLIInitUsesCurrentDirectoryAsItsExplicitTarget(t *testing.T) {
 	tmp := t.TempDir()
 	parent := filepath.Join(tmp, "project")
-	root := filepath.Join(parent, "docs")
+	parentRoot := filepath.Join(parent, "docs")
 	child := filepath.Join(parent, "src", "nested")
-	if err := os.MkdirAll(filepath.Join(parent, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeCLIRootConfig(t, root)
+	writeCLIWorkspaceManifest(t, parent, "docs")
+	writeCLIBundleManifest(t, parentRoot, "parent", "Parent")
+	writeCLITestFile(t, filepath.Join(parentRoot, "overview.md"), "# Parent\n")
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1655,17 +1814,39 @@ func TestCLIInitFromChildUsesExistingRoot(t *testing.T) {
 		t.Fatalf("init from child exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	for _, filename := range []string{
-		filepath.Join(root, ".factile", "config.toml"),
-		filepath.Join(root, "index.md"),
-		filepath.Join(root, "log.md"),
-		filepath.Join(root, "overview.md"),
+		filepath.Join(child, ".gitignore"),
+		filepath.Join(child, "factile.toml"),
+		filepath.Join(child, "docs", "factile.toml"),
+		filepath.Join(child, "docs", "index.md"),
+		filepath.Join(child, "docs", "overview.md"),
 	} {
 		if _, err := os.Stat(filename); err != nil {
-			t.Fatalf("expected existing root file %s: %v", filename, err)
+			t.Fatalf("expected explicit child workspace file %s: %v", filename, err)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(child, ".factile")); !os.IsNotExist(err) {
-		t.Fatalf("child should not get nested .factile, err=%v", err)
+		t.Fatalf("child init created local state: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(parentRoot, "overview.md"))
+	if err != nil || string(data) != "# Parent\n" {
+		t.Fatalf("parent workspace was changed: %q, %v", data, err)
+	}
+}
+
+func TestCLIInitCanTargetAnExplicitWorkspaceDirectory(t *testing.T) {
+	target := t.TempDir()
+	t.Chdir(t.TempDir())
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"--workspace", target, "init", "--here", "--json"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("explicit init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	manifest, err := vfs.LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Root != "." || manifest.Bundle == nil {
+		t.Fatalf("unexpected explicit init manifest: %#v", manifest)
 	}
 }
 
@@ -1680,22 +1861,23 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 	}
 	here := stdout.String()
 	for _, want := range []string{
-		"Initialized Factile knowledge",
-		"Root:           .",
-		"Config:         .factile/config.toml (created)",
-		"Index:          index.md (created)",
-		"Log:            log.md (created)",
-		"Overview:       overview.md (created)",
-		"Agent guidance: none detected",
+		"Initialized Factile workspace",
+		"Workspace:          .",
+		"Root bundle:        .",
+		"Ignore:             .gitignore (created)",
+		"Workspace manifest: factile.toml (created)",
+		"Index:              index.md (created)",
+		"Overview:           overview.md (created)",
+		"Agent guidance:     none detected",
 	} {
 		if !strings.Contains(here, want) {
 			t.Fatalf("init --here text missing %q:\n%s", want, here)
 		}
 	}
 	for _, filename := range []string{
-		filepath.Join(".factile", "config.toml"),
+		".gitignore",
+		"factile.toml",
 		"index.md",
-		"log.md",
 		"overview.md",
 	} {
 		if _, err := os.Stat(filename); err != nil {
@@ -1705,14 +1887,8 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 	if _, err := os.Stat("docs"); !os.IsNotExist(err) {
 		t.Fatalf("init --here should not create docs directory, err=%v", err)
 	}
-	for _, filename := range []string{
-		filepath.Join(".factile", "library.toml"),
-		filepath.Join(".factile", "knowledge-bases", "project.toml"),
-		filepath.Join(".factile", "mounts.toml"),
-	} {
-		if _, err := os.Stat(filename); !os.IsNotExist(err) {
-			t.Fatalf("fresh v2 init --here should not create %s, err=%v", filename, err)
-		}
+	if _, err := os.Stat(".factile"); !os.IsNotExist(err) {
+		t.Fatalf("fresh v2 init --here created local state: %v", err)
 	}
 
 	agentDir := t.TempDir()
@@ -1724,7 +1900,7 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 		t.Fatalf("explicit agent init text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	explicit := stdout.String()
-	if !strings.Contains(explicit, "Agent guidance: Codex reader mode (installed)") {
+	if !strings.Contains(explicit, "Agent guidance:") || !strings.Contains(explicit, "Codex reader mode (installed)") {
 		t.Fatalf("explicit agent init text missing installed guidance:\n%s", explicit)
 	}
 }
@@ -1741,8 +1917,9 @@ func TestCLIInitHereJSONWithoutDetectedAgent(t *testing.T) {
 		t.Fatalf("unexpected agent skill file err=%v", err)
 	}
 	var result struct {
-		RootPath string `json:"root_path"`
-		Files    []struct {
+		WorkspacePath  string `json:"workspace_path"`
+		RootBundlePath string `json:"root_bundle_path"`
+		Files          []struct {
 			Path   string `json:"path"`
 			Action string `json:"action"`
 		} `json:"files"`
@@ -1753,8 +1930,53 @@ func TestCLIInitHereJSONWithoutDetectedAgent(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("init JSON did not parse: %v\n%s", err, stdout.String())
 	}
-	if result.RootPath != "." || !hasInitFile(result.Files, ".factile/config.toml", "created") || !hasInitFile(result.Files, "overview.md", "created") || len(result.Agents) != 0 {
+	if result.WorkspacePath != "." || result.RootBundlePath != "." || !hasInitFile(result.Files, "factile.toml", "created") || !hasInitFile(result.Files, ".gitignore", "created") || !hasInitFile(result.Files, "overview.md", "created") || len(result.Agents) != 0 {
 		t.Fatalf("unexpected init --here JSON: %#v\n%s", result, stdout.String())
+	}
+}
+
+func TestCLIInitRefusesLegacyAndPartialLayoutsWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		setup func(*testing.T, string)
+	}{
+		{
+			name: "legacy",
+			path: filepath.Join(".factile", "config.toml"),
+			setup: func(t *testing.T, workspace string) {
+				writeCLITestFile(t, filepath.Join(workspace, ".factile", "config.toml"), "version = 1\n")
+			},
+		},
+		{
+			name: "partial",
+			path: "factile.toml",
+			setup: func(t *testing.T, workspace string) {
+				writeCLIWorkspaceManifest(t, workspace, "docs")
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			tc.setup(t, workspace)
+			before, err := os.ReadFile(filepath.Join(workspace, tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := Run(context.Background(), []string{"--workspace", workspace, "init", "--json"}, nil, &stdout, &stderr)
+			if code != 4 || stdout.Len() != 0 || !strings.Contains(stderr.String(), `"code":"invalid_workspace"`) {
+				t.Fatalf("rejected init was unstable: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if _, err := os.Stat(filepath.Join(workspace, ".gitignore")); !os.IsNotExist(err) {
+				t.Fatalf("rejected init changed .gitignore: %v", err)
+			}
+			after, err := os.ReadFile(filepath.Join(workspace, tc.path))
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("rejected init changed existing config: before=%q after=%q err=%v", before, after, err)
+			}
+		})
 	}
 }
 
@@ -1782,10 +2004,10 @@ func TestCLIBriefListAndStat(t *testing.T) {
 }
 
 func TestCLIReaderTextOutput(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "list", "/", "--color", "never"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "list", "/", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("list text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1799,7 +2021,7 @@ func TestCLIReaderTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "read", "/product-docs/workflows/invoice-import", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "read", "/product-docs/workflows/invoice-import", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("read text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1875,10 +2097,10 @@ func TestCLIReaderBriefStatAndMountedSourceTextOutput(t *testing.T) {
 }
 
 func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "search", "/product-docs", "invoice", "--color", "never"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "search", "/product-docs", "invoice", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("search text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1892,7 +2114,7 @@ func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "context", "/product-docs", "invoice import workflow", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "context", "/product-docs", "invoice import workflow", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("context text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1909,7 +2131,7 @@ func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "graph", "/product-docs", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "graph", "/product-docs", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("graph text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1923,7 +2145,7 @@ func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "validate", "/broken-docs", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "validate", "/broken-docs", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 3 {
 		t.Fatalf("validate text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1937,17 +2159,17 @@ func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
 }
 
 func TestCLIRejectsUnsupportedDepth(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "context", "/product-docs", "invoice import workflow", "--depth", "2", "--json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "context", "/product-docs", "invoice import workflow", "--depth", "2", "--json"}, nil, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), `"code":"invalid_path"`) || !strings.Contains(stderr.String(), "Depth must be 0 or 1") {
 		t.Fatalf("expected context depth rejection, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "graph", "/product-docs/workflows/invoice-import", "--depth", "2", "--json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "graph", "/product-docs/workflows/invoice-import", "--depth", "2", "--json"}, nil, &stdout, &stderr)
 	if code != 2 || !strings.Contains(stderr.String(), `"code":"invalid_path"`) || !strings.Contains(stderr.String(), "Depth must be 0 or 1") {
 		t.Fatalf("expected graph depth rejection, code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1997,7 +2219,7 @@ func TestCLIReaderMountedSourceQueryGraphTextOutput(t *testing.T) {
 }
 
 func TestCLIWriteCommandTextOutput(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	tmp := t.TempDir()
 	body := filepath.Join(tmp, "body.md")
 	if err := os.WriteFile(body, []byte("# Payment Import\n\nPayments are imported.\n"), 0o644); err != nil {
@@ -2007,7 +2229,7 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	mkdirPath := "/product-docs/guides"
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "mkdir", mkdirPath, "--title", "Guides", "--bundle", "--color", "never"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "mkdir", mkdirPath, "--title", "Guides", "--bundle", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("mkdir text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2020,7 +2242,7 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "create", path, "--type", "Workflow", "--title", "Payment Import", "--body", body, "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "create", path, "--type", "Workflow", "--title", "Payment Import", "--body", body, "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("create text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2029,13 +2251,13 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 	}
 	assertNotJSONText(t, stdout.String())
 
-	rev := cliRevision(t, mountFile, path)
+	rev := cliRevision(t, fixture, path)
 	if err := os.WriteFile(body, []byte("# Payment Import\n\nPayments are settled.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "write", path, "--rev", rev, "--body", body, "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "write", path, "--rev", rev, "--body", body, "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("write text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2044,10 +2266,10 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 	}
 	assertNotJSONText(t, stdout.String())
 
-	rev = cliRevision(t, mountFile, path)
+	rev = cliRevision(t, fixture, path)
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "patch", path, "--rev", rev, "--set", "status=draft", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "patch", path, "--rev", rev, "--set", "status=draft", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("patch text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2056,10 +2278,10 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 	}
 	assertNotJSONText(t, stdout.String())
 
-	rev = cliRevision(t, mountFile, path)
+	rev = cliRevision(t, fixture, path)
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "deprecate", path, "--rev", rev, "--reason", "superseded", "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "deprecate", path, "--rev", rev, "--reason", "superseded", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("deprecate text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2068,10 +2290,10 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 	}
 	assertNotJSONText(t, stdout.String())
 
-	renameRev := cliRevision(t, mountFile, "/product-docs/workflows/invoice-import")
+	renameRev := cliRevision(t, fixture, "/product-docs/workflows/invoice-import")
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "rename", "/product-docs/workflows/invoice-import", "/product-docs/workflows/invoice-import-v2", "--rev", renameRev, "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "rename", "/product-docs/workflows/invoice-import", "/product-docs/workflows/invoice-import-v2", "--rev", renameRev, "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("rename text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2080,10 +2302,10 @@ func TestCLIWriteCommandTextOutput(t *testing.T) {
 	}
 	assertNotJSONText(t, stdout.String())
 
-	rev = cliRevision(t, mountFile, path)
+	rev = cliRevision(t, fixture, path)
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "delete", path, "--rev", rev, "--color", "never"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "delete", path, "--rev", rev, "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("delete text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -2097,8 +2319,9 @@ func TestCLICuratorAndBundleTextOutput(t *testing.T) {
 	tmp := t.TempDir()
 	source := filepath.Join(tmp, "django-docs")
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), source)
+	writeCLIBundleManifest(t, source, "django-docs", "Django Docs")
 	t.Chdir(tmp)
-	writeCLIRootConfig(t, ".")
+	writeCLICombinedWorkspace(t, ".")
 
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"bundle", "inspect", source, "--color", "never"}, nil, &stdout, &stderr)
@@ -2245,11 +2468,11 @@ func TestCLISkillDoctorJSON(t *testing.T) {
 }
 
 func TestCLITraceFile(t *testing.T) {
-	mountFile := cliMountFile(t)
+	fixture := cliFixtureWorkspace(t)
 	traceFile := filepath.Join(t.TempDir(), "usage.jsonl")
 	t.Setenv("FACTILE_TRACE_FILE", traceFile)
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "list", "/", "--format", "json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "list", "/", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("list exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -2262,7 +2485,7 @@ func TestCLITraceFile(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(context.Background(), []string{"--mount-file", mountFile, "list", "/", "--brief", "--format", "json"}, nil, &stdout, &stderr)
+	code = Run(context.Background(), []string{"--workspace", fixture, "list", "/", "--brief", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("brief list exit code = %d stderr=%s", code, stderr.String())
 	}
@@ -2275,36 +2498,36 @@ func TestCLITraceFile(t *testing.T) {
 	}
 }
 
-func cliMountFile(t *testing.T) string {
+func cliFixtureWorkspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
-	product := filepath.Join(tmp, "product-docs")
-	broken := filepath.Join(tmp, "broken-docs")
+	workspace := filepath.Join(tmp, "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	product := filepath.Join(tmp, "bundles", "product-docs")
+	broken := filepath.Join(tmp, "bundles", "broken-docs")
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles", "broken-docs"), broken)
-	mountFile := filepath.Join(tmp, "mount-registry.toml")
-	data := `[mounts."/product-docs"]
-source = "` + product + `"
-kind = "local"
+	writeCLIBundleManifest(t, product, "product-docs", "Product Docs")
+	writeCLIBundleManifest(t, broken, "broken-docs", "Broken Docs")
+	writeCLIWorkspaceManifest(t, workspace, "docs")
+	writeCLIBundleManifest(t, rootBundle, "fixture", "Fixture")
+	writeCLITestFile(t, filepath.Join(rootBundle, "product-docs.mount.toml"), `source = "../../bundles/product-docs"
 writable = true
-
-[mounts."/broken-docs"]
-source = "` + broken + `"
-kind = "local"
+`)
+	writeCLITestFile(t, filepath.Join(rootBundle, "broken-docs.mount.toml"), `source = "../../bundles/broken-docs"
 writable = true
-`
-	if err := os.WriteFile(mountFile, []byte(data), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return mountFile
+`)
+	return workspace
 }
 
 func cliV2Workspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	writeCLIRootConfig(t, workspace)
+	writeCLICombinedWorkspace(t, workspace)
 	copyTestDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	writeCLIBundleManifest(t, filepath.Join(tmp, "bundles", "shared-guides"), "shared-guides", "Shared Guides")
+	writeCLIBundleManifest(t, filepath.Join(tmp, "bundles", "product-docs"), "product-docs", "Product Docs")
 	writeCLITestFile(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
 writable = false
 title = "Common Engineering Guides"
@@ -2338,27 +2561,44 @@ func writeCLITestFile(t *testing.T, filename string, data string) {
 	}
 }
 
-func writeCLIRootConfig(t *testing.T, root string) {
+func writeCLIWorkspaceManifest(t *testing.T, workspace, root string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".factile"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte(`version = 1
+	writeCLITestFile(t, filepath.Join(workspace, "factile.toml"), "version = 2\n\n[workspace]\nroot = \""+root+"\"\n")
+}
 
+func writeCLICombinedWorkspace(t *testing.T, workspace string) {
+	t.Helper()
+	writeCLITestFile(t, filepath.Join(workspace, "factile.toml"), `version = 2
+
+[workspace]
+root = "."
+
+[bundle]
 name = "test"
 title = "Test"
 
 [defaults]
 format = "okf"
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+`)
+}
+
+func writeCLIBundleManifest(t *testing.T, bundle, name, title string) {
+	t.Helper()
+	writeCLITestFile(t, filepath.Join(bundle, "factile.toml"), `version = 2
+
+[bundle]
+name = "`+name+`"
+title = "`+title+`"
+
+[defaults]
+format = "okf"
+`)
 }
 
 func cliGitRemote(t *testing.T) string {
 	t.Helper()
 	source := filepath.Join(t.TempDir(), "source")
-	writeCLIRootConfig(t, source)
+	writeCLIBundleManifest(t, source, "coding-practice", "Coding Practice")
 	writeCLITestFile(t, filepath.Join(source, "overview.md"), `---
 type: Reference
 title: Coding Practice
@@ -2420,6 +2660,9 @@ func copyTestDir(t *testing.T, src, dst string) {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
+		if entry.Name() == vfs.StateDirname {
+			continue
+		}
 		from := filepath.Join(src, entry.Name())
 		to := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {
@@ -2644,10 +2887,10 @@ func assertNoTerminalEscapes(t *testing.T, output string) {
 	}
 }
 
-func cliRevision(t *testing.T, mountFile string, path string) string {
+func cliRevision(t *testing.T, fixture string, path string) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--mount-file", mountFile, "read", path, "--json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", fixture, "read", path, "--json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("read revision exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}

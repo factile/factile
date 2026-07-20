@@ -17,7 +17,7 @@ body:
       label: Reproduction
       description: Minimal commands, fixture paths, or steps that reproduce the issue.
       placeholder: |
-        factile --mount-file ./testdata/mounts.toml list /
+        factile --workspace ./fixture status --json
     validations:
       required: true
   - type: input

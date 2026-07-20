@@ -18,7 +18,7 @@ function npmEnv() {
 function parseArgs(argv) {
   const args = {
     dryRun: false,
-    root: "",
+    packagesDir: "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -27,20 +27,20 @@ function parseArgs(argv) {
       args.dryRun = true;
       continue;
     }
-    if (arg === "--root") {
+    if (arg === "--packages-dir") {
       const value = argv[i + 1];
       if (!value) {
-        throw new Error("--root requires a value");
+        throw new Error("--packages-dir requires a value");
       }
-      args.root = path.resolve(value);
+      args.packagesDir = path.resolve(value);
       i += 1;
       continue;
     }
     throw new Error(`unknown argument: ${arg}`);
   }
 
-  if (!args.root) {
-    throw new Error("--root is required");
+  if (!args.packagesDir) {
+    throw new Error("--packages-dir is required");
   }
   return args;
 }
@@ -54,7 +54,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   try {
     for (const entry of packageOrder) {
-      const packageDir = path.join(args.root, entry.stagedDir);
+      const packageDir = path.join(args.packagesDir, entry.stagedDir);
       const packageName = readPackageName(packageDir);
       if (packageName !== entry.packageName) {
         throw new Error(`unexpected package at ${packageDir}: ${packageName}`);

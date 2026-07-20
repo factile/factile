@@ -2,11 +2,89 @@ package factile
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAtomicWriteViewsFilePreservesPublishedFileOnFailure(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "factile.views.toml")
+	original := []byte("[[views]]\nid = \"original\"\npaths = [\"/guides\"]\n")
+	if err := os.WriteFile(filename, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	publishErr := errors.New("publish failed")
+	err := atomicWriteViewsFile(filename, []byte("replacement\n"), func(string, string) error {
+		return publishErr
+	})
+	if !errors.Is(err, publishErr) {
+		t.Fatalf("error = %v, want publish failure", err)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(original) {
+		t.Fatalf("published file changed after failed replace:\n%s", data)
+	}
+	entries, err := os.ReadDir(filepath.Dir(filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(filename) {
+		t.Fatalf("temporary view file leaked after failure: %#v", entries)
+	}
+}
+
+func TestWorkspaceLocksUsePrivateState(t *testing.T) {
+	workspaceDir := viewTestWorkspace(t)
+	ws := NewWorkspace(WorkspaceOptions{WorkDir: workspaceDir})
+	target := filepath.Join(workspaceDir, "overview.md")
+	stateDir := filepath.Join(workspaceDir, ".factile")
+	locksDir := filepath.Join(stateDir, "locks")
+
+	err := ws.withWorkspaceLocks([]string{target}, func() error {
+		if _, err := os.Stat(target + ".lock"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("lock appeared beside authored content: %v", err)
+		}
+		for _, directory := range []string{stateDir, locksDir} {
+			info, err := os.Stat(directory)
+			if err != nil {
+				return err
+			}
+			if info.Mode().Perm() != 0o700 {
+				t.Fatalf("%s mode = %o, want 700", directory, info.Mode().Perm())
+			}
+		}
+		entries, err := os.ReadDir(locksDir)
+		if err != nil {
+			return err
+		}
+		if len(entries) != 1 {
+			t.Fatalf("lock entries = %#v, want one", entries)
+		}
+		info, err := entries[0].Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("lock mode = %o, want 600", info.Mode().Perm())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(locksDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("released lock remains in state: %#v", entries)
+	}
+}
 
 func TestScopeForViewIntersectsReaderScopes(t *testing.T) {
 	workspaceDir := viewTestWorkspace(t)
@@ -156,8 +234,12 @@ func viewTestWorkspace(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	mustWriteViewTestFile(t, filepath.Join(workspace, ".factile", "config.toml"), `version = 1
+	mustWriteViewTestFile(t, filepath.Join(workspace, "factile.toml"), `version = 2
 
+[workspace]
+root = "."
+
+[bundle]
 name = "test"
 title = "Test"
 
@@ -165,6 +247,8 @@ title = "Test"
 format = "okf"
 `)
 	copyViewTestDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	mustWriteViewTestFile(t, filepath.Join(tmp, "bundles", "shared-guides", "factile.toml"), "version = 2\n\n[bundle]\nname = \"shared-guides\"\n")
+	mustWriteViewTestFile(t, filepath.Join(tmp, "bundles", "product-docs", "factile.toml"), "version = 2\n\n[bundle]\nname = \"product-docs\"\n")
 	mustWriteViewTestFile(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
 writable = false
 title = "Common Engineering Guides"

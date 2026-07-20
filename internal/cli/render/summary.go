@@ -12,11 +12,15 @@ func (r *Renderer) RenderSummary(w io.Writer, result factile.SummaryResult) erro
 	if _, err := fmt.Fprintln(w, r.summaryHeading("Factile Workspace:")); err != nil {
 		return err
 	}
-	workspace := "  " + r.summaryPath(result.Workspace.Path)
+	workspace := r.summaryPath(result.Workspace.WorkspaceDir)
 	if result.Workspace.Version != "" {
 		workspace += " (" + result.Workspace.Version + ")"
 	}
-	if _, err := fmt.Fprintln(w, workspace); err != nil {
+	if err := r.renderRows(w, []row{
+		{label: "Workspace", value: workspace},
+		{label: "Root bundle", value: r.summaryPath(result.Workspace.RootBundleDir)},
+		{label: "Local state", value: r.summaryPath(result.Workspace.StateDir)},
+	}); err != nil {
 		return err
 	}
 	if err := r.renderSummaryKnowledge(w, result.Knowledge); err != nil {

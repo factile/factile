@@ -7,16 +7,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/factile/factile/pkg/vfs"
 )
 
 func (w *LocalWorkspace) viewsPath() (string, error) {
-	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	workspace, err := w.resolvedWorkspace()
 	if err != nil {
 		return "", NormalizeError(err)
 	}
-	return filepath.Join(root, ".factile", "views.toml"), nil
+	return filepath.Join(workspace.WorkspaceDir, "factile.views.toml"), nil
 }
 
 func loadViewsAllowMissing(filename string) ([]View, error) {
@@ -31,6 +29,13 @@ func loadViewsAllowMissing(filename string) ([]View, error) {
 }
 
 func loadViewsFile(filename string) ([]View, error) {
+	info, err := os.Lstat(filename)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("factile.views.toml must be a regular file")
+	}
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -188,10 +193,39 @@ func writeViewsFile(filename string, views []View) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+	return atomicWriteViewsFile(filename, []byte(formatViewsFile(normalized)), os.Rename)
+}
+
+func atomicWriteViewsFile(filename string, data []byte, replace func(string, string) error) error {
+	if info, err := os.Lstat(filename); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("factile.views.toml must be a regular file")
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return os.WriteFile(filename, []byte(formatViewsFile(normalized)), 0o644)
+	temporary, err := os.CreateTemp(filepath.Dir(filename), ".factile.views.toml.tmp-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return replace(temporaryPath, filename)
 }
 
 func formatViewsFile(views []View) string {

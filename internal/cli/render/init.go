@@ -14,9 +14,9 @@ type row struct {
 }
 
 func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
-	title := "Factile knowledge is ready"
+	title := "Factile workspace is ready"
 	if initChanged(result) {
-		title = "Initialized Factile knowledge"
+		title = "Initialized Factile workspace"
 	}
 	if r.colorEnabled {
 		title = r.styles.Heading.Render(title)
@@ -27,14 +27,25 @@ func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	rows := []row{
-		{label: "Root", value: defaultText(result.RootPath, ".")},
-		{label: "Config", value: annotateAction(filePath(result.Files, ".factile/config.toml"), fileAction(result.Files, ".factile/config.toml"))},
-		{label: "Index", value: annotateAction(filePath(result.Files, "index.md"), fileAction(result.Files, "index.md"))},
-		{label: "Log", value: annotateAction(filePath(result.Files, "log.md"), fileAction(result.Files, "log.md"))},
-		{label: "Overview", value: annotateAction(filePath(result.Files, "overview.md"), fileAction(result.Files, "overview.md"))},
-		{label: "Agent guidance", value: agentSummary(result.Agents)},
+	rootBundle := defaultText(result.RootBundlePath, ".")
+	bundleManifest := "factile.toml"
+	if rootBundle != "." {
+		bundleManifest = strings.TrimSuffix(rootBundle, "/") + "/factile.toml"
 	}
+	rows := []row{
+		{label: "Workspace", value: defaultText(result.WorkspacePath, ".")},
+		{label: "Root bundle", value: rootBundle},
+		{label: "Ignore", value: annotateAction(filePath(result.Files, ".gitignore"), fileAction(result.Files, ".gitignore"))},
+		{label: "Workspace manifest", value: annotateAction(filePath(result.Files, "factile.toml"), fileAction(result.Files, "factile.toml"))},
+	}
+	if bundleManifest != "factile.toml" {
+		rows = append(rows, row{label: "Bundle manifest", value: annotateAction(filePath(result.Files, bundleManifest), fileAction(result.Files, bundleManifest))})
+	}
+	rows = append(rows,
+		row{label: "Index", value: annotateAction(filePath(result.Files, "index.md"), fileAction(result.Files, "index.md"))},
+		row{label: "Overview", value: annotateAction(filePath(result.Files, "overview.md"), fileAction(result.Files, "overview.md"))},
+		row{label: "Agent guidance", value: agentSummary(result.Agents)},
+	)
 	if err := r.renderRows(w, rows); err != nil {
 		return err
 	}

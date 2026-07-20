@@ -19,11 +19,11 @@ import (
 	"github.com/factile/factile/pkg/trace"
 	"github.com/factile/factile/pkg/uibridge"
 	"github.com/factile/factile/pkg/version"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 type globals struct {
-	MountFile string
-	Root      string
+	Workspace string
 	Format    string
 	Color     clirender.ColorMode
 	Quiet     bool
@@ -55,7 +55,10 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 	started := time.Now()
 	global, rest, err := parseGlobals(args)
 	if err != nil {
-		code := writeError(stderr, global, factile.NewError(factile.ErrInvalidPath, err.Error()))
+		if _, ok := err.(*factile.AppError); !ok {
+			err = factile.NewError(factile.ErrInvalidPath, err.Error())
+		}
+		code := writeError(stderr, global, err)
 		traceCLI(rest, code, started)
 		return code
 	}
@@ -81,7 +84,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 	if global.Format == "" {
 		global.Format = formatText
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile, Root: global.Root})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace})
 	if len(rest) == 0 {
 		result, err := ws.Summary(ctx)
 		if err != nil {
@@ -318,7 +321,7 @@ func runInit(ctx context.Context, args []string, global globals, stdout io.Write
 	if *agent != "" {
 		agents = []string{*agent}
 	}
-	result, err := bootstrap.Init(ctx, bootstrap.Options{WorkDir: global.Root, Here: *here, Agents: agents})
+	result, err := bootstrap.Init(ctx, bootstrap.Options{WorkDir: global.Workspace, Here: *here, Agents: agents})
 	if err != nil {
 		return 0, err
 	}
@@ -347,6 +350,9 @@ func runUI(ctx context.Context, ws factile.Workspace, args []string, global glob
 	}
 	if fs.NArg() != 0 {
 		return usage(global, stdout, "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]")
+	}
+	if err := requireCLIWorkspace(global); err != nil {
+		return 0, err
 	}
 	server, err := uibridge.Start(ws, uibridge.Options{Port: *port, DevAssets: *devAssets, Curator: *curator})
 	if err != nil {
@@ -671,7 +677,7 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 
 func runMount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]\n\n--mount-file is a legacy local-source registry; Git mounts require an active Factile root.")
+		return showUsage(stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]")
 	}
 	fs := flag.NewFlagSet("mount", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -774,10 +780,10 @@ func runBundle(ctx context.Context, ws factile.Workspace, args []string, global 
 	switch args[0] {
 	case "inspect":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile bundle inspect <source>")
+			return showUsage(stdout, "factile bundle inspect <directory>")
 		}
 		if len(args) != 2 {
-			return usage(global, stdout, "factile bundle inspect <source>")
+			return usage(global, stdout, "factile bundle inspect <directory>")
 		}
 		result, err := ws.InspectBundle(ctx, args[1])
 		if err != nil {
@@ -932,7 +938,7 @@ func runSkill(ctx context.Context, args []string, global globals, stdout io.Writ
 		if fs.NArg() != 1 {
 			return usage(global, stdout, "factile skill install codex --scope repo|user [--mode reader|curator] [--profile software]")
 		}
-		result, err := skill.Install(fs.Arg(0), skill.InstallOptions{Scope: *scope, Mode: *mode, Profile: *profile})
+		result, err := skill.Install(fs.Arg(0), skill.InstallOptions{Scope: *scope, WorkDir: global.Workspace, Mode: *mode, Profile: *profile})
 		if err != nil {
 			return 0, err
 		}
@@ -954,7 +960,7 @@ func runSkill(ctx context.Context, args []string, global globals, stdout io.Writ
 		if fs.NArg() != 1 {
 			return usage(global, stdout, "factile skill uninstall codex --scope repo|user")
 		}
-		result, err := skill.Uninstall(fs.Arg(0), skill.InstallOptions{Scope: *scope})
+		result, err := skill.Uninstall(fs.Arg(0), skill.InstallOptions{Scope: *scope, WorkDir: global.Workspace})
 		if err != nil {
 			return 0, err
 		}
@@ -966,7 +972,7 @@ func runSkill(ctx context.Context, args []string, global globals, stdout io.Writ
 		if len(args) != 2 {
 			return usage(global, stdout, "factile skill doctor codex")
 		}
-		result, err := skill.Doctor(ctx, args[1], skill.DoctorOptions{})
+		result, err := skill.Doctor(ctx, args[1], skill.DoctorOptions{WorkDir: global.Workspace})
 		if err != nil {
 			return 0, err
 		}
@@ -998,30 +1004,48 @@ func runMCP(ctx context.Context, global globals, args []string, stdin io.Reader,
 	if !stdio {
 		return 2, fmt.Errorf("MCP serve requires --stdio")
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: global.MountFile, Root: global.Root})
+	if err := requireCLIWorkspace(global); err != nil {
+		return 0, err
+	}
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace})
 	return 0, mcpserver.Serve(ctx, ws, stdin, stdout, mcpserver.Options{ReadOnly: readOnly})
+}
+
+func requireCLIWorkspace(global globals) error {
+	_, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{Workspace: global.Workspace})
+	return factile.NormalizeError(err)
 }
 
 func parseGlobals(args []string) (globals, []string, error) {
 	global := globals{Format: formatText, Color: clirender.ColorAuto}
 	formatSet := false
 	jsonSet := false
+	var legacyErr error
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
-		case "--mount-file":
+		case "--workspace":
 			i++
 			if i >= len(args) {
-				return global, nil, fmt.Errorf("--mount-file requires a path")
+				return global, nil, fmt.Errorf("--workspace requires a directory")
 			}
-			global.MountFile = args[i]
-		case "--root":
-			i++
-			if i >= len(args) {
-				return global, nil, fmt.Errorf("--root requires a path")
+			if global.Workspace != "" && global.Workspace != args[i] {
+				return global, nil, fmt.Errorf("--workspace may select only one directory")
 			}
-			global.Root = args[i]
+			global.Workspace = args[i]
+		case "--root", "--mount-file":
+			legacy := arg
+			if i+1 < len(args) && !isGlobalOption(args[i+1]) {
+				i++
+			}
+			if legacyErr == nil {
+				if legacy == "--root" {
+					legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--root is no longer supported; use --workspace <directory>.")
+				} else {
+					legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--mount-file is no longer supported; migrate entries to <name>.mount.toml descriptors in the workspace root bundle.")
+				}
+			}
 		case "--format":
 			i++
 			if i >= len(args) {
@@ -1068,7 +1092,19 @@ func parseGlobals(args []string) (globals, []string, error) {
 			rest = append(rest, arg)
 		}
 	}
+	if legacyErr != nil {
+		return global, rest, legacyErr
+	}
 	return global, rest, nil
+}
+
+func isGlobalOption(arg string) bool {
+	switch arg {
+	case "--workspace", "--root", "--mount-file", "--format", "--json", "--color", "--quiet", "--version", "--help", "-h":
+		return true
+	default:
+		return false
+	}
 }
 
 func usage(global globals, stdout io.Writer, text string) (int, error) {
@@ -1485,6 +1521,9 @@ func writeError(stderr io.Writer, global globals, err error) int {
 		_ = json.NewEncoder(stderr).Encode(map[string]any{"error": app})
 	} else {
 		_, _ = fmt.Fprintln(stderr, app.Message)
+		if migration, ok := app.Details["migration"].(string); ok && migration != "" {
+			_, _ = fmt.Fprintln(stderr, "Migration: "+migration)
+		}
 	}
 	return exitCode(app.Code)
 }
@@ -1555,7 +1594,7 @@ func exitCode(code string) int {
 		return 2
 	case factile.ErrValidationFailed, factile.ErrOKFParse:
 		return 3
-	case factile.ErrMountNotFound, factile.ErrNoActiveRoot, factile.ErrAmbiguousTarget, factile.ErrConceptNotFound, factile.ErrPathIsNotBundle, factile.ErrPathIsNotConcept:
+	case factile.ErrMountNotFound, factile.ErrNoActiveWorkspace, factile.ErrInvalidWorkspace, factile.ErrInvalidBundle, factile.ErrAmbiguousTarget, factile.ErrConceptNotFound, factile.ErrPathIsNotBundle, factile.ErrPathIsNotConcept:
 		return 4
 	case factile.ErrConceptAlreadyExist, factile.ErrPathAlreadyExists, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound:
 		return 5

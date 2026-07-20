@@ -154,13 +154,13 @@ A task is done only when:
 <!-- factile:codex:start -->
 ## Local knowledge
 
-The supported root is `docs/.factile/config.toml`. It is a self-contained,
-mount-free public source for CLI concepts, guides, reference, and architecture.
+This repository may have local Factile knowledge available through its workspace.
 
-Reader commands work by path. This root currently contains only root-local
-Markdown, but do not assume a path's storage kind without navigating it.
+Reader commands work by path. A path may be backed by root-bundle Markdown files or mounted sources; do not classify a path before navigating it.
 
-A Factile root is marked by `.factile/config.toml`. Mount descriptors are `<name>.mount.toml` files in the physical parent directory. Views live in `.factile/views.toml`.
+A Factile workspace is marked by `factile.toml` with `[workspace]`. Its selected root bundle has `factile.toml` with `[bundle]` and supplies the same logical `/` from the workspace root, root bundle, or any secondary bundle. Nearby or contained bundles are not visible unless mounted.
+
+Mount descriptors are `<name>.mount.toml` files in the root bundle. Views live in workspace-level `factile.views.toml`. `.factile/` is ignored workspace-local state and cache only; never place authored knowledge, configuration, views, descriptors, or credentials there. Use `--workspace <directory>` only when explicit selection is needed.
 
 Mount sources may be local directories or read-only Git repositories. Reader paths behave the same for both. Use `factile mounts --json` to inspect generated Git status and `factile refresh <mount-path>` only when an immediate upstream check is needed; refresh never makes source content writable.
 
@@ -168,14 +168,15 @@ Use `--view <id>` on reader commands when a named view matches the task; views n
 
 For tasks involving architecture, design, implementation choices, domain concepts, runbooks, standards, policies, documentation, reviews, or decisions:
 
-1. Discover available knowledge with `factile list / --json`.
-2. Inspect compact cards with `factile list / --brief --json` or `factile stat <path> --json`.
-3. If a named view appears relevant, inspect it with `factile view inspect <id> --json` and pass `--view <id>` to scope-scanning reader commands.
-4. Get focused task context with `factile context / '<task summary>' --json`, adding `--view <id>` when using a view.
-5. Read specific concepts with `factile read <path> --json` only when more detail is needed.
-6. Prefer Factile context over ad-hoc guessing when project knowledge is relevant.
+1. Confirm the workspace with `factile status --json`.
+2. Discover available knowledge with `factile list / --json`.
+3. Inspect compact cards with `factile list / --brief --json` or `factile stat <path> --json`.
+4. If a named view appears relevant, inspect it with `factile view inspect <id> --json` and pass `--view <id>` to scope-scanning reader commands.
+5. Get focused task context with `factile context / '<task summary>' --json`, adding `--view <id>` when using a view.
+6. Read specific concepts with `factile read <path> --json` only when more detail is needed.
+7. Prefer Factile context over ad-hoc guessing when project knowledge is relevant.
 
-Mode: reader. Do not edit Factile/OKF documents, `.factile/views.toml`, `<name>.mount.toml`, or root config unless the user explicitly asks to curate knowledge.
+Mode: reader. Do not edit Factile/OKF documents, `factile.toml`, `factile.views.toml`, or `<name>.mount.toml` unless the user explicitly asks to curate knowledge. Never put authored files in `.factile/`.
 
 Skip Factile for mechanical renames, formatting, syntax fixes, and obvious local edits.
 

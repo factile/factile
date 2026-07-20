@@ -8,8 +8,12 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Agents and Local MCP
 
+> **Implementation status:** mandatory workspace discovery below is the
+> accepted Root Layout v2 target. Released v0.3.1 still uses its legacy root
+> marker.
+
 Factile can install repository- or user-scoped Codex guidance and expose the
-same local workspace through stdio MCP. Neither surface connects to a hosted
+same explicit local workspace and root-bundle tree through stdio MCP. Neither surface connects to a hosted
 Factile service.
 
 ## Inspect and install guidance
@@ -62,6 +66,11 @@ cache state only. Write-capable mode additionally exposes document, mount, and
 view mutations; source capabilities and revisions are still enforced by the
 workspace.
 
+MCP uses the same nearest-ancestor `factile.toml` resolver as the CLI. Starting
+it from a secondary bundle does not change the logical `/`; outside a workspace
+it returns `no_active_workspace`. An explicit launch may use
+`--workspace <directory>` once in the process command.
+
 Use read-only mode unless the session has explicit authority to curate. MCP
 uses standard input/output as its protocol channel, so diagnostic prose must
 not be written there by wrappers.
@@ -94,4 +103,6 @@ FACTILE_TRACE_FILE=.factile/usage.jsonl \
   factile context / "release process" --json
 ```
 
-Tracing is local diagnostics, not hosted audit, analytics, or billing.
+When that relative path is used from the workspace directory, tracing stays in
+ignored local state. Tracing is local diagnostics, not hosted audit, analytics,
+or billing, and it must not contain credentials.

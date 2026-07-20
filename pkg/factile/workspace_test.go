@@ -130,8 +130,11 @@ func TestWorkspaceViewManagement(t *testing.T) {
 	if list.Views == nil {
 		t.Fatal("expected missing views file to return an empty array, not null")
 	}
-	if _, err := os.Stat(filepath.Join(tmp, ".factile", "views.toml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tmp, "factile.views.toml")); !os.IsNotExist(err) {
 		t.Fatalf("views file should not exist before mutation, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, ".factile")); !os.IsNotExist(err) {
+		t.Fatalf("view reads should not create state, stat err=%v", err)
 	}
 
 	created, err := ws.SetView(ctx, "invoice-import", factile.ViewInput{
@@ -145,7 +148,7 @@ func TestWorkspaceViewManagement(t *testing.T) {
 	if created.Action != "created" || created.View.ID != "invoice-import" || strings.Join(created.View.Paths, ",") != "/project/docs,/support/runbooks/imports" {
 		t.Fatalf("unexpected created view: %#v", created)
 	}
-	if _, err := os.Stat(filepath.Join(tmp, ".factile", "views.toml")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, "factile.views.toml")); err != nil {
 		t.Fatalf("expected SetView to initialize views file: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(tmp, ".factile", "library.toml")); !os.IsNotExist(err) {
@@ -260,7 +263,7 @@ func TestWorkspaceViewsFileValidation(t *testing.T) {
 	tmp := t.TempDir()
 	writeRootConfig(t, tmp)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: tmp})
-	viewsFile := filepath.Join(tmp, ".factile", "views.toml")
+	viewsFile := filepath.Join(tmp, "factile.views.toml")
 
 	if err := os.WriteFile(viewsFile, []byte(`[[views]]
 id = "dup"
@@ -516,6 +519,7 @@ func TestWorkspaceValidateReportsInvalidGitMountsAsScopedIssues(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
 	writeRootConfig(t, root)
 	good := filepath.Join(t.TempDir(), "good")
+	mustWriteWorkspace(t, filepath.Join(good, "factile.toml"), "version = 2\n\n[bundle]\nname = \"good\"\n")
 	writeOKFFile(t, filepath.Join(good, "overview.md"), "Guide", "Good", "# Good\n")
 	mustWriteWorkspace(t, filepath.Join(root, "good.mount.toml"), "source = "+strconv.Quote(good)+"\nwritable = false\n")
 	invalidMounts := []struct {
@@ -716,6 +720,16 @@ func hasIssue(issues []factile.ValidationIssue, path string, code string) bool {
 	return false
 }
 
+func countIssues(issues []factile.ValidationIssue, path string, code string) int {
+	count := 0
+	for _, issue := range issues {
+		if issue.Path == path && issue.Code == code {
+			count++
+		}
+	}
+	return count
+}
+
 func searchHasPath(results factile.SearchResults, path string) bool {
 	for _, result := range results.Results {
 		if result.Concept.Path == path {
@@ -856,6 +870,7 @@ func TestWorkspaceV2RootFilesDirectoriesAndMounts(t *testing.T) {
 	writeOKFFile(t, filepath.Join(root, "overview.md"), "Guide", "Root Overview", "# Root Overview\n\nInvoice knowledge starts here and links to [Setup](guides/setup.md).\n")
 	writeOKFFile(t, filepath.Join(root, "guides", "setup.md"), "Guide", "Setup", "# Setup\n\nSetup links to [Invoice](/mounted/workflows/invoice-import.md).\n")
 	copyDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), mounted)
+	mustWriteWorkspace(t, filepath.Join(mounted, "factile.toml"), "version = 2\n\n[bundle]\nname = \"mounted-product-docs\"\n")
 	if err := os.WriteFile(filepath.Join(root, "mounted.mount.toml"), []byte(`source = "`+mounted+`"
 writable = true
 title = "Mounted Docs"
@@ -1105,6 +1120,8 @@ func TestWorkspaceV2DescriptorMountWritePolicy(t *testing.T) {
 	if err := os.MkdirAll(writableSource, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	mustWriteWorkspace(t, filepath.Join(writableSource, "factile.toml"), "version = 2\n\n[bundle]\nname = \"writable\"\n")
+	mustWriteWorkspace(t, filepath.Join(readOnlySource, "factile.toml"), "version = 2\n\n[bundle]\nname = \"read-only\"\n")
 	writeOKFFile(t, filepath.Join(readOnlySource, "existing.md"), "Guide", "Existing", "# Existing\n")
 	if err := os.WriteFile(filepath.Join(root, "writable.mount.toml"), []byte(`source = "`+writableSource+`"
 writable = true
@@ -1163,7 +1180,7 @@ func TestWorkspaceV2ValidateReportsRootMetadataIssues(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
 	writeRootConfig(t, root)
 	writeOKFFile(t, filepath.Join(root, "overview.md"), "Guide", "Overview", "# Overview\n")
-	if err := os.WriteFile(filepath.Join(root, ".factile", "views.toml"), []byte(`[[views]]
+	if err := os.WriteFile(filepath.Join(root, "factile.views.toml"), []byte(`[[views]]
 id = "dup"
 paths = ["/overview"]
 
@@ -1183,25 +1200,22 @@ paths = ["/overview"]
 	if err != nil {
 		t.Fatalf("validate returned top-level error: %v", err)
 	}
-	if result.Valid || !hasIssue(result.Issues, "/.factile/views.toml", factile.ErrValidationFailed) || !hasIssue(result.Issues, "/", factile.ErrValidationFailed) {
+	if result.Valid || countIssues(result.Issues, "/", factile.ErrValidationFailed) < 2 {
 		t.Fatalf("expected views and mount descriptor validation issues: %#v", result.Issues)
 	}
 }
 
 func TestWorkspaceListVirtualFoldersFromNestedMounts(t *testing.T) {
 	tmp := t.TempDir()
-	docs := filepath.Join(tmp, "docs")
+	workspace := filepath.Join(tmp, "workspace")
+	rootBundle := filepath.Join(workspace, "knowledge")
+	docs := filepath.Join(tmp, "product-docs")
+	mustWriteWorkspace(t, filepath.Join(workspace, "factile.toml"), "version = 2\n\n[workspace]\nroot = \"knowledge\"\n")
+	mustWriteWorkspace(t, filepath.Join(rootBundle, "factile.toml"), "version = 2\n\n[bundle]\nname = \"knowledge\"\n")
 	copyDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), docs)
-	mountFile := filepath.Join(tmp, "mount-registry.toml")
-	data := `[mounts."/project/docs"]
-source = "` + docs + `"
-kind = "local"
-writable = true
-`
-	if err := os.WriteFile(mountFile, []byte(data), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
+	mustWriteWorkspace(t, filepath.Join(docs, "factile.toml"), "version = 2\n\n[bundle]\nname = \"product-docs\"\n")
+	mustWriteWorkspace(t, filepath.Join(rootBundle, "project", "docs.mount.toml"), "source = "+strconv.Quote(docs)+"\nwritable = true\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspace})
 	ctx := context.Background()
 
 	root, err := ws.List(ctx, "/", factile.ListOptions{})
@@ -1424,19 +1438,15 @@ func TestReadOnlyAndUnsupportedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readOnly := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFileForWorkspace(t, false), ReadOnly: true})
+	readOnlyWorkspace, _ := workspaceForBundles(t, false)
+	readOnly := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: readOnlyWorkspace, ReadOnly: true})
 	if _, err := readOnly.Write(ctx, read.Concept.Path, factile.WriteConceptInput{ExpectedRevision: read.Concept.Revision, Markdown: "# No\n"}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
 		t.Fatalf("expected source_read_only, got %v", err)
 	}
-	remoteMount := filepath.Join(t.TempDir(), "remote.toml")
-	if err := os.WriteFile(remoteMount, []byte(`[mounts."/remote"]
-source = "factile://bundle"
-kind = "remote"
-writable = false
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	remote := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: remoteMount})
+	remoteRoot := filepath.Join(t.TempDir(), "remote-root")
+	writeRootConfig(t, remoteRoot)
+	mustWriteWorkspace(t, filepath.Join(remoteRoot, "remote.mount.toml"), "source = \"factile://bundle\"\nwritable = false\n")
+	remote := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: remoteRoot})
 	if _, err := remote.List(ctx, "/remote", factile.ListOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrUnsupportedSource {
 		t.Fatalf("expected unsupported_source, got %v", err)
 	}
@@ -1449,15 +1459,10 @@ writable = false
 	if _, err := remote.Mkdir(ctx, "/remote/new", factile.MkdirOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrSourceReadOnly {
 		t.Fatalf("expected read-only remote mkdir source_read_only, got %v", err)
 	}
-	writableRemoteMount := filepath.Join(t.TempDir(), "remote-writable.toml")
-	if err := os.WriteFile(writableRemoteMount, []byte(`[mounts."/remote"]
-source = "factile://bundle"
-kind = "remote"
-writable = true
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	writableRemote := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: writableRemoteMount})
+	writableRemoteRoot := filepath.Join(t.TempDir(), "remote-writable-root")
+	writeRootConfig(t, writableRemoteRoot)
+	mustWriteWorkspace(t, filepath.Join(writableRemoteRoot, "remote.mount.toml"), "source = \"factile://bundle\"\nwritable = true\n")
+	writableRemote := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: writableRemoteRoot})
 	if _, err := writableRemote.Mkdir(ctx, "/remote/new", factile.MkdirOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrUnsupportedSource {
 		t.Fatalf("expected writable remote mkdir unsupported_source, got %v", err)
 	}
@@ -1472,6 +1477,7 @@ func TestWorkspaceMountAndUnmountDescriptor(t *testing.T) {
 	if err := os.MkdirAll(source, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	mustWriteWorkspace(t, filepath.Join(source, "factile.toml"), "version = 2\n\n[bundle]\nname = \"source\"\n")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 
 	mounted, err := ws.Mount(ctx, source, "/engineering/django", factile.MountOptions{Title: "Django", Description: "Framework docs"})
@@ -1760,7 +1766,11 @@ func TestWorkspaceGitMountUsesCachedSnapshotWhenGitIsUnavailable(t *testing.T) {
 	if _, err := ws.Mount(ctx, remote, "/git", factile.MountOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	workspace, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1822,7 +1832,11 @@ func TestWorkspaceRetriesFailedPinnedGitAcquisitionAfterInterval(t *testing.T) {
 		t.Fatalf("pin retried before interval: %v", err)
 	}
 
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: root}, gitsource.NewRunner())
+	workspace, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2075,56 +2089,37 @@ func TestWorkspaceMountDescriptorRejectsRootPathConflicts(t *testing.T) {
 	}
 }
 
-func TestWorkspaceMountAndUnmountRegistry(t *testing.T) {
+func TestWorkspaceLegacyRegistryCannotBypassWorkspace(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 	registry := filepath.Join(tmp, "mount-registry.toml")
 	source := filepath.Join(tmp, "bundle")
-	if err := os.MkdirAll(source, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mustWriteWorkspace(t, filepath.Join(source, "factile.toml"), "version = 2\n\n[bundle]\nname = \"bundle\"\n")
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: registry})
-	mounted, err := ws.Mount(ctx, source, "/docs", factile.MountOptions{Writable: true, Kind: "local"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := ws.Mount(ctx, source, "/docs", factile.MountOptions{Writable: true, Kind: "local"}); factile.ErrorCode(factile.NormalizeError(err)) != vfs.ErrInvalidWorkspace {
+		t.Fatalf("legacy registry bypass error = %v", err)
 	}
-	if mounted.Mount.MountPath != "/docs" {
-		t.Fatalf("unexpected mount: %#v", mounted.Mount)
-	}
-	list, err := ws.ListMounts(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list.Mounts) != 1 || list.Mounts[0].MountPath != "/docs" {
-		t.Fatalf("unexpected mounts: %#v", list.Mounts)
-	}
-	unmounted, err := ws.Unmount(ctx, "/docs", factile.UnmountOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !unmounted.Removed {
-		t.Fatal("unmount did not remove mount")
+	if _, err := os.Stat(registry); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy registry was mutated: %v", err)
 	}
 }
 
 func TestWorkspaceMountFileRejectsGitBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
-	root := filepath.Join(tmp, "root")
-	writeRootConfig(t, root)
 	registry := filepath.Join(tmp, "mount-registry.toml")
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{Root: root, MountFile: registry})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: registry})
 
 	_, err := ws.Mount(ctx, "https://example.test/coding.git", "/coding", factile.MountOptions{Ref: "main", RefSet: true})
 	normalized := factile.NormalizeError(err)
 	var app *factile.AppError
-	if !errors.As(normalized, &app) || app.Code != factile.ErrUnsupportedSource || app.Message != "Git sources are not supported with --mount-file; use an active Factile root." {
+	if !errors.As(normalized, &app) || app.Code != vfs.ErrInvalidWorkspace || app.Message != "Legacy mount-file composition does not select a Factile workspace." {
 		t.Fatalf("unexpected legacy Git mount error: %v", err)
 	}
 	if _, err := os.Stat(registry); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected Git mount changed registry: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(tmp, ".factile", "cache")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected Git mount initialized cache: %v", err)
 	}
 }
@@ -2157,22 +2152,15 @@ func TestWorkspaceMountDoesNotOverwriteMalformedRegistry(t *testing.T) {
 func TestWorkspaceValidateReportsParseErrorsAsIssues(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root")
+	writeRootConfig(t, root)
 	bundle := filepath.Join(tmp, "bundle")
-	if err := os.MkdirAll(bundle, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	mustWriteWorkspace(t, filepath.Join(bundle, "factile.toml"), "version = 2\n\n[bundle]\nname = \"bad\"\n")
 	if err := os.WriteFile(filepath.Join(bundle, "bad.md"), []byte("---\ntype Workflow\n---\n\n# Bad\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	registry := filepath.Join(tmp, "mount-registry.toml")
-	if err := os.WriteFile(registry, []byte(`[mounts."/bad"]
-source = "`+bundle+`"
-kind = "local"
-writable = true
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: registry})
+	mustWriteWorkspace(t, filepath.Join(root, "bad.mount.toml"), "source = "+strconv.Quote(bundle)+"\nwritable = true\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
 	result, err := ws.Validate(ctx, "/bad", factile.ValidateOptions{})
 	if err != nil {
 		t.Fatalf("validate returned top-level error: %v", err)
@@ -2202,22 +2190,22 @@ func TestWorkspaceUsesActiveRootFromParentDirectory(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRequiresActiveRoot(t *testing.T) {
+func TestWorkspaceRequiresActiveWorkspace(t *testing.T) {
 	ctx := context.Background()
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: t.TempDir()})
-	if _, err := ws.List(ctx, "/", factile.ListOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrNoActiveRoot {
-		t.Fatalf("expected no active root list error, got %v", err)
+	if _, err := ws.List(ctx, "/", factile.ListOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != vfs.ErrNoActiveWorkspace {
+		t.Fatalf("expected no active workspace list error, got %v", err)
 	}
-	if _, err := ws.Mount(ctx, ".", "/docs", factile.MountOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrNoActiveRoot {
-		t.Fatalf("expected no active root mount error, got %v", err)
+	if _, err := ws.Mount(ctx, ".", "/docs", factile.MountOptions{}); factile.ErrorCode(factile.NormalizeError(err)) != vfs.ErrNoActiveWorkspace {
+		t.Fatalf("expected no active workspace mount error, got %v", err)
 	}
 }
 
 func testWorkspace(t *testing.T) (*factile.LocalWorkspace, string) {
 	t.Helper()
-	mountFile := mountFileForWorkspace(t, true)
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{MountFile: mountFile})
-	return ws, filepath.Join(filepath.Dir(mountFile), "product-docs")
+	workspace, product := workspaceForBundles(t, true)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: workspace})
+	return ws, product
 }
 
 func v2Workspace(t *testing.T) string {
@@ -2226,6 +2214,9 @@ func v2Workspace(t *testing.T) string {
 	workspace := filepath.Join(tmp, "workspace")
 	writeRootConfig(t, workspace)
 	copyDir(t, filepath.Join("..", "..", "testdata", "bundles"), filepath.Join(tmp, "bundles"))
+	mustWriteWorkspace(t, filepath.Join(tmp, "bundles", "shared-guides", "factile.toml"), "version = 2\n\n[bundle]\nname = \"shared-guides\"\n")
+	mustWriteWorkspace(t, filepath.Join(tmp, "bundles", "product-docs", "factile.toml"), "version = 2\n\n[bundle]\nname = \"product-docs\"\n")
+	mustWriteWorkspace(t, filepath.Join(tmp, "bundles", "broken-docs", "factile.toml"), "version = 2\n\n[bundle]\nname = \"broken-docs\"\n")
 	mustWriteWorkspace(t, filepath.Join(workspace, "engineering", "common.mount.toml"), `source = "../../bundles/shared-guides"
 writable = false
 title = "Common Engineering Guides"
@@ -2261,11 +2252,15 @@ func mustWriteWorkspace(t *testing.T, filename string, data string) {
 
 func writeRootConfig(t *testing.T, root string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".factile"), 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte(`version = 1
+	if err := os.WriteFile(filepath.Join(root, "factile.toml"), []byte(`version = 2
 
+[workspace]
+root = "."
+
+[bundle]
 name = "test"
 title = "Test"
 
@@ -2295,8 +2290,9 @@ title: ` + title + `
 func gitWorkspaceRemote(t *testing.T) (string, string, string) {
 	t.Helper()
 	sourcePath := filepath.Join(t.TempDir(), "source")
-	mustWriteWorkspace(t, filepath.Join(sourcePath, ".factile", "config.toml"), `version = 1
+	mustWriteWorkspace(t, filepath.Join(sourcePath, "factile.toml"), `version = 2
 
+[bundle]
 name = "git-fixture"
 title = "Git Fixture"
 description = "Git-backed reader fixture."
@@ -2350,28 +2346,22 @@ func normalizedMountJSON(t *testing.T, value any, mountPath string) string {
 	return strings.ReplaceAll(string(data), mountPath, "/mount")
 }
 
-func mountFileForWorkspace(t *testing.T, writable bool) string {
+func workspaceForBundles(t *testing.T, writable bool) (string, string) {
 	t.Helper()
 	tmp := t.TempDir()
-	product := filepath.Join(tmp, "product-docs")
-	broken := filepath.Join(tmp, "broken-docs")
+	workspace := filepath.Join(tmp, "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	product := filepath.Join(workspace, "bundles", "product-docs")
+	broken := filepath.Join(workspace, "bundles", "broken-docs")
+	mustWriteWorkspace(t, filepath.Join(workspace, "factile.toml"), "version = 2\n\n[workspace]\nroot = \"docs\"\n")
+	mustWriteWorkspace(t, filepath.Join(rootBundle, "factile.toml"), "version = 2\n\n[bundle]\nname = \"test-root\"\n")
 	copyDir(t, filepath.Join("..", "..", "testdata", "bundles", "product-docs"), product)
 	copyDir(t, filepath.Join("..", "..", "testdata", "bundles", "broken-docs"), broken)
-	mountFile := filepath.Join(tmp, "mount-registry.toml")
-	data := `[mounts."/product-docs"]
-source = "` + product + `"
-kind = "local"
-writable = ` + boolString(writable) + `
-
-[mounts."/broken-docs"]
-source = "` + broken + `"
-kind = "local"
-writable = true
-`
-	if err := os.WriteFile(mountFile, []byte(data), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return mountFile
+	mustWriteWorkspace(t, filepath.Join(product, "factile.toml"), "version = 2\n\n[bundle]\nname = \"product-docs\"\n")
+	mustWriteWorkspace(t, filepath.Join(broken, "factile.toml"), "version = 2\n\n[bundle]\nname = \"broken-docs\"\n")
+	mustWriteWorkspace(t, filepath.Join(rootBundle, "product-docs.mount.toml"), "source = \"../bundles/product-docs\"\nwritable = "+boolString(writable)+"\n")
+	mustWriteWorkspace(t, filepath.Join(rootBundle, "broken-docs.mount.toml"), "source = \"../bundles/broken-docs\"\nwritable = true\n")
+	return workspace, product
 }
 
 func copyDir(t *testing.T, src, dst string) {

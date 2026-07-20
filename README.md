@@ -16,8 +16,12 @@ Status: early local-first v0.3.1. JSON output is intended as the stable
 agent/script contract; CLI text and command ergonomics may still evolve before
 v1.0.
 
-Factile reads root-local and explicitly mounted local directories, and can
-materialize read-only Git repositories into a generated per-root cache. It does
+Root Layout v2 is the current contract in this checkout. Legacy layouts receive
+an explicit migration diagnostic; Factile does not silently reinterpret them.
+
+Factile reads one workspace's root bundle and explicitly mounted bundles, and
+can materialize read-only Git repositories into a generated per-workspace
+cache. It does
 not implement hosted `factile://` source resolution, hosted MCP, subscriptions,
 billing, auth products, marketplace search, publisher portals, remote caches,
 or cloud sync in this repository.
@@ -111,30 +115,42 @@ Initialize Factile in a repository:
 
 ```bash
 factile init
-factile
+factile status
 factile list /
 factile list / --brief
 factile stat /overview
 factile context / "project overview"
 ```
 
-By default, `factile init` creates a docs-rooted Factile tree:
+Root Layout v2 makes the repository an explicit workspace and `docs/` its root
+bundle:
 
 ```text
+factile.toml                 # [workspace], root = "docs"
+.gitignore                   # contains the anchored rule /.factile/
+.factile/                    # ignored local state, created only when needed
 docs/
-  .factile/
-    config.toml
+  factile.toml               # [bundle]
   index.md
   overview.md
 ```
 
-The directory containing `.factile/config.toml` is the active Factile root. A
-repository can keep Factile content in `docs/` without making the repository
-root itself part of the knowledge tree. Use `factile init --here` when the
-current directory should be the root.
+The nearest ancestor `factile.toml` containing `[workspace]` is the workspace
+boundary. Its selected root bundle supplies the logical `/`; the workspace
+directory itself is not automatically knowledge. Discovery crosses Git
+boundaries and never falls back to a nearby `docs/` directory or bundle. Use
+`factile init --here` for a standalone manifest containing both `[workspace]`
+with `root = "."` and `[bundle]`.
 
-Bare `factile` prints a concise workspace summary: the active root, visible
-paths, shallow health, and useful next commands. Use `factile --help` for the
+Use `--workspace <directory>` only when explicit selection is needed. The
+directory itself must contain `[workspace]`; the option does not search from
+that location. Contextual commands outside a workspace return
+`no_active_workspace`. Only `bundle find` and `bundle inspect`, when given
+physical directories with valid bundle manifests, remain workspace-free.
+
+Bare `factile` prints a concise workspace summary: `workspace_dir`,
+`root_bundle_dir`, `state_dir`, visible paths, shallow health, and useful next
+commands. Use `factile --help` for the
 full command reference or `factile status --json` for the stable structured
 summary.
 
@@ -151,7 +167,7 @@ Factile paths are logical paths, not filesystem paths. Public document paths
 omit `.md`:
 
 ```text
-/                         active root
+/                         selected root bundle
 /overview                 docs/overview.md
 /runbooks                 docs/runbooks/ or docs/runbooks/index.md
 /runbooks/release         docs/runbooks/release.md
@@ -185,9 +201,9 @@ factile list /reference
 factile list /coding
 ```
 
-Every explicit mount is read-only by default. Only a local directory can opt
-into writes with `--writable`; Git mounts are always read-only. The implicit
-active-root mount at `/` remains writable in curator mode. `--read-only` remains
+Every explicit mount is read-only by default. Only a local bundle can opt into
+writes with `--writable`; Git mounts are always read-only. The implicit root
+bundle at `/` remains writable in curator mode. `--read-only` remains
 accepted as a deprecated compatibility flag.
 
 Native `https://`, `http://`, `ssh://`, `git://`, `file://`, and SCP-style
@@ -198,7 +214,7 @@ use `--revision <40-hex-sha1>` for an immutable pin. Git mounts support SHA-1
 object-format repositories; SHA-256 repositories and 64-hex pins are not
 supported. `--ref` and `--revision` cannot be combined.
 
-Factile resolves Git content into immutable snapshots under the active root's
+Factile resolves Git content into immutable snapshots under the workspace's
 `.factile/cache/git/` directory. Floating mounts check for updates when needed
 after the previous check is at least 24 hours old. Check immediately with:
 
@@ -214,7 +230,7 @@ the last snapshot and report it as stale. Without a usable snapshot, the read
 fails with `remote_source_unavailable`.
 
 When `--title` or `--description` is omitted, Factile fills each missing field
-from the source root's `.factile/config.toml`, then from the root
+from the source bundle's `factile.toml` `[bundle]` metadata, then from its root
 `overview.md` concept. If no title is available, it humanizes the mount path,
 for example `/shared-reference` becomes `Shared Reference`. An unavailable
 description remains empty. Explicit flags always win.
@@ -250,8 +266,9 @@ factile unmount /reference
 
 ## Views
 
-Views are named lenses over existing paths. They live in `.factile/views.toml`
-and only narrow reader commands when selected:
+Views are named workspace lenses over existing paths. They live in the optional
+tracked `factile.views.toml` beside the workspace manifest and only narrow
+reader commands when selected:
 
 ```bash
 factile view set onboarding --title "Onboarding" \
@@ -287,7 +304,9 @@ factile mcp serve --stdio --read-only
 factile mcp serve --stdio
 ```
 
-The MCP adapter uses the same workspace API and JSON models as the CLI.
+The MCP adapter uses the same mandatory workspace resolver, logical tree, and
+JSON models as the CLI. Starting it from a secondary bundle does not change the
+root bundle.
 Read-only mode exposes reader tools such as `factile_list`, `factile_stat`,
 `factile_read`, `factile_search`, `factile_context`, `factile_graph`,
 `factile_validate`, `factile_mounts`, and `factile_refresh`. Refresh only
@@ -332,7 +351,7 @@ factile skill doctor codex --json
 ```
 
 Repo-scope install creates local agent guidance and MCP configuration in that
-repository. Reader mode is the default and configures MCP with `--read-only`.
+workspace. Reader mode is the default and configures MCP with `--read-only`.
 Curator mode installs write guidance and a write-capable MCP command.
 
 The first profile seed lives under `profiles/software/` as data: a profile
@@ -363,14 +382,18 @@ Factile v0.3.1 is intentionally local-first:
   subdirectory mounts, submodule initialization, Git LFS downloads, background
   refresh daemon, or global shared cache.
 - Git snapshots reject repository symlinks. Credentials must come from Git's
-  external credential or SSH mechanisms, not from the recorded source URI.
+  external credential helper, OS keychain, SSH agent/key, or process
+  environment, not from a workspace file, state file, or recorded source URI.
   Literal query or fragment delimiters are rejected even when empty;
   percent-encoded path characters remain valid.
 - Recipes are seed guidance data, not executable workflows.
 - Text output is a human interface; use JSON for scripts and agents.
 - Rename reports backlink warnings; it does not rewrite links automatically.
-- Legacy compatibility code remains during the v2 cleanup window, but new local
-  workflows should use roots, descriptor mounts, and views.
+- The accepted Root Layout v2 target is a clean cutover: contextual commands
+  require a workspace; only explicitly physical `bundle find` and
+  `bundle inspect` are workspace-free. Released v0.3.1 retains the legacy
+  behavior called out above. Hosted authentication and `factile://` transport
+  remain out of scope.
 
 ## Supported Platforms
 

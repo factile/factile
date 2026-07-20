@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/factile/factile/pkg/contextpack"
 	"github.com/factile/factile/pkg/gitsource"
@@ -22,18 +23,48 @@ import (
 )
 
 type WorkspaceOptions struct {
+	Workspace string
+	// Deprecated: Root Layout v2 does not support --mount-file composition.
 	MountFile string
-	Root      string
-	WorkDir   string
-	ReadOnly  bool
+	// Deprecated: Root Layout v2 uses Workspace for exact selection.
+	Root     string
+	WorkDir  string
+	ReadOnly bool
 }
 
 type LocalWorkspace struct {
-	opts WorkspaceOptions
+	opts         WorkspaceOptions
+	resolveOnce  sync.Once
+	workspace    vfs.WorkspaceContext
+	workspaceErr error
 }
 
 func NewWorkspace(opts WorkspaceOptions) *LocalWorkspace {
 	return &LocalWorkspace{opts: opts}
+}
+
+func (w *LocalWorkspace) resolvedWorkspace() (vfs.WorkspaceContext, error) {
+	w.resolveOnce.Do(func() {
+		if w.opts.Root != "" {
+			w.workspaceErr = &vfs.Error{
+				Code:    vfs.ErrInvalidWorkspace,
+				Message: "Legacy root selection does not select a Factile workspace.",
+			}
+			return
+		}
+		if w.opts.MountFile != "" {
+			w.workspaceErr = &vfs.Error{
+				Code:    vfs.ErrInvalidWorkspace,
+				Message: "Legacy mount-file composition does not select a Factile workspace.",
+			}
+			return
+		}
+		w.workspace, w.workspaceErr = vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{
+			Workspace: w.opts.Workspace,
+			WorkDir:   w.opts.WorkDir,
+		})
+	})
+	return w.workspace, w.workspaceErr
 }
 
 func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOptions) (ListResult, error) {
@@ -421,13 +452,11 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 }
 
 func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error) {
-	if w.opts.MountFile != "" {
-		return nil, false, nil
-	}
-	root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	context, err := w.resolvedWorkspace()
 	if err != nil {
 		return nil, false, NormalizeError(err)
 	}
+	root := context.RootBundleDir
 
 	var issues []ValidationIssue
 	blocking := false
@@ -441,14 +470,15 @@ func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error)
 		blocking = true
 	}
 
-	viewsFile := filepath.Join(root, ".factile", "views.toml")
+	viewsFile := filepath.Join(context.WorkspaceDir, "factile.views.toml")
 	if fileExists(viewsFile) {
 		if _, err := loadViewsFile(viewsFile); err != nil {
 			issues = append(issues, ValidationIssue{
 				Severity: "error",
 				Code:     ErrValidationFailed,
 				Message:  "Invalid views file: " + err.Error(),
-				Path:     "/.factile/views.toml",
+				Path:     "/",
+				Details:  map[string]any{"file": "factile.views.toml"},
 			})
 		}
 	}
@@ -627,7 +657,7 @@ func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input Cre
 	if issues := validateDocument(target.Path, doc); hasErrors(issues) {
 		return ConceptResult{}, validationError(issues)
 	}
-	err = storage.WithFileLock(file, func() error {
+	err = w.withWorkspaceLocks([]string{file}, func() error {
 		return store.CreateExclusive(target.ConceptID, data)
 	})
 	if err != nil {
@@ -657,7 +687,11 @@ func (w *LocalWorkspace) Mkdir(ctx context.Context, inputPath string, opts Mkdir
 		return DirectoryResult{}, NormalizeError(err)
 	}
 	files := mkdirScaffoldFiles(target.Path, target.RelPath, opts)
-	if err := store.CreateDirectoryScaffold(target.RelPath, files.storage); err != nil {
+	directoryTarget := filepath.Join(store.Root, filepath.FromSlash(target.RelPath))
+	err = w.withWorkspaceLocks([]string{directoryTarget}, func() error {
+		return store.CreateDirectoryScaffold(target.RelPath, files.storage)
+	})
+	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return DirectoryResult{}, NewError(ErrPathAlreadyExists, "Path already exists: "+target.Path)
 		}
@@ -689,7 +723,7 @@ func (w *LocalWorkspace) Write(ctx context.Context, inputPath string, input Writ
 	if err != nil {
 		return ConceptResult{}, NormalizeError(err)
 	}
-	err = storage.WithFileLock(file, func() error {
+	err = w.withWorkspaceLocks([]string{file}, func() error {
 		data, _, err := store.ReadConcept(target.ConceptID)
 		if err != nil {
 			return err
@@ -738,7 +772,7 @@ func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input Patc
 	if err != nil {
 		return ConceptResult{}, NormalizeError(err)
 	}
-	err = storage.WithFileLock(file, func() error {
+	err = w.withWorkspaceLocks([]string{file}, func() error {
 		data, _, err := store.ReadConcept(target.ConceptID)
 		if err != nil {
 			return err
@@ -819,7 +853,7 @@ func (w *LocalWorkspace) Rename(ctx context.Context, oldPath string, newPath str
 		return RenameResult{}, NormalizeError(err)
 	}
 	var warnings []ValidationIssue
-	err = storage.WithFileLocks([]string{oldFile, newFile}, func() error {
+	err = w.withWorkspaceLocks([]string{oldFile, newFile}, func() error {
 		data, _, err := store.ReadConcept(target.ConceptID)
 		if err != nil {
 			return err
@@ -863,7 +897,7 @@ func (w *LocalWorkspace) Delete(ctx context.Context, inputPath string, opts Dele
 	if err != nil {
 		return DeleteResult{}, NormalizeError(err)
 	}
-	err = storage.WithFileLock(file, func() error {
+	err = w.withWorkspaceLocks([]string{file}, func() error {
 		data, _, err := store.ReadConcept(target.ConceptID)
 		if err != nil {
 			return err
@@ -896,7 +930,6 @@ func (w *LocalWorkspace) Deprecate(ctx context.Context, inputPath string, opts D
 }
 
 func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error) {
-	_ = ctx
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
@@ -908,9 +941,6 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 	kind := classification.Kind
 	if opts.Kind != "" && opts.Kind != kind {
 		return MountResult{}, NewError(ErrUnsupportedSource, "Mount source kind does not match its syntax")
-	}
-	if w.opts.MountFile != "" && kind == vfs.SourceKindGit {
-		return MountResult{}, NewError(ErrUnsupportedSource, "Git sources are not supported with --mount-file; use an active Factile root.")
 	}
 	if opts.Writable && kind != vfs.SourceKindLocal {
 		if kind == vfs.SourceKindGit {
@@ -924,79 +954,57 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 	if kind == vfs.SourceKindFactile {
 		return MountResult{}, NewError(ErrUnsupportedSource, "Remote sources are not implemented in Phase 1")
 	}
-	if w.opts.MountFile == "" {
-		root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
-		if err != nil {
-			return MountResult{}, NormalizeError(err)
-		}
-		descriptorPath, err := vfs.MountDescriptorPath(root, normalized)
-		if err != nil {
-			return MountResult{}, NormalizeError(err)
-		}
-		var result MountResult
-		err = storage.WithFileLock(descriptorPath, func() error {
-			if err := ensureRootMountTargetAvailable(root, normalized); err != nil {
-				return err
-			}
-			sourcePath, err := w.resolveMountSource(ctx, root, source, normalized, kind, filepath.Dir(descriptorPath), false, opts)
-			if err != nil {
-				return err
-			}
-			resolved := applyMountMetadataDefaults(sourcePath, normalized, opts)
-			mount := vfs.Mount{
-				MountPath:    normalized,
-				Source:       source,
-				Writable:     resolved.Writable,
-				Title:        resolved.Title,
-				Description:  resolved.Description,
-				WhenToUse:    resolved.WhenToUse,
-				WhenNotToUse: resolved.WhenNotToUse,
-				Version:      resolved.Version,
-				Ref:          resolved.Ref,
-				Revision:     resolved.Revision,
-				VersionSet:   resolved.VersionSet,
-				RefSet:       resolved.RefSet,
-				RevisionSet:  resolved.RevisionSet,
-				Trust:        resolved.Trust,
-			}
-			written, err := vfs.WriteMountDescriptorFile(root, mount)
-			if err != nil {
-				return err
-			}
-			result = MountResult{Mount: written}
-			return nil
-		})
-		if err != nil {
-			return MountResult{}, NormalizeError(err)
-		}
-		return result, nil
+	context, err := w.resolvedWorkspace()
+	if err != nil {
+		return MountResult{}, NormalizeError(err)
 	}
-	registryPath, err := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	root := context.RootBundleDir
+	descriptorPath, err := vfs.MountDescriptorPath(root, normalized)
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
 	}
 	var result MountResult
-	err = storage.WithFileLock(registryPath, func() error {
-		mounts, err := loadRegistryForMutation(registryPath)
+	err = w.withWorkspaceLocks([]string{descriptorPath}, func() error {
+		if err := ensureRootMountTargetAvailable(root, normalized); err != nil {
+			return err
+		}
+		sourcePath, err := w.resolveMountSource(ctx, context, source, normalized, kind, filepath.Dir(descriptorPath), opts)
 		if err != nil {
 			return err
 		}
-		sourcePath, err := w.resolveMountSource(ctx, "", source, normalized, kind, filepath.Dir(registryPath), true, opts)
+		validated, err := vfs.ValidateWorkspaceMount(context, vfs.Mount{
+			MountPath:  normalized,
+			Source:     source,
+			Kind:       kind,
+			SourcePath: sourcePath,
+		})
 		if err != nil {
 			return err
 		}
+		sourcePath = validated.SourcePath
 		resolved := applyMountMetadataDefaults(sourcePath, normalized, opts)
-		for i, mount := range mounts {
-			if mount.MountPath == normalized {
-				mounts[i] = vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: resolved.Writable, Title: resolved.Title, Description: resolved.Description, Version: resolved.Version, Ref: resolved.Ref, Revision: resolved.Revision, VersionSet: resolved.VersionSet, RefSet: resolved.RefSet, RevisionSet: resolved.RevisionSet}
-				result = MountResult{Mount: mounts[i]}
-				return vfs.WriteRegistryFile(registryPath, mounts)
-			}
+		mount := vfs.Mount{
+			MountPath:    normalized,
+			Source:       source,
+			Writable:     resolved.Writable,
+			Title:        resolved.Title,
+			Description:  resolved.Description,
+			WhenToUse:    resolved.WhenToUse,
+			WhenNotToUse: resolved.WhenNotToUse,
+			Version:      resolved.Version,
+			Ref:          resolved.Ref,
+			Revision:     resolved.Revision,
+			VersionSet:   resolved.VersionSet,
+			RefSet:       resolved.RefSet,
+			RevisionSet:  resolved.RevisionSet,
+			Trust:        resolved.Trust,
 		}
-		mount := vfs.Mount{MountPath: normalized, Source: source, Kind: kind, Writable: resolved.Writable, Title: resolved.Title, Description: resolved.Description, Version: resolved.Version, Ref: resolved.Ref, Revision: resolved.Revision, VersionSet: resolved.VersionSet, RefSet: resolved.RefSet, RevisionSet: resolved.RevisionSet}
-		mounts = append(mounts, mount)
-		result = MountResult{Mount: mount}
-		return vfs.WriteRegistryFile(registryPath, mounts)
+		written, err := vfs.WriteMountDescriptorFile(root, mount)
+		if err != nil {
+			return err
+		}
+		result = MountResult{Mount: written}
+		return nil
 	})
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
@@ -1005,57 +1013,29 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 }
 
 func (w *LocalWorkspace) Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error) {
-	_ = ctx
+	_, _ = ctx, opts
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
 		return UnmountResult{}, NormalizeError(err)
 	}
-	if w.opts.MountFile == "" {
-		root, err := vfs.RequireRoot(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir})
-		if err != nil {
-			return UnmountResult{}, NormalizeError(err)
-		}
-		descriptorPath, err := vfs.MountDescriptorPath(root, normalized)
-		if err != nil {
-			return UnmountResult{}, NormalizeError(err)
-		}
-		result := UnmountResult{MountPath: normalized}
-		err = storage.WithFileLock(descriptorPath, func() error {
-			if err := os.Remove(descriptorPath); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return nil
-				}
-				return err
-			}
-			result.Removed = true
-			return nil
-		})
-		if err != nil {
-			return UnmountResult{}, NormalizeError(err)
-		}
-		return result, nil
-	}
-	registryPath, err := vfs.RegistryPathForWrite(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	context, err := w.resolvedWorkspace()
 	if err != nil {
 		return UnmountResult{}, NormalizeError(err)
 	}
-	var result UnmountResult
-	err = storage.WithFileLock(registryPath, func() error {
-		mounts, err := loadRegistryForMutation(registryPath)
-		if err != nil {
+	descriptorPath, err := vfs.MountDescriptorPath(context.RootBundleDir, normalized)
+	if err != nil {
+		return UnmountResult{}, NormalizeError(err)
+	}
+	result := UnmountResult{MountPath: normalized}
+	err = w.withWorkspaceLocks([]string{descriptorPath}, func() error {
+		if err := os.Remove(descriptorPath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
-		var next []vfs.Mount
-		removed := false
-		for _, mount := range mounts {
-			if mount.MountPath == normalized {
-				removed = true
-				continue
-			}
-			next = append(next, mount)
-		}
-		result = UnmountResult{MountPath: normalized, Removed: removed}
-		return vfs.WriteRegistryFile(registryPath, next)
+		result.Removed = true
+		return nil
 	})
 	if err != nil {
 		return UnmountResult{}, NormalizeError(err)
@@ -1102,7 +1082,11 @@ func (w *LocalWorkspace) Refresh(ctx context.Context, mountPath string) (Refresh
 	if mount.Kind != vfs.SourceKindGit {
 		return RefreshResult{}, NewError(ErrUnsupportedSource, "Only Git mounts can be refreshed")
 	}
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir}, gitsource.NewRunner())
+	workspace, err := w.resolvedWorkspace()
+	if err != nil {
+		return RefreshResult{}, NormalizeError(err)
+	}
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		return RefreshResult{}, NormalizeError(err)
 	}
@@ -1121,6 +1105,14 @@ func (w *LocalWorkspace) InspectBundle(ctx context.Context, source string) (Bund
 	store, err := storage.NewLocal(source)
 	if err != nil {
 		return BundleInspectResult{}, NormalizeError(err)
+	}
+	manifest, err := vfs.LoadManifest(store.Root)
+	if err != nil || manifest.Bundle == nil {
+		return BundleInspectResult{}, NormalizeError(&vfs.Error{
+			Code:    vfs.ErrInvalidBundle,
+			Message: "Source directory has no valid bundle factile.toml.",
+			Details: map[string]string{"bundle": store.Root},
+		})
 	}
 	ids, err := store.ListConceptIDs("")
 	if err != nil {
@@ -1158,10 +1150,11 @@ func (w *LocalWorkspace) FindBundles(ctx context.Context, startPath string) (Bun
 			return nil
 		}
 		name := d.Name()
-		if strings.HasPrefix(name, ".") && p != abs {
+		if name == vfs.StateDirname || name == ".git" || (strings.HasPrefix(name, ".") && p != abs) {
 			return filepath.SkipDir
 		}
-		if fileExists(filepath.Join(p, "index.md")) {
+		manifest, manifestErr := vfs.LoadManifest(p)
+		if manifestErr == nil && manifest.Bundle != nil {
 			sources = append(sources, p)
 		}
 		return nil
@@ -1948,7 +1941,11 @@ func (w *LocalWorkspace) mountAndRelativePath(mounts []vfs.Mount, normalized str
 }
 
 func (w *LocalWorkspace) mounts() ([]vfs.Mount, error) {
-	return vfs.LoadMounts(vfs.LoadOptions{MountFile: w.opts.MountFile, Root: w.opts.Root, WorkDir: w.opts.WorkDir})
+	context, err := w.resolvedWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	return vfs.LoadWorkspaceMounts(context)
 }
 
 func (w *LocalWorkspace) ensureWritable(mount vfs.Mount) error {

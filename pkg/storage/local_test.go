@@ -141,21 +141,51 @@ func TestLocalRejectsUnsafeConceptIDs(t *testing.T) {
 	}
 }
 
+func TestLocalRejectsSymlinkDirectoryEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWriteStorageTestFile(t, filepath.Join(outside, "secret.md"), []byte("# Secret\n"))
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	store, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConceptFile("escape/secret"); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("ConceptFile symlink escape error = %v, want ErrUnsafePath", err)
+	}
+	if err := store.AtomicReplace("escape/secret", []byte("changed")); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("AtomicReplace symlink escape error = %v, want ErrUnsafePath", err)
+	}
+}
+
 func TestWithFileLockCreatesAndReleasesLock(t *testing.T) {
 	tmp := t.TempDir()
 	target := filepath.Join(tmp, "doc.md")
 	lockPath := target + ".lock"
 	var lockData []byte
+	var lockMode os.FileMode
 
 	if err := WithFileLock(target, func() error {
 		var err error
 		lockData, err = os.ReadFile(lockPath)
+		if err != nil {
+			return err
+		}
+		lockInfo, err := os.Stat(lockPath)
+		if err == nil {
+			lockMode = lockInfo.Mode().Perm()
+		}
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.TrimSpace(string(lockData)) != strconv.Itoa(os.Getpid()) {
 		t.Fatalf("lock file should contain current pid, got %q", string(lockData))
+	}
+	if lockMode != 0o600 {
+		t.Fatalf("lock file mode = %o, want 600", lockMode)
 	}
 	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lock file should be removed after release, got %v", err)

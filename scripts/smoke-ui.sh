@@ -6,8 +6,9 @@ BINARY="${BINARY:-bin/factile}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-4327}"
 CURATOR_PORT="$((PORT + 1))"
-FIXTURE_ROOT="$(pwd)/testdata/ui-smoke"
+FIXTURE_SOURCE="$(pwd)/testdata/ui-smoke"
 TMP_ROOT="${TMPDIR:-/tmp}/factile-cli-ui-smoke-${PORT}"
+FIXTURE_ROOT="$TMP_ROOT/workspace"
 
 if [ ! -f "pkg/uibridge/static/index.html" ]; then
   printf 'embedded UI assets are missing; run make ui-assets first\n' >&2
@@ -19,7 +20,8 @@ install -d "$(dirname "$BINARY")"
 BINARY="$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")"
 
 rm -rf "$TMP_ROOT"
-mkdir -p "$TMP_ROOT"
+mkdir -p "$FIXTURE_ROOT"
+cp -R "$FIXTURE_SOURCE/." "$FIXTURE_ROOT/"
 
 server_pid=""
 
@@ -35,7 +37,7 @@ start_server() {
   local port="$1"
   local mode="$2"
   local log_file="$TMP_ROOT/$mode.log"
-  local args=(--root "$FIXTURE_ROOT" ui --no-open --port "$port")
+  local args=(--workspace "$FIXTURE_ROOT" ui --no-open --port "$port")
   if [ "$mode" = "curator" ]; then
     args+=(--curator)
   fi
@@ -91,7 +93,7 @@ curl -fsS "$ROOT_URL/api/local/v1/reader/validate?path=%2Fguides%2Fonboarding" >
 grep -q '"mode":"reader"' "$TMP_ROOT/reader-capabilities.json"
 grep -q '"patch":false' "$TMP_ROOT/reader-capabilities.json"
 grep -q '"title":"Local Factile workspace"' "$TMP_ROOT/source.json"
-grep -q 'testdata/ui-smoke' "$TMP_ROOT/source.json"
+grep -Fq "$FIXTURE_ROOT" "$TMP_ROOT/source.json"
 grep -q '"id":"support"' "$TMP_ROOT/views.json"
 grep -q '"id":"support"' "$TMP_ROOT/view.json"
 grep -q '"path":"/"' "$TMP_ROOT/list-root.json"

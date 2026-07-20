@@ -1,5 +1,6 @@
-version = 1
+version = 2
 
+[bundle]
 name = "factile"
 title = "Factile"
 description = "Public documentation for the local-first Factile CLI."

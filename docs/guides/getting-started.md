@@ -1,12 +1,17 @@
 ---
 type: Guide
 title: Getting Started
-description: Install Factile, create a root, read local knowledge, and validate the result.
+description: Install Factile, create a workspace and root bundle, read local knowledge, and validate the result.
 tags: [factile, cli, getting-started]
 timestamp: 2026-07-15T00:00:00+02:00
 ---
 
 # Getting Started
+
+> **Implementation status:** the Root Layout v2 setup below is the accepted
+> target under `ft-qhg`. Released v0.3.1 still creates the legacy
+> `.factile/config.toml` layout; check current executable help until the v2
+> implementation lands.
 
 Factile is one native binary. The recommended installation is:
 
@@ -22,11 +27,11 @@ from source with Go:
 go install github.com/factile/factile/cmd/factile@latest
 ```
 
-Local roots need no external service. Git mounts additionally need the system
+Local workspaces need no external service. Git mounts additionally need the system
 `git` executable; SSH sources use the normal Git and SSH configuration already
 available to the user.
 
-## Create a root
+## Create a workspace
 
 From a repository:
 
@@ -34,9 +39,21 @@ From a repository:
 factile init
 ```
 
-The default root is `docs/` and contains `.factile/config.toml`, `index.md`, and
-`overview.md`. Use `factile init --here` only when the current directory itself
-should be the knowledge root.
+The default v2 layout is:
+
+```text
+factile.toml                 # [workspace], root = "docs"
+.gitignore                   # contains the anchored rule /.factile/
+docs/
+  factile.toml               # [bundle]
+  index.md
+  overview.md
+```
+
+The workspace selects `docs/` as its root bundle and logical `/`. Use
+`factile init --here` only for a standalone directory that should contain one
+combined `[workspace]` and `[bundle]` manifest with `root = "."`.
+Initialization adds the anchored ignore rule without creating `.factile/`.
 
 Inspect the result:
 
@@ -48,7 +65,8 @@ factile stat /overview
 factile read /overview
 ```
 
-Bare `factile` is the same workspace summary as `factile status`. A lone path
+Bare `factile` is the same workspace summary as `factile status`. Status names
+the workspace, root bundle, and local state directory separately. A lone path
 such as `factile /overview` reads a document and falls back to listing when the
 path is a folder.
 
@@ -70,7 +88,7 @@ factile context / "release process" --json
 
 ## Add a source when needed
 
-Mount only knowledge this root actually needs:
+Mount only bundles this workspace's root bundle actually needs:
 
 ```bash
 factile mount ./reference /reference
@@ -79,7 +97,7 @@ factile mounts
 ```
 
 Explicit mounts are read-only by default. Opt into `--writable` only for a
-local directory whose authority is intentionally curated through this root.
+local bundle whose authority is intentionally curated through this workspace.
 Git sources are always read-only.
 
 ## Optional agent setup
@@ -93,5 +111,5 @@ factile skill doctor codex
 
 Finish by running `factile validate /`. Continue with
 [Reading knowledge](reading-knowledge.md),
-[Curating roots, mounts, and views](curating-knowledge.md), or
+[Curating workspaces, mounts, and views](curating-knowledge.md), or
 [Editing documents safely](editing-documents.md).

@@ -28,7 +28,7 @@ func TestCacheInitializesAndInspectsManagedBareRepository(t *testing.T) {
 	}
 	remote := fileRemote(t, remotePath)
 
-	cache, err := OpenCache(vfs.LoadOptions{Root: root}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, root), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +82,95 @@ func TestCacheInitializesAndInspectsManagedBareRepository(t *testing.T) {
 	}
 	if strings.TrimSpace(string(status)) != "" {
 		t.Fatalf("generated cache is visible to Git status: %s", status)
+	}
+}
+
+func TestCacheAnchorsToWorkspaceStateAcrossWorkingDirectories(t *testing.T) {
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	rootBundle := filepath.Join(workspace, "docs")
+	secondary := filepath.Join(workspace, "bundles", "reference")
+	writeGitSourceTestFile(t, filepath.Join(workspace, "factile.toml"), "version = 2\n\n[workspace]\nroot = \"docs\"\n")
+	writeGitSourceTestFile(t, filepath.Join(rootBundle, "factile.toml"), "version = 2\n\n[bundle]\nname = \"docs\"\n")
+	writeGitSourceTestFile(t, filepath.Join(secondary, "factile.toml"), "version = 2\n\n[bundle]\nname = \"reference\"\n")
+	deepRoot := filepath.Join(rootBundle, "guides", "deep")
+	if err := os.MkdirAll(deepRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := OpenCache(resolveGitSourceWorkspace(t, deepRoot), NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := OpenCache(resolveGitSourceWorkspace(t, secondary), NewRunner())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEntry, err := first.Entry("/reference", "https://example.test/reference.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondEntry, err := second.Entry("/reference", "https://example.test/reference.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstEntry != secondEntry {
+		t.Fatalf("CWD changed cache identity: first=%#v second=%#v", firstEntry, secondEntry)
+	}
+	wantState := filepath.Join(workspace, ".factile")
+	if first.WorkspaceDir != workspace || first.StateDir != wantState || !strings.HasPrefix(firstEntry.Dir, filepath.Join(wantState, "cache", "git")+string(filepath.Separator)) {
+		t.Fatalf("cache is not workspace-anchored: cache=%#v entry=%#v", first, firstEntry)
+	}
+	if _, err := os.Stat(filepath.Join(rootBundle, ".factile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache appeared inside root bundle: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(secondary, ".factile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cache appeared inside secondary bundle: %v", err)
+	}
+}
+
+func TestCacheDoesNotPersistCredentialEnvironment(t *testing.T) {
+	fixture := newResolutionFixture(t)
+	workspace := resolveGitSourceWorkspace(t, writeGitSourceRoot(t))
+	canaries := []string{
+		"hosted-token-canary-7d9f",
+		"git-password-canary-42ac",
+		"authorization-canary-c831",
+	}
+	t.Setenv("FACTILE_HOSTED_TOKEN", canaries[0])
+	t.Setenv("GIT_PASSWORD", canaries[1])
+	t.Setenv("HTTP_AUTHORIZATION", "Bearer "+canaries[2])
+
+	cache, err := OpenCache(workspace, fixture.runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.Resolve(context.Background(), Intent{MountPath: "/coding", Source: fixture.remote}); err != nil {
+		t.Fatal(err)
+	}
+	if err := filepath.WalkDir(workspace.StateDir, func(filename string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		for _, canary := range canaries {
+			if strings.Contains(filename, canary) {
+				t.Fatalf("credential canary entered a cache path: %s", filename)
+			}
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(filename)
+		if err != nil {
+			return err
+		}
+		for _, canary := range canaries {
+			if strings.Contains(string(data), canary) {
+				t.Fatalf("credential canary %q entered cache file %s", canary, filename)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -143,7 +232,7 @@ func TestCacheIgnoresAmbientRepositoryEnvironment(t *testing.T) {
 		t.Setenv(key, value)
 	}
 
-	cache, err := OpenCache(vfs.LoadOptions{Root: root}, fixture.runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, root), fixture.runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +327,7 @@ func TestCacheStateReplacementAndValidation(t *testing.T) {
 
 func TestStatusCacheOpenDoesNotCreateCacheState(t *testing.T) {
 	root := writeGitSourceRoot(t)
-	cache, err := OpenCacheForStatus(vfs.LoadOptions{Root: root}, NewRunner())
+	cache, err := OpenCacheForStatus(resolveGitSourceWorkspace(t, root), NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,14 +346,17 @@ func TestStatusCacheOpenDoesNotCreateCacheState(t *testing.T) {
 func TestCacheRejectsUnsafeRootsPathsAndSources(t *testing.T) {
 	runner := NewRunner()
 	missingRoot := t.TempDir()
-	if _, err := OpenCache(vfs.LoadOptions{Root: missingRoot}, runner); err == nil {
-		t.Fatal("cache opened a directory without a Factile root")
+	if _, err := OpenCache(vfs.WorkspaceContext{
+		WorkspaceDir: missingRoot,
+		StateDir:     filepath.Join(t.TempDir(), ".factile"),
+	}, runner); err == nil {
+		t.Fatal("cache opened an inconsistent workspace context")
 	}
 
 	root := writeGitSourceRoot(t)
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, ".factile", "cache")); err == nil {
-		if _, err := OpenCache(vfs.LoadOptions{Root: root}, runner); !errors.Is(err, ErrInvalidCache) {
+		if _, err := OpenCache(resolveGitSourceWorkspace(t, root), runner); err == nil {
 			t.Fatalf("symlinked cache error = %v", err)
 		}
 	} else {
@@ -272,7 +364,7 @@ func TestCacheRejectsUnsafeRootsPathsAndSources(t *testing.T) {
 	}
 
 	root = writeGitSourceRoot(t)
-	cache, err := OpenCache(vfs.LoadOptions{Root: root}, runner)
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, root), runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +513,7 @@ func TestCacheRejectsManagedAncestorSymlinkSubstitution(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			replaced := filepath.Join(cache.Root, ".factile")
+			replaced := cache.StateDir
 			switch ancestor {
 			case "cache":
 				replaced = filepath.Join(replaced, "cache")
@@ -515,7 +607,7 @@ func TestCacheUpdateLockSerializesWriters(t *testing.T) {
 
 func testCacheEntry(t *testing.T) (*Cache, Entry) {
 	t.Helper()
-	cache, err := OpenCache(vfs.LoadOptions{Root: writeGitSourceRoot(t)}, NewRunner())
+	cache, err := OpenCache(resolveGitSourceWorkspace(t, writeGitSourceRoot(t)), NewRunner())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,13 +621,36 @@ func testCacheEntry(t *testing.T) (*Cache, Entry) {
 func writeGitSourceRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, ".factile"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".factile", "config.toml"), []byte("version = 1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "factile.toml"), []byte(`version = 2
+
+[workspace]
+root = "."
+
+[bundle]
+name = "git-source-test"
+`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
+}
+
+func writeGitSourceTestFile(t *testing.T, filename string, data string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func resolveGitSourceWorkspace(t *testing.T, workDir string) vfs.WorkspaceContext {
+	t.Helper()
+	workspace, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return workspace
 }
 
 func fileRemote(t *testing.T, path string) string {

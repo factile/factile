@@ -66,7 +66,11 @@ func (w *LocalWorkspace) mountsForValidationScope(ctx context.Context, normalize
 	if len(indexes) == 0 {
 		return mounts, issues, invalid, nil
 	}
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir}, gitsource.NewRunner())
+	workspace, err := w.resolvedWorkspace()
+	if err != nil {
+		return nil, nil, nil, NormalizeError(err)
+	}
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		normalizedErr := normalizeGitSourceError(err)
 		if ErrorCode(normalizedErr) != ErrValidationFailed {
@@ -115,7 +119,11 @@ func (w *LocalWorkspace) hydrateMountIndexes(ctx context.Context, mounts []vfs.M
 	if len(indexes) == 0 {
 		return mounts, nil
 	}
-	cache, err := gitsource.OpenCache(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir}, gitsource.NewRunner())
+	workspace, err := w.resolvedWorkspace()
+	if err != nil {
+		return nil, NormalizeError(err)
+	}
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		return nil, NormalizeError(err)
 	}
@@ -151,9 +159,9 @@ func normalizeGitSourceError(err error) error {
 	}
 }
 
-func (w *LocalWorkspace) resolveMountSource(ctx context.Context, root, source, mountPath, kind, localBase string, allowWorkingDirFallback bool, opts MountOptions) (string, error) {
+func (w *LocalWorkspace) resolveMountSource(ctx context.Context, workspace vfs.WorkspaceContext, source, mountPath, kind, localBase string, opts MountOptions) (string, error) {
 	if kind == vfs.SourceKindLocal {
-		return resolveMountSourcePath(source, localBase, allowWorkingDirFallback)
+		return resolveMountSourcePath(source, localBase)
 	}
 	intent := gitsource.Intent{
 		MountPath:   mountPath,
@@ -169,8 +177,7 @@ func (w *LocalWorkspace) resolveMountSource(ctx context.Context, root, source, m
 	if err := gitsource.ValidateMountIntent(intent); err != nil {
 		return "", normalizeGitSourceError(err)
 	}
-	cacheOptions := vfs.LoadOptions{Root: root, WorkDir: w.opts.WorkDir}
-	cache, err := gitsource.OpenCache(cacheOptions, gitsource.NewRunner())
+	cache, err := gitsource.OpenCache(workspace, gitsource.NewRunner())
 	if err != nil {
 		return "", NormalizeError(err)
 	}
@@ -185,7 +192,11 @@ func (w *LocalWorkspace) resolveMountSource(ctx context.Context, root, source, m
 }
 
 func (w *LocalWorkspace) gitSourceStatus(mount vfs.Mount) (vfs.SourceStatus, error) {
-	cache, err := gitsource.OpenCacheForStatus(vfs.LoadOptions{Root: w.opts.Root, WorkDir: w.opts.WorkDir}, gitsource.NewRunner())
+	workspace, err := w.resolvedWorkspace()
+	if err != nil {
+		return vfs.SourceStatus{}, err
+	}
+	cache, err := gitsource.OpenCacheForStatus(workspace, gitsource.NewRunner())
 	if err != nil {
 		return vfs.SourceStatus{}, err
 	}

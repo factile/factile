@@ -35,18 +35,6 @@ mkdir -p "$tmpdir/bundles"
 cp -R ./testdata/bundles/product-docs "$tmpdir/bundles/product-docs"
 cp -R ./testdata/bundles/broken-docs "$tmpdir/bundles/broken-docs"
 
-cat > "$tmpdir/mount-registry.toml" <<EOF2
-[mounts."/product-docs"]
-source = "$tmpdir/bundles/product-docs"
-kind = "local"
-writable = true
-
-[mounts."/broken-docs"]
-source = "$tmpdir/bundles/broken-docs"
-kind = "local"
-writable = true
-EOF2
-
 "$factile_bin" --help >/dev/null
 test "$("$factile_bin" version)" = "factile v$version"
 "$factile_bin" --version >/dev/null
@@ -57,13 +45,22 @@ skill_workspace="$tmpdir/skill-workspace"
 mkdir -p "$skill_workspace"
 (
   cd "$skill_workspace"
+  "$factile_bin" init --json >/dev/null
   PATH="$tmpdir:$PATH" "$factile_bin" skill install codex --scope repo --json >/dev/null
+  PATH="$tmpdir:$PATH" "$factile_bin" skill doctor codex --json >/dev/null
 )
+
+if grep -R -E -- '\.factile/(config|views)\.toml|no_active_root|`--root' \
+  "$skill_workspace/.agents/skills/factile" "$skill_workspace/AGENTS.md" >/dev/null; then
+  echo 'generated Factile guidance contains legacy root-layout instructions' >&2
+  exit 1
+fi
 
 curator_skill_workspace="$tmpdir/curator-skill-workspace"
 mkdir -p "$curator_skill_workspace"
 (
   cd "$curator_skill_workspace"
+  "$factile_bin" init --json >/dev/null
   PATH="$tmpdir:$PATH" "$factile_bin" skill install codex --scope repo --mode curator --profile software --json >/dev/null
 )
 
@@ -84,6 +81,8 @@ mkdir -p "$descriptor_workspace"
   cd "$descriptor_workspace"
   "$factile_bin" init --here --json >/dev/null
   "$factile_bin" mount "$tmpdir/bundles/product-docs" /engineering/docs --title "Product Docs" --description "Fixture product documentation" --read-only --json >/dev/null
+  "$factile_bin" mount "$tmpdir/bundles/product-docs" /product-docs --writable --json >/dev/null
+  "$factile_bin" mount "$tmpdir/bundles/broken-docs" /broken-docs --writable --json >/dev/null
   "$factile_bin" mounts --json >/dev/null
   "$factile_bin" list /engineering --json >/dev/null
   "$factile_bin" list /engineering --brief --json >/dev/null
@@ -102,18 +101,18 @@ mkdir -p "$descriptor_workspace"
 "$factile_bin" bundle inspect "$tmpdir/bundles/product-docs" --json >/dev/null
 "$factile_bin" bundle find "$tmpdir/bundles" --json >/dev/null
 
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list / --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list / --brief --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" list /product-docs --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" stat /product-docs --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/invoice-import --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/invoice-import.md --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" search /product-docs 'invoice' --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" context /product-docs 'invoice import workflow' --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" graph /product-docs/workflows/invoice-import --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" validate /product-docs --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" list / --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" list / --brief --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" list /product-docs --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" stat /product-docs --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" read /product-docs/workflows/invoice-import --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" read /product-docs/workflows/invoice-import.md --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" search /product-docs 'invoice' --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" context /product-docs 'invoice import workflow' --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" graph /product-docs/workflows/invoice-import --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" validate /product-docs --json >/dev/null
 
-if "$factile_bin" --mount-file "$tmpdir/mount-registry.toml" validate /broken-docs --json >/dev/null; then
+if "$factile_bin" --workspace "$descriptor_workspace" validate /broken-docs --json >/dev/null; then
   echo 'expected validation failure for /broken-docs' >&2
   exit 1
 fi
@@ -124,14 +123,19 @@ cat > "$tmpdir/new-workflow.md" <<'EOF3'
 Payment imports are loaded, validated, and reconciled.
 EOF3
 
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" create /product-docs/workflows/payment-import --type Workflow --title 'Payment Import Workflow' --body "$tmpdir/new-workflow.md" --json >/dev/null
-"$factile_bin" --mount-file "$tmpdir/mount-registry.toml" read /product-docs/workflows/payment-import --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" create /product-docs/workflows/payment-import --type Workflow --title 'Payment Import Workflow' --body "$tmpdir/new-workflow.md" --json >/dev/null
+"$factile_bin" --workspace "$descriptor_workspace" read /product-docs/workflows/payment-import --json >/dev/null
 
 npm_stage="$tmpdir/npm"
 node packaging/npm/scripts/prepare-packages.mjs --build --out "$npm_stage" --version "$version" >/dev/null
-node packaging/npm/scripts/smoke-test.mjs --root "$npm_stage" >/dev/null
+node packaging/npm/scripts/smoke-test.mjs --packages-dir "$npm_stage" >/dev/null
 
+docs_workspace="$tmpdir/docs-workspace"
+mkdir -p "$docs_workspace"
+cp -R "$repo_root/docs" "$docs_workspace/docs"
+cp "$repo_root/factile.toml" "$docs_workspace/factile.toml"
+rm -f "$docs_workspace/docs/coding.mount.toml"
 (
-  cd docs
+  cd "$docs_workspace"
   "$factile_bin" validate / --json >/dev/null
 )

@@ -196,6 +196,9 @@ func stringMapSchema(description string) map[string]any {
 }
 
 func Serve(ctx context.Context, workspace factile.Workspace, stdin io.Reader, stdout io.Writer, opts Options) error {
+	if _, err := workspace.Summary(ctx); err != nil {
+		return factile.NormalizeError(err)
+	}
 	server := New(workspace, opts)
 	decoder := json.NewDecoder(stdin)
 	encoder := json.NewEncoder(stdout)
