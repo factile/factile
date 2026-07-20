@@ -23,7 +23,9 @@ modes, or when no more specific route applies.
 
 | Need | Read |
 |---|---|
+| Build, review, or update a Next.js application | `/coding/practices/web/nextjs-apps` |
 | Django CI, versioning, release, or Docker delivery | `/coding/practices/ci/django-apps` |
+| Create or update a framework application default | `/coding/governance/authoring-framework-defaults` |
 | Adopt, update, override, or remove this bundle | `/coding/governance/using-and-evolving` |
 | Scope, authorization, scope expansion, or external or destructive action | `/coding/principles/scope-and-authority` |
 | Claim grounding, epistemic status, or current versus proposed truth | `/coding/principles/evidence-before-claims` |

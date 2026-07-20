@@ -1,0 +1,4 @@
+source = "/srv/knowledge/coding/docs"
+writable = false
+title = "Shared Engineering Practice"
+description = "Reusable engineering principles, workflows, and verification."
