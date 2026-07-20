@@ -1,5 +1,12 @@
 # Documentation Log
 
+## 2026-07-20
+
+- Reconciled every public CLI, generated-guidance, and command-reference claim
+  with the implemented Root Layout v2 behavior. Removed pre-implementation
+  target warnings while retaining the explicit v1 migration table and a single
+  published-release caveat in installation guidance.
+
 ## 2026-07-19
 
 - Published the accepted Root Layout v2 target before implementation: explicit

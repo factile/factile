@@ -8,10 +8,6 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Factile CLI Architecture
 
-> **Implementation status:** the workspace/bundle flow below is the accepted
-> Root Layout v2 target under `ft-qhg`. Released v0.3.1 still uses the legacy
-> active-root resolver.
-
 Factile is one local Go engine with three local adapters: the command line, a
 stdio MCP server, and an embedded browser reader. All three operate on the same
 workspace API and address knowledge with Factile paths.

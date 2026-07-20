@@ -8,10 +8,6 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Curating Workspaces, Mounts, and Views
 
-> **Implementation status:** this guide describes the accepted Root Layout v2
-> target. Released v0.3.1 still stores root and view metadata below
-> `.factile/`.
-
 Curate only when you own the composition. Reader work normally needs no mount,
 view, or workspace-composition mutation.
 

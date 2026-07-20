@@ -8,11 +8,6 @@ timestamp: 2026-07-19T00:00:00+02:00
 
 # Workspaces, Bundles, Paths, Sources, and Views
 
-> **Implementation status:** this is the accepted Root Layout v2 target. The
-> released v0.3.1 binary still implements the legacy `.factile/config.toml`,
-> `.factile/views.toml`, `--root`, and `no_active_root` model. V2 implementation
-> is tracked by `ft-qhg` and will not silently reinterpret legacy files.
-
 Factile presents one logical tree assembled from ordinary Markdown bundles.
 Five ideas explain the model: workspace, bundle, Factile path, mounted source,
 and view.

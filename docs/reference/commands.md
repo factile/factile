@@ -8,12 +8,6 @@ timestamp: 2026-07-15T00:00:00+02:00
 
 # Root Layout v2 Command Reference
 
-> **Implementation status:** this page is the accepted Root Layout v2 target
-> under `ft-qhg`. The released v0.3.1 help still reports `--root`,
-> `.factile/config.toml`, and `no_active_root`. V2 intentionally does not alias
-> those inputs. Run the installed binary's `--help` for executable v0.3.1
-> syntax until the cutover is complete.
-
 The Root Layout v2 command shape is:
 
 ```text
