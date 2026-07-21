@@ -3,16 +3,28 @@ type: Guide
 title: Agents and Local MCP
 description: Install Factile agent guidance and use the local stdio MCP server in reader or curator mode.
 tags: [factile, agents, codex, mcp, skills]
-timestamp: 2026-07-15T00:00:00+02:00
+timestamp: 2026-07-21T00:00:00+02:00
 ---
 
 # Agents and Local MCP
 
 Factile can install repository- or user-scoped Codex guidance and expose the
-same explicit local workspace and root-bundle tree through stdio MCP. Neither surface connects to a hosted
-Factile service.
+same explicit local workspace and root-bundle tree through stdio MCP. Neither
+surface connects to a hosted Factile service.
 
-## Inspect and install guidance
+Normal repository onboarding and repeat repair use:
+
+```bash
+factile init
+```
+
+Its default `--agent auto` behavior upgrades an existing managed repo install
+or detects Codex from `.codex/`, `.agents/skills/`, or `AGENTS.md`. A repeat
+run preserves the installed reader/curator mode and optional profile. Use
+`--agent codex` to request repo guidance or `--agent none` to skip it without
+uninstalling anything. Init never modifies user-scoped guidance.
+
+## Advanced inspection and reconfiguration
 
 ```bash
 factile skill list
@@ -21,12 +33,29 @@ factile skill install codex --scope repo
 factile skill doctor codex
 ```
 
-Repository scope installs managed guidance and MCP configuration for one
-checkout. User scope installs for the current user:
+Use `skill install` when intentionally changing scope, mode, or profile rather
+than for ordinary repo repair. Repository scope manages three outputs for one
+workspace:
+
+- `.agents/skills/factile/SKILL.md`, the canonical workflow;
+- a concise Factile router inside the managed `AGENTS.md` block; and
+- the managed Factile MCP block in `.codex/config.toml`.
+
+Reinstalling also removes the retired `factile-discover.sh` helper. User scope
+installs only the generated skill for the current user:
 
 ```bash
 factile skill install codex --scope user
 ```
+
+Generated ownership is conservative. Init and install refuse to replace an
+unrecognized skill at the canonical repo path; there is no force override, and
+`--agent none` leaves that path alone. Repeated complete managed blocks are
+collapsed to one while preserving all bytes outside the owned regions. Orphan,
+reversed, nested, or incomplete markers are malformed and fail before mutation.
+Doctor checks repo state even when a user-scoped skill is installed, and uses
+the same ownership rules as install and uninstall. All managed paths reject
+symlinked ancestors instead of following them.
 
 Reader mode is the default. It emphasizes discovery and configures read-only
 MCP. Curator mode adds explicit mutation guidance and a write-capable MCP
@@ -37,11 +66,17 @@ factile skill install codex --scope repo --mode reader
 factile skill install codex --scope repo --mode curator --profile software
 ```
 
-Check generated state after changes:
+Use doctor for focused diagnostics after installation or a Factile upgrade:
 
 ```bash
 factile skill doctor codex --json
 ```
+
+Doctor checks that installed skill content matches the current generator and
+that the managed `AGENTS.md` and MCP blocks match its reader or curator mode
+and optional profile. It also exercises local list and context commands. Rerun
+`factile init` for normal repo repair, or rerun the install with explicit
+options when the installation intent itself should change.
 
 Remove only the managed install for the selected scope:
 
@@ -73,18 +108,22 @@ not be written there by wrappers.
 
 ## Agent workflow
 
-Agents should use explicit JSON commands:
+The installed skill owns the full workflow. Its default path is deliberately
+small:
 
 ```bash
+factile status --json
 factile list / --brief --json
 factile stat /architecture --json
-factile context / "task summary" --json
+factile context /architecture "task summary" --json
 factile read /architecture/overview --json
 ```
 
-Discover before assuming a path is local or mounted. A view can narrow context
-but is not access control. Existing-document edits require the revision from a
-fresh read.
+If the task already names an exact Factile path, inspect or read it directly
+after `status`. Use the full `list / --json` only when the complete tree matters,
+and run context at the narrowest sensible path. Discover before assuming a path
+is local or mounted. A view can narrow context but is not access control.
+Existing-document edits require the revision from a fresh read.
 
 The optional software profile supplies templates and recipe data to generated
 guidance; it does not create another engine or executable recipe command. See

@@ -1,9 +1,9 @@
 ---
 type: Reference
 title: Profiles and Recipes
-description: Implemented profile, template, recipe-data, and skill-install behavior in Factile v0.3.
+description: Implemented profile, template, recipe-data, and skill-install behavior in Factile v0.4.
 tags: [factile, profiles, recipes, skills, templates]
-timestamp: 2026-07-15T00:00:00+02:00
+timestamp: 2026-07-20T00:00:00+02:00
 ---
 
 # Profiles and Recipes
@@ -33,6 +33,10 @@ factile skill install codex \
   --profile software
 ```
 
+That command is the explicit reconfiguration surface. Later `factile init`
+runs preserve the installed profile and reader/curator mode while refreshing
+the generated repo integration.
+
 Reader and curator are installation postures:
 
 - reader guidance emphasizes discovery and configures read-only MCP; and
@@ -44,7 +48,7 @@ curator mode.
 
 ## Recipe boundary
 
-Recipes are guidance data. Factile v0.3 has no `factile recipe` command, recipe
+Recipes are guidance data. Factile v0.4 has no `factile recipe` command, recipe
 runner, background workflow engine, or recipe-specific workspace API. A person
 or agent may follow the ordered guidance using ordinary Factile commands.
 

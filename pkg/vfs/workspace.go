@@ -236,12 +236,15 @@ func parseManifest(raw map[string]any) (Manifest, error) {
 
 func resolveWorkspaceRoot(workspaceDir string, manifest Manifest) (WorkspaceContext, error) {
 	root := manifest.Workspace.Root
-	if !validWorkspaceRoot(root) {
+	if !ValidWorkspaceRoot(root) {
 		return WorkspaceContext{}, layoutError(
 			ErrInvalidWorkspace,
 			"Workspace root must remain inside the workspace.",
 			map[string]string{"root": root},
 		)
+	}
+	if err := validateWorkspaceRootBoundary(workspaceDir, root); err != nil {
+		return WorkspaceContext{}, err
 	}
 
 	rootBundleDir, err := canonicalDir(filepath.Join(workspaceDir, filepath.FromSlash(root)))
@@ -281,6 +284,39 @@ func resolveWorkspaceRoot(workspaceDir string, manifest Manifest) (WorkspaceCont
 		RootBundleDir: rootBundleDir,
 		StateDir:      filepath.Join(workspaceDir, StateDirname),
 	}, nil
+}
+
+func validateWorkspaceRootBoundary(workspaceDir, root string) error {
+	if root == "." {
+		return nil
+	}
+	current := workspaceDir
+	segments := strings.Split(root, "/")
+	for index, segment := range segments {
+		current = filepath.Join(current, segment)
+		if index == len(segments)-1 {
+			break
+		}
+		exists, err := regularManifestExists(current)
+		if err != nil {
+			return manifestLayoutError(ErrInvalidWorkspace, ManifestPath(current), err)
+		}
+		if !exists {
+			continue
+		}
+		manifest, err := LoadManifest(current)
+		if err != nil {
+			return manifestLayoutError(ErrInvalidWorkspace, ManifestPath(current), err)
+		}
+		if manifest.Workspace != nil {
+			return layoutError(
+				ErrInvalidWorkspace,
+				"Workspace root must not cross another Factile workspace.",
+				map[string]string{"workspace": current},
+			)
+		}
+	}
+	return nil
 }
 
 func loadWorkspaceCandidate(dir string) (Manifest, error) {
@@ -344,7 +380,9 @@ func regularManifestExists(dir string) (bool, error) {
 	return true, nil
 }
 
-func validWorkspaceRoot(root string) bool {
+// ValidWorkspaceRoot reports whether root is a normalized, workspace-relative
+// bundle directory. It does not inspect the filesystem.
+func ValidWorkspaceRoot(root string) bool {
 	if root == "." {
 		return true
 	}

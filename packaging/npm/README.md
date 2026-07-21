@@ -31,7 +31,8 @@ node packaging/npm/scripts/smoke-test.mjs --packages-dir /tmp/factile-npm
 
 The smoke installs the packed native binary into a clean npm project, confirms
 workspace-free commands fail without creating state, inspects a detached
-bundle, initializes the v2 workspace layout, and exercises contextual reads.
+bundle, checks the packaged one-command onboarding guidance, initializes the v2
+workspace layout, and exercises contextual reads.
 
 Release publishing runs from `.github/workflows/release.yml` after GoReleaser
 creates the GitHub Release archives.

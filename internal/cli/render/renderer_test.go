@@ -1,8 +1,12 @@
 package render
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/factile/factile/pkg/bootstrap"
+	"github.com/factile/factile/pkg/skill"
 )
 
 func TestResolveColor(t *testing.T) {
@@ -57,6 +61,48 @@ func TestParseColorMode(t *testing.T) {
 	}
 	if _, err := ParseColorMode("sepia"); err == nil || !strings.Contains(err.Error(), "unsupported color mode: sepia") {
 		t.Fatalf("expected unsupported color mode error, got %v", err)
+	}
+}
+
+func TestInitAgentInstallStatusDistinguishesActions(t *testing.T) {
+	tests := []struct {
+		actions []string
+		want    string
+	}{
+		{actions: []string{"created", "created"}, want: "installed"},
+		{actions: []string{"updated", "unchanged"}, want: "upgraded"},
+		{actions: []string{"removed", "unchanged"}, want: "upgraded"},
+		{actions: []string{"unchanged", "unchanged"}, want: "already installed"},
+	}
+	for _, test := range tests {
+		var files []skill.FileChange
+		for _, action := range test.actions {
+			files = append(files, skill.FileChange{Action: action})
+		}
+		if got := agentInstallStatus(bootstrap.AgentResult{Files: files}); got != test.want {
+			t.Fatalf("actions %v rendered as %q, want %q", test.actions, got, test.want)
+		}
+	}
+}
+
+func TestRenderInitQuotesWorkspaceInEveryHandoffCommand(t *testing.T) {
+	r, err := New(Options{ColorMode: ColorNever})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := r.RenderInit(&output, bootstrap.Result{
+		WorkspacePath:  "../Team's Knowledge",
+		RootBundlePath: "docs",
+		AgentSelection: bootstrap.AgentNone,
+		Bundle:         bootstrap.BundlePlan{Name: "docs", Title: "Docs", Description: "Knowledge."},
+		Health:         bootstrap.HealthResult{Status: "healthy", OK: true},
+	}, "../Team's Knowledge"); err != nil {
+		t.Fatal(err)
+	}
+	want := "factile --workspace '../Team'\"'\"'s Knowledge'"
+	if count := strings.Count(output.String(), want); count != 3 {
+		t.Fatalf("workspace selection appeared in %d handoff commands, want 3:\n%s", count, output.String())
 	}
 }
 

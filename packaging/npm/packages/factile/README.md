@@ -15,8 +15,19 @@ explicit:
 
 ```bash
 factile init
+```
+
+Normal repository onboarding and repair use one command. Init creates or
+reconciles the workspace and root-bundle manifests, starter knowledge, the
+ignore rule for local state, and detected repo-scoped agent guidance. It is safe
+to rerun after a Factile upgrade or interrupted setup. Use `skill install` only
+for advanced scope, mode, or profile reconfiguration.
+
+Inspect the resulting workspace:
+
+```bash
 factile status
-factile skill install codex --scope repo
+factile list /
 ```
 
 Initialization creates tracked workspace configuration at `factile.toml`, a

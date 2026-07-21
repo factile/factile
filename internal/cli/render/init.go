@@ -13,9 +13,11 @@ type row struct {
 	value string
 }
 
-func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
+func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result, workspace string) error {
 	title := "Factile workspace is ready"
-	if initChanged(result) {
+	if !result.Health.OK {
+		title = "Factile workspace needs attention"
+	} else if initChanged(result) {
 		title = "Initialized Factile workspace"
 	}
 	if r.colorEnabled {
@@ -35,6 +37,9 @@ func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
 	rows := []row{
 		{label: "Workspace", value: defaultText(result.WorkspacePath, ".")},
 		{label: "Root bundle", value: rootBundle},
+		{label: "Bundle name", value: result.Bundle.Name},
+		{label: "Title", value: result.Bundle.Title},
+		{label: "Description", value: result.Bundle.Description},
 		{label: "Ignore", value: annotateAction(filePath(result.Files, ".gitignore"), fileAction(result.Files, ".gitignore"))},
 		{label: "Workspace manifest", value: annotateAction(filePath(result.Files, "factile.toml"), fileAction(result.Files, "factile.toml"))},
 	}
@@ -44,13 +49,37 @@ func (r *Renderer) RenderInit(w io.Writer, result bootstrap.Result) error {
 	rows = append(rows,
 		row{label: "Index", value: annotateAction(filePath(result.Files, "index.md"), fileAction(result.Files, "index.md"))},
 		row{label: "Overview", value: annotateAction(filePath(result.Files, "overview.md"), fileAction(result.Files, "overview.md"))},
-		row{label: "Agent guidance", value: agentSummary(result.Agents)},
+		row{label: "Agent guidance", value: agentSummary(result.AgentSelection, result.Agents)},
+		row{label: "Health", value: healthSummary(result.Health)},
 	)
 	if err := r.renderRows(w, rows); err != nil {
 		return err
 	}
-	_, err := fmt.Fprint(w, "\nNext:\n  factile list /\n  factile read /overview\n  factile context / \"what should I know?\"\n")
+	if len(result.Health.Checks) > 0 {
+		if _, err := fmt.Fprintln(w, "\nHealth checks:"); err != nil {
+			return err
+		}
+		for _, check := range result.Health.Checks {
+			if _, err := fmt.Fprintf(w, "  [%s] %s: %s\n", check.Status, check.Name, check.Message); err != nil {
+				return err
+			}
+		}
+	}
+	command := "factile"
+	if workspace != "" {
+		command += " --workspace " + shellQuote(workspace)
+	}
+	_, err := fmt.Fprintf(w, "\nNext:\n  %s list /\n  %s read /overview\n  %s context / \"what should I know?\"\n", command, command, command)
 	return err
+}
+
+func shellQuote(value string) string {
+	if value != "" && strings.IndexFunc(value, func(r rune) bool {
+		return !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-", r)
+	}) == -1 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (r *Renderer) renderRows(w io.Writer, rows []row) error {
@@ -124,18 +153,26 @@ func annotateAction(value string, action string) string {
 	}
 }
 
-func agentSummary(agents []bootstrap.AgentResult) string {
+func agentSummary(selection string, agents []bootstrap.AgentResult) string {
 	if len(agents) == 0 {
+		if selection == bootstrap.AgentNone {
+			return "skipped"
+		}
 		return "none detected"
 	}
 	parts := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		name := displayAgent(agent.Agent)
+		mode := defaultText(agent.Mode, "reader")
+		name += " " + mode + " mode"
+		if agent.Profile != "" {
+			name += ", " + agent.Profile + " profile"
+		}
 		status := agentInstallStatus(agent)
 		if agent.Detected {
 			status = "detected, " + status
 		}
-		parts = append(parts, fmt.Sprintf("%s reader mode (%s)", name, status))
+		parts = append(parts, fmt.Sprintf("%s (%s)", name, status))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -145,23 +182,39 @@ func agentInstallStatus(agent bootstrap.AgentResult) string {
 		return "ready"
 	}
 	changed := false
-	updated := false
+	upgraded := false
 	for _, file := range agent.Files {
-		if file.Action == "created" {
+		switch file.Action {
+		case "created":
 			changed = true
-		}
-		if file.Action == "updated" {
+		case "updated", "removed":
 			changed = true
-			updated = true
+			upgraded = true
 		}
 	}
 	if !changed {
 		return "already installed"
 	}
-	if updated {
-		return "updated"
+	if upgraded {
+		return "upgraded"
 	}
 	return "installed"
+}
+
+func healthSummary(health bootstrap.HealthResult) string {
+	switch health.Status {
+	case "warning":
+		return "healthy with warnings"
+	case "failed":
+		return "failed"
+	case "healthy":
+		return "healthy"
+	default:
+		if health.OK {
+			return "healthy"
+		}
+		return "failed"
+	}
 }
 
 func displayAgent(agent string) string {

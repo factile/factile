@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/factile/factile/pkg/bootstrap"
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/gitsource"
 	"github.com/factile/factile/pkg/skill"
@@ -35,6 +37,7 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 		for _, expected := range []string{
 			"Start here",
 			"factile init",
+			"Set up or reconcile a Factile workspace",
 			"factile status",
 			"factile /",
 			"factile list /",
@@ -46,6 +49,8 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			"Curator commands",
 			"Bundle admin",
 			"Agents and MCP",
+			"Advanced agent guidance reconfiguration",
+			"Diagnose agent setup",
 			"Use --json for scripts and agents",
 		} {
 			if !strings.Contains(help, expected) {
@@ -996,7 +1001,7 @@ func TestCLIJSONSkillContracts(t *testing.T) {
 	}
 
 	inspect := runCLIJSON[skill.InspectResult](t, "skill", "inspect", "codex", "--json")
-	if inspect.Target != "codex" || inspect.Name != "factile" || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[workspace]") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[bundle]") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, "factile.views.toml") || strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") {
+	if inspect.Target != "codex" || inspect.Name != "factile" || len(inspect.Files) != 3 || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || hasString(inspect.Files, ".agents/skills/factile/scripts/factile-discover.sh") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[workspace]") || !strings.Contains(inspect.SkillMarkdown, "selected root bundle has `[bundle]`") || !strings.Contains(inspect.SkillMarkdown, "same manifest when the workspace root is also the") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, "factile.views.toml") || strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") {
 		t.Fatalf("unexpected skill inspect contract: %#v", inspect)
 	}
 
@@ -1479,6 +1484,13 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	if err := os.WriteFile("AGENTS.md", []byte("# Existing guidance\n\nKeep this section.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	legacyScript := filepath.Join(".agents", "skills", "factile", "scripts", "factile-discover.sh")
+	if err := os.MkdirAll(filepath.Dir(legacyScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyScript, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	code := Run(context.Background(), []string{"skill", "install", "codex", "--scope", "repo", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
@@ -1486,12 +1498,14 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	}
 	for _, filename := range []string{
 		filepath.Join(".agents", "skills", "factile", "SKILL.md"),
-		filepath.Join(".agents", "skills", "factile", "scripts", "factile-discover.sh"),
 		filepath.Join(".codex", "config.toml"),
 	} {
 		if _, err := os.Stat(filename); err != nil {
 			t.Fatalf("expected %s: %v", filename, err)
 		}
+	}
+	if _, err := os.Stat(legacyScript); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired discovery script should be removed, err=%v", err)
 	}
 	agents, err := os.ReadFile("AGENTS.md")
 	if err != nil {
@@ -1505,13 +1519,13 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(skillFile), "Reader mode is installed") ||
-		!strings.Contains(string(skillFile), "Reader commands work on paths") ||
 		!strings.Contains(string(skillFile), "factile.toml` with `[workspace]") ||
-		!strings.Contains(string(skillFile), "factile.toml` with `[bundle]") ||
+		!strings.Contains(string(skillFile), "selected root bundle has `[bundle]`") ||
+		!strings.Contains(string(skillFile), "same manifest when the workspace root is also the") ||
 		!strings.Contains(string(skillFile), "<name>.mount.toml") ||
 		!strings.Contains(string(skillFile), "factile.views.toml") ||
-		!strings.Contains(string(skillFile), "Use a narrower path or `--view <id>` when the task scope is specific.") ||
-		!strings.Contains(string(skillFile), "factile context / '<task>' --json") ||
+		!strings.Contains(string(skillFile), "do not run both full and brief root listings") ||
+		!strings.Contains(string(skillFile), "factile context <path> '<one sentence task summary>' --json") ||
 		strings.Contains(string(skillFile), "--format json") ||
 		strings.Contains(string(skillFile), "Knowledge Base") ||
 		strings.Contains(string(skillFile), ".factile/mounts.toml") ||
@@ -1522,15 +1536,8 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 		strings.Contains(string(skillFile), "`factile kb") {
 		t.Fatalf("reader mode guidance missing:\n%s", string(skillFile))
 	}
-	discoverScript, err := os.ReadFile(filepath.Join(".agents", "skills", "factile", "scripts", "factile-discover.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(discoverScript), "factile status --json") || !strings.Contains(string(discoverScript), "factile list / --json") || strings.Contains(string(discoverScript), "--format json") {
-		t.Fatalf("discover script should prefer --json:\n%s", string(discoverScript))
-	}
-	if !strings.Contains(string(agents), "factile status --json") || !strings.Contains(string(agents), "factile context / '<task summary>' --json") || !strings.Contains(string(agents), "factile.views.toml") || strings.Contains(string(agents), "--format json") || strings.Contains(string(agents), "Knowledge Base") || strings.Contains(string(agents), ".factile/mounts.toml") || strings.Contains(string(agents), ".factile/views.toml") {
-		t.Fatalf("AGENTS managed block should prefer --json:\n%s", string(agents))
+	if !strings.Contains(string(agents), "use the installed\n`factile` skill") || !strings.Contains(string(agents), "Mode: reader") || strings.Contains(string(agents), "factile context") || strings.Contains(string(agents), "Knowledge Base") || strings.Contains(string(agents), ".factile/mounts.toml") || strings.Contains(string(agents), ".factile/views.toml") {
+		t.Fatalf("AGENTS managed block should be a concise skill router:\n%s", string(agents))
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -1722,6 +1729,7 @@ func TestCLIInitCreatesDefaultKnowledgeAndDetectsCodex(t *testing.T) {
 		} `json:"files"`
 		Agents []struct {
 			Agent string `json:"agent"`
+			Mode  string `json:"mode"`
 		} `json:"agents"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
@@ -1730,8 +1738,234 @@ func TestCLIInitCreatesDefaultKnowledgeAndDetectsCodex(t *testing.T) {
 	if result.WorkspacePath != "." || result.RootBundlePath != "docs" || !hasInitFile(result.Files, "factile.toml", "created") || !hasInitFile(result.Files, filepath.Join("docs", "factile.toml"), "created") || !hasInitFile(result.Files, filepath.Join("docs", "overview.md"), "created") {
 		t.Fatalf("unexpected init JSON: %#v\n%s", result, stdout.String())
 	}
-	if len(result.Agents) != 1 || result.Agents[0].Agent != "codex" {
+	if len(result.Agents) != 1 || result.Agents[0].Agent != "codex" || result.Agents[0].Mode != "reader" {
 		t.Fatalf("expected detected codex agent in init JSON: %#v\n%s", result.Agents, stdout.String())
+	}
+}
+
+func TestCLIInitMetadataFlagsReconcileManifestAndSeedDocuments(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"init",
+		"--name", "service-handbook",
+		"--title", "Service Handbook",
+		"--description", "Operational knowledge for the service.",
+		"--json",
+	}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("metadata init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	manifest, err := vfs.LoadManifest(filepath.Join(workspace, "docs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Bundle == nil || manifest.Bundle.Name != "service-handbook" || manifest.Bundle.Title != "Service Handbook" || manifest.Bundle.Description != "Operational knowledge for the service." {
+		t.Fatalf("metadata flags were not reconciled: %#v", manifest.Bundle)
+	}
+	index, err := os.ReadFile(filepath.Join(workspace, "docs", "index.md"))
+	if err != nil || !strings.Contains(string(index), "# Service Handbook Knowledge") || !strings.Contains(string(index), "Operational knowledge for the service.") {
+		t.Fatalf("metadata did not seed index: %q, %v", index, err)
+	}
+}
+
+func TestCLIInitMissingOptionValuesFailBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name     string
+		option   string
+		textArgs []string
+		jsonArgs []string
+	}{
+		{name: "workspace", option: "--workspace", textArgs: []string{"init", "--workspace", "--yes"}, jsonArgs: []string{"init", "--workspace", "--yes", "--json"}},
+		{name: "root", option: "--root", textArgs: []string{"init", "--root", "--yes"}, jsonArgs: []string{"--json", "init", "--root", "--yes"}},
+		{name: "name", option: "--name", textArgs: []string{"init", "--name", "--yes"}, jsonArgs: []string{"--format", "json", "init", "--name", "--yes"}},
+		{name: "title", option: "--title", textArgs: []string{"init", "--title", "--yes"}, jsonArgs: []string{"init", "--title", "--format", "json", "--yes"}},
+		{name: "description", option: "--description", textArgs: []string{"init", "--description", "--yes"}, jsonArgs: []string{"init", "--description", "--json", "--yes"}},
+		{name: "agent", option: "--agent", textArgs: []string{"init", "--agent", "--yes"}, jsonArgs: []string{"init", "--agent", "--yes", "--format", "json"}},
+	}
+	for _, test := range tests {
+		for _, format := range []struct {
+			name string
+			args []string
+			json bool
+		}{
+			{name: "text", args: test.textArgs},
+			{name: "json", args: test.jsonArgs, json: true},
+		} {
+			t.Run(test.name+"/"+format.name, func(t *testing.T) {
+				workspace := t.TempDir()
+				t.Chdir(workspace)
+				var stdout, stderr bytes.Buffer
+				code := Run(context.Background(), format.args, nil, &stdout, &stderr)
+				if code != 2 || stdout.Len() != 0 {
+					t.Fatalf("missing %s value exit = %d, want 2 with empty stdout; stdout=%s stderr=%s", test.option, code, stdout.String(), stderr.String())
+				}
+				if format.json {
+					var payload struct {
+						Error struct {
+							Code    string `json:"code"`
+							Message string `json:"message"`
+						} `json:"error"`
+					}
+					if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+						t.Fatalf("missing %s value did not emit JSON: %v\n%s", test.option, err, stderr.String())
+					}
+					if payload.Error.Code != factile.ErrInvalidPath || !strings.Contains(payload.Error.Message, test.option) || !strings.Contains(payload.Error.Message, "requires") {
+						t.Fatalf("unexpected structured missing-value error: %#v", payload.Error)
+					}
+				} else if !strings.Contains(stderr.String(), test.option) || !strings.Contains(stderr.String(), "requires") || strings.HasPrefix(strings.TrimSpace(stderr.String()), "{") {
+					t.Fatalf("unexpected text missing-value error: %s", stderr.String())
+				}
+				entries, err := os.ReadDir(workspace)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("missing %s value mutated the workspace: %v", test.option, entries)
+				}
+			})
+		}
+	}
+}
+
+func TestCLIInitNonTerminalDescriptorsUseDefaults(t *testing.T) {
+	type descriptorPair struct {
+		stdin  io.Reader
+		stdout io.Writer
+		close  func()
+	}
+	tests := []struct {
+		name string
+		open func(*testing.T) descriptorPair
+	}{
+		{
+			name: "regular files",
+			open: func(t *testing.T) descriptorPair {
+				in, err := os.CreateTemp(t.TempDir(), "stdin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := os.CreateTemp(t.TempDir(), "stdout")
+				if err != nil {
+					in.Close()
+					t.Fatal(err)
+				}
+				return descriptorPair{stdin: in, stdout: out, close: func() { in.Close(); out.Close() }}
+			},
+		},
+		{
+			name: "pipes",
+			open: func(t *testing.T) descriptorPair {
+				in, inWriter, err := os.Pipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := inWriter.Close(); err != nil {
+					t.Fatal(err)
+				}
+				outReader, out, err := os.Pipe()
+				if err != nil {
+					in.Close()
+					t.Fatal(err)
+				}
+				return descriptorPair{stdin: in, stdout: out, close: func() { in.Close(); out.Close(); outReader.Close() }}
+			},
+		},
+		{
+			name: "dev null",
+			open: func(t *testing.T) descriptorPair {
+				in, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+				if err != nil {
+					in.Close()
+					t.Fatal(err)
+				}
+				return descriptorPair{stdin: in, stdout: out, close: func() { in.Close(); out.Close() }}
+			},
+		},
+		{
+			name: "mixed descriptors",
+			open: func(t *testing.T) descriptorPair {
+				in, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return descriptorPair{stdin: in, stdout: &bytes.Buffer{}, close: func() { in.Close() }}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			descriptors := test.open(t)
+			defer descriptors.close()
+			if initTerminal(descriptors.stdin, descriptors.stdout) {
+				t.Fatal("non-terminal descriptors were classified as interactive")
+			}
+			var stderr bytes.Buffer
+			code := Run(context.Background(), []string{"init", "--agent", "none", "--color", "never"}, descriptors.stdin, descriptors.stdout, &stderr)
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("non-terminal init failed: code=%d stderr=%s", code, stderr.String())
+			}
+			manifest, err := vfs.LoadManifest(workspace)
+			if err != nil || manifest.Workspace == nil || manifest.Workspace.Root != "docs" {
+				t.Fatalf("non-terminal init did not apply defaults: %#v, %v", manifest, err)
+			}
+		})
+	}
+}
+
+func TestCLIInitExternalWorkspaceHandoffIsExplicit(t *testing.T) {
+	for _, callerWorkspace := range []bool{false, true} {
+		name := "outside a workspace"
+		if callerWorkspace {
+			name = "inside a different workspace"
+		}
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			caller := filepath.Join(parent, "caller")
+			target := filepath.Join(parent, "Target Workspace")
+			for _, dir := range []string{caller, target} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Chdir(caller)
+			if callerWorkspace {
+				var fixtureOut, fixtureErr bytes.Buffer
+				if code := Run(context.Background(), []string{"init", "--agent", "none", "--yes", "--json"}, nil, &fixtureOut, &fixtureErr); code != 0 {
+					t.Fatalf("caller fixture init failed: code=%d stdout=%s stderr=%s", code, fixtureOut.String(), fixtureErr.String())
+				}
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := Run(context.Background(), []string{"--workspace", target, "init", "--title", "External Guide", "--agent", "none", "--yes", "--color", "never"}, nil, &stdout, &stderr)
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("external init failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			selection := "factile --workspace '../Target Workspace'"
+			if count := strings.Count(stdout.String(), selection); count != 3 {
+				t.Fatalf("each handoff command must select the initialized workspace; count=%d\n%s", count, stdout.String())
+			}
+
+			commands := [][]string{
+				{"--workspace", "../Target Workspace", "list", "/", "--json"},
+				{"--workspace", "../Target Workspace", "read", "/overview", "--json"},
+				{"--workspace", "../Target Workspace", "context", "/", "what should I know?", "--json"},
+			}
+			for _, args := range commands {
+				stdout.Reset()
+				stderr.Reset()
+				if code := Run(context.Background(), args, nil, &stdout, &stderr); code != 0 {
+					t.Fatalf("handoff command %v failed: code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+				}
+			}
+		})
 	}
 }
 
@@ -1752,12 +1986,18 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 		"Initialized Factile workspace",
 		"Workspace:          .",
 		"Root bundle:        docs",
+		"Bundle name:",
+		"Title:",
+		"Description:",
 		"Ignore:             .gitignore (created)",
 		"Workspace manifest: factile.toml (created)",
 		"Bundle manifest:    docs/factile.toml (created)",
 		"Index:              docs/index.md (created)",
 		"Overview:           docs/overview.md (created)",
 		"Agent guidance:     Codex reader mode (detected, installed)",
+		"Health:             healthy",
+		"[pass] workspace_layout:",
+		"[pass] local_root_validation:",
 		"Next:",
 		"factile list /",
 		"factile read /overview",
@@ -1788,6 +2028,7 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 		"Index:              docs/index.md (reused)",
 		"Overview:           docs/overview.md (reused)",
 		"Agent guidance:     Codex reader mode (detected, already installed)",
+		"Health:             healthy",
 	} {
 		if !strings.Contains(repeated, want) {
 			t.Fatalf("repeated init text missing %q:\n%s", want, repeated)
@@ -1795,14 +2036,15 @@ func TestCLIInitTextFirstRunAndRepeated(t *testing.T) {
 	}
 }
 
-func TestCLIInitUsesCurrentDirectoryAsItsExplicitTarget(t *testing.T) {
+func TestCLIInitReusesContainingWorkspace(t *testing.T) {
 	tmp := t.TempDir()
 	parent := filepath.Join(tmp, "project")
 	parentRoot := filepath.Join(parent, "docs")
 	child := filepath.Join(parent, "src", "nested")
+	authoredOverview := "---\ntype: Reference\ntitle: Parent Overview\n---\n\n# Parent\n"
 	writeCLIWorkspaceManifest(t, parent, "docs")
 	writeCLIBundleManifest(t, parentRoot, "parent", "Parent")
-	writeCLITestFile(t, filepath.Join(parentRoot, "overview.md"), "# Parent\n")
+	writeCLITestFile(t, filepath.Join(parentRoot, "overview.md"), authoredOverview)
 	if err := os.MkdirAll(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1813,23 +2055,22 @@ func TestCLIInitUsesCurrentDirectoryAsItsExplicitTarget(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("init from child exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	for _, filename := range []string{
-		filepath.Join(child, ".gitignore"),
-		filepath.Join(child, "factile.toml"),
-		filepath.Join(child, "docs", "factile.toml"),
-		filepath.Join(child, "docs", "index.md"),
-		filepath.Join(child, "docs", "overview.md"),
-	} {
-		if _, err := os.Stat(filename); err != nil {
-			t.Fatalf("expected explicit child workspace file %s: %v", filename, err)
+	for _, filename := range []string{filepath.Join(child, ".gitignore"), filepath.Join(child, "factile.toml"), filepath.Join(child, "docs")} {
+		if _, err := os.Stat(filename); !os.IsNotExist(err) {
+			t.Fatalf("nested init created a competing child workspace path %s: %v", filename, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(child, ".factile")); !os.IsNotExist(err) {
-		t.Fatalf("child init created local state: %v", err)
+	for _, filename := range []string{filepath.Join(parent, ".gitignore"), filepath.Join(parentRoot, "index.md")} {
+		if _, err := os.Stat(filename); err != nil {
+			t.Fatalf("containing workspace was not reconciled at %s: %v", filename, err)
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(parentRoot, "overview.md"))
-	if err != nil || string(data) != "# Parent\n" {
-		t.Fatalf("parent workspace was changed: %q, %v", data, err)
+	if err != nil || string(data) != authoredOverview {
+		t.Fatalf("authored parent overview was changed: %q, %v", data, err)
+	}
+	if !strings.Contains(stdout.String(), "Workspace:          ../..") || !strings.Contains(stdout.String(), "Root bundle:        docs") {
+		t.Fatalf("nested init did not report the containing workspace:\n%s", stdout.String())
 	}
 }
 
@@ -1837,7 +2078,7 @@ func TestCLIInitCanTargetAnExplicitWorkspaceDirectory(t *testing.T) {
 	target := t.TempDir()
 	t.Chdir(t.TempDir())
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"--workspace", target, "init", "--here", "--json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"--workspace", target, "init", "--root", ".", "--json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("explicit init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1850,16 +2091,16 @@ func TestCLIInitCanTargetAnExplicitWorkspaceDirectory(t *testing.T) {
 	}
 }
 
-func TestCLIInitHereAndExplicitAgent(t *testing.T) {
+func TestCLIInitRootDotAndExplicitAgent(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"init", "--here", "--color", "never"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"init", "--root", ".", "--color", "never"}, nil, &stdout, &stderr)
 	if code != 0 {
-		t.Fatalf("init --here text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		t.Fatalf("init --root . text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	here := stdout.String()
+	combined := stdout.String()
 	for _, want := range []string{
 		"Initialized Factile workspace",
 		"Workspace:          .",
@@ -1869,9 +2110,11 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 		"Index:              index.md (created)",
 		"Overview:           overview.md (created)",
 		"Agent guidance:     none detected",
+		"Health:             healthy with warnings",
+		"[warning] agent_integration:",
 	} {
-		if !strings.Contains(here, want) {
-			t.Fatalf("init --here text missing %q:\n%s", want, here)
+		if !strings.Contains(combined, want) {
+			t.Fatalf("init --root . text missing %q:\n%s", want, combined)
 		}
 	}
 	for _, filename := range []string{
@@ -1881,14 +2124,14 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 		"overview.md",
 	} {
 		if _, err := os.Stat(filename); err != nil {
-			t.Fatalf("expected --here file %s: %v", filename, err)
+			t.Fatalf("expected --root . file %s: %v", filename, err)
 		}
 	}
 	if _, err := os.Stat("docs"); !os.IsNotExist(err) {
-		t.Fatalf("init --here should not create docs directory, err=%v", err)
+		t.Fatalf("init --root . should not create docs directory, err=%v", err)
 	}
 	if _, err := os.Stat(".factile"); !os.IsNotExist(err) {
-		t.Fatalf("fresh v2 init --here created local state: %v", err)
+		t.Fatalf("fresh v2 init --root . created local state: %v", err)
 	}
 
 	agentDir := t.TempDir()
@@ -1905,11 +2148,11 @@ func TestCLIInitHereAndExplicitAgent(t *testing.T) {
 	}
 }
 
-func TestCLIInitHereJSONWithoutDetectedAgent(t *testing.T) {
+func TestCLIInitRootDotJSONWithoutDetectedAgent(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{"init", "--here", "--format", "json"}, nil, &stdout, &stderr)
+	code := Run(context.Background(), []string{"init", "--root", ".", "--format", "json"}, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -1931,11 +2174,429 @@ func TestCLIInitHereJSONWithoutDetectedAgent(t *testing.T) {
 		t.Fatalf("init JSON did not parse: %v\n%s", err, stdout.String())
 	}
 	if result.WorkspacePath != "." || result.RootBundlePath != "." || !hasInitFile(result.Files, "factile.toml", "created") || !hasInitFile(result.Files, ".gitignore", "created") || !hasInitFile(result.Files, "overview.md", "created") || len(result.Agents) != 0 {
-		t.Fatalf("unexpected init --here JSON: %#v\n%s", result, stdout.String())
+		t.Fatalf("unexpected init --root . JSON: %#v\n%s", result, stdout.String())
 	}
 }
 
-func TestCLIInitRefusesLegacyAndPartialLayoutsWithoutMutation(t *testing.T) {
+func TestCLIInitAgentNoneSuppressesDetectionAndUnknownAgentIsPreflighted(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	if err := os.MkdirAll(".codex", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("agent none init exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(".agents", "skills", "factile", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("agent none installed repo guidance: %v", err)
+	}
+
+	before, err := os.ReadFile(filepath.Join(workspace, "docs", "factile.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"init", "--agent", "unsupported", "--title", "Must Not Apply", "--json"}, nil, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), `"code":"invalid_path"`) {
+		t.Fatalf("unknown agent was not rejected as usage: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	after, err := os.ReadFile(filepath.Join(workspace, "docs", "factile.toml"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("unknown agent changed bundle metadata: before=%q after=%q err=%v", before, after, err)
+	}
+}
+
+func TestCLIInitJSONHealthAndFailureExit(t *testing.T) {
+	t.Run("healthy stable result", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr)
+		if code != 0 || stderr.Len() != 0 {
+			t.Fatalf("healthy init failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+		var result bootstrap.Result
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("init JSON did not round-trip: %v\n%s", err, stdout.String())
+		}
+		if !result.Health.OK || result.Health.Status != "healthy" || result.AgentSelection != "none" || result.Bundle.Name == "" || result.Bundle.Title == "" || result.Bundle.Description == "" {
+			t.Fatalf("incomplete healthy init contract: %#v", result)
+		}
+		wantChecks := []string{"workspace_layout", "bundle_metadata", "required_documents", "local_root_validation", "agent_integration"}
+		if len(result.Health.Checks) != len(wantChecks) {
+			t.Fatalf("unexpected health checks: %#v", result.Health.Checks)
+		}
+		for i, name := range wantChecks {
+			if result.Health.Checks[i].Name != name || result.Health.Checks[i].Status != bootstrap.CheckPass {
+				t.Fatalf("health check %d is unstable: %#v", i, result.Health.Checks[i])
+			}
+		}
+	})
+
+	t.Run("invalid knowledge returns partial result", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr); code != 0 {
+			t.Fatalf("fixture init failed: code=%d stderr=%s", code, stderr.String())
+		}
+		invalid := "# Invalid authored overview\n"
+		writeCLITestFile(t, filepath.Join(workspace, "docs", "overview.md"), invalid)
+		stdout.Reset()
+		stderr.Reset()
+		code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr)
+		if code != 3 || stderr.Len() != 0 {
+			t.Fatalf("invalid knowledge exit = %d, want 3; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+		var result bootstrap.Result
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("partial result was not JSON: %v\n%s", err, stdout.String())
+		}
+		if result.Health.OK || result.Health.Status != "failed" || cliInitHealthCheck(result.Health.Checks, "local_root_validation") == nil {
+			t.Fatalf("invalid knowledge failure is not actionable: %#v", result.Health)
+		}
+		data, err := os.ReadFile(filepath.Join(workspace, "docs", "overview.md"))
+		if err != nil || string(data) != invalid {
+			t.Fatalf("failed verification changed authored knowledge: %q, %v", data, err)
+		}
+		stdout.Reset()
+		stderr.Reset()
+		code = Run(context.Background(), []string{"init", "--agent", "none", "--color", "never"}, nil, &stdout, &stderr)
+		if code != 3 || !strings.Contains(stdout.String(), "Factile workspace needs attention") || !strings.Contains(stdout.String(), "Health:             failed") || !strings.Contains(stdout.String(), "[fail] local_root_validation:") {
+			t.Fatalf("text failure was not explicit: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("skipped managed drift returns partial result", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"init", "--agent", "codex", "--json"}, nil, &stdout, &stderr); code != 0 {
+			t.Fatalf("fixture agent init failed: code=%d stderr=%s", code, stderr.String())
+		}
+		drifted := "drifted guidance\n"
+		writeCLITestFile(t, filepath.Join(workspace, "AGENTS.md"), drifted)
+		stdout.Reset()
+		stderr.Reset()
+		code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr)
+		if code != 3 || stderr.Len() != 0 {
+			t.Fatalf("managed drift exit = %d, want 3; stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+		}
+		var result bootstrap.Result
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		check := cliInitHealthCheck(result.Health.Checks, "agent_integration")
+		if check == nil || check.Status != bootstrap.CheckFail || !strings.Contains(check.Message, "drifted") {
+			t.Fatalf("managed drift failure is not actionable: %#v", result.Health)
+		}
+		if data, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md")); err != nil || string(data) != drifted {
+			t.Fatalf("--agent none changed drifted guidance: %q, %v", data, err)
+		}
+	})
+}
+
+func TestCLIInitTextReportsAgentUpgrade(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"init", "--agent", "codex", "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("fixture init failed: code=%d stderr=%s", code, stderr.String())
+	}
+	skillPath := filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")
+	skillData, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCLITestFile(t, skillPath, strings.Replace(string(skillData), "# Factile local knowledge workflow", "# Stale Factile workflow", 1))
+	stdout.Reset()
+	stderr.Reset()
+	code := Run(context.Background(), []string{"init", "--color", "never"}, nil, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("agent upgrade failed: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Agent guidance:     Codex reader mode (detected, upgraded)") || !strings.Contains(stdout.String(), "Health:             healthy") {
+		t.Fatalf("agent upgrade action was not distinguished:\n%s", stdout.String())
+	}
+}
+
+func TestCLIInitInteractiveNewWorkspace(t *testing.T) {
+	t.Run("defaults and detected agent", func(t *testing.T) {
+		workspace := filepath.Join(t.TempDir(), "Human Project")
+		if err := os.MkdirAll(filepath.Join(workspace, ".codex"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(workspace)
+		var stdout bytes.Buffer
+		code, err := runInitWithIO(context.Background(), []string{"init"}, globals{Format: formatText}, initCommandIO{
+			stdin:       strings.NewReader("\n\n\n\n"),
+			stdout:      &stdout,
+			interactive: true,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("interactive init failed: code=%d err=%v\n%s", code, err, stdout.String())
+		}
+		for _, want := range []string{
+			"Configure Factile workspace",
+			"Root bundle directory [docs]:",
+			"Bundle title [Human Project]:",
+			"Description [Documentation and knowledge for Human Project.]:",
+			"Agent guidance: Codex reader mode (detected)",
+			"Initialize this workspace? [Y/n]",
+			"Initialized Factile workspace",
+		} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Fatalf("interactive output missing %q:\n%s", want, stdout.String())
+			}
+		}
+		manifest, err := vfs.LoadManifest(filepath.Join(workspace, "docs"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manifest.Bundle == nil || manifest.Bundle.Name != "human-project" || manifest.Bundle.Title != "Human Project" || manifest.Bundle.Description != "Documentation and knowledge for Human Project." {
+			t.Fatalf("defaults were not applied: %#v", manifest.Bundle)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")); err != nil {
+			t.Fatalf("detected agent was not installed: %v", err)
+		}
+	})
+
+	t.Run("edited answers and no detected agent", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout bytes.Buffer
+		code, err := runInitWithIO(context.Background(), []string{"init"}, globals{Format: formatText}, initCommandIO{
+			stdin:       strings.NewReader("knowledge\nTeam Guide\nShared project truth.\nyes\n"),
+			stdout:      &stdout,
+			interactive: true,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("interactive edited init failed: code=%d err=%v\n%s", code, err, stdout.String())
+		}
+		manifest, err := vfs.LoadManifest(filepath.Join(workspace, "knowledge"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manifest.Bundle == nil || manifest.Bundle.Title != "Team Guide" || manifest.Bundle.Description != "Shared project truth." {
+			t.Fatalf("edited answers were not applied: %#v", manifest.Bundle)
+		}
+		if !strings.Contains(stdout.String(), "Agent guidance: none detected") {
+			t.Fatalf("absent agent behavior was not shown:\n%s", stdout.String())
+		}
+	})
+}
+
+func TestCLIInitInteractiveCancellationLeavesNoPartialWorkspace(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "decline", input: "\n\n\nno\n"},
+		{name: "EOF at first question", input: ""},
+		{name: "EOF at confirmation", input: "\n\n\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			var stdout bytes.Buffer
+			code, err := runInitWithIO(context.Background(), []string{"init"}, globals{Format: formatText}, initCommandIO{
+				stdin:       strings.NewReader(test.input),
+				stdout:      &stdout,
+				interactive: true,
+			})
+			if err != nil || code != 0 {
+				t.Fatalf("cancelled init was not clean: code=%d err=%v\n%s", code, err, stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "Initialization cancelled; no changes made.") {
+				t.Fatalf("cancellation was not reported:\n%s", stdout.String())
+			}
+			for _, filename := range []string{".gitignore", "factile.toml", "docs", ".agents", ".codex"} {
+				if _, err := os.Stat(filepath.Join(workspace, filename)); !os.IsNotExist(err) {
+					t.Fatalf("cancelled init created %s: %v", filename, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCLIInitInteractiveRetriesInvalidAnswers(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	var stdout bytes.Buffer
+	code, err := runInitWithIO(context.Background(), []string{"init"}, globals{Format: formatText}, initCommandIO{
+		stdin:       strings.NewReader("../outside\ndocs\nProject Guide\nUseful project knowledge.\nmaybe\ny\n"),
+		stdout:      &stdout,
+		interactive: true,
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("retrying init failed: code=%d err=%v\n%s", code, err, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Invalid value: Root bundle must be . or a normalized relative directory inside the workspace.") || !strings.Contains(stdout.String(), "Please answer yes or no.") {
+		t.Fatalf("invalid answers were not retried clearly:\n%s", stdout.String())
+	}
+	manifest, err := vfs.LoadManifest(workspace)
+	if err != nil || manifest.Workspace == nil || manifest.Workspace.Root != "docs" {
+		t.Fatalf("retry did not apply the valid root: %#v, %v", manifest, err)
+	}
+}
+
+func TestCLIInitInteractiveExistingWorkspaceAndRootChange(t *testing.T) {
+	t.Run("ordinary reconcile asks no questions", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr); code != 0 {
+			t.Fatalf("fixture init failed: code=%d stderr=%s", code, stderr.String())
+		}
+		if err := os.Remove(filepath.Join(workspace, "docs", "index.md")); err != nil {
+			t.Fatal(err)
+		}
+		stdout.Reset()
+		code, err := runInitWithIO(context.Background(), []string{"init"}, globals{Format: formatText}, initCommandIO{
+			stdin:       unexpectedInitReader{},
+			stdout:      &stdout,
+			interactive: true,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("existing reconcile prompted or failed: code=%d err=%v\n%s", code, err, stdout.String())
+		}
+		if strings.Contains(stdout.String(), "Configure Factile workspace") || strings.Contains(stdout.String(), "Initialize this workspace?") {
+			t.Fatalf("existing reconcile replayed setup questions:\n%s", stdout.String())
+		}
+		if _, err := os.Stat(filepath.Join(workspace, "docs", "index.md")); err != nil {
+			t.Fatalf("existing workspace was not repaired: %v", err)
+		}
+	})
+
+	t.Run("root change defaults to decline and can be confirmed", func(t *testing.T) {
+		workspace := t.TempDir()
+		t.Chdir(workspace)
+		var stdout, stderr bytes.Buffer
+		if code := Run(context.Background(), []string{"init", "--agent", "none", "--json"}, nil, &stdout, &stderr); code != 0 {
+			t.Fatalf("fixture init failed: code=%d stderr=%s", code, stderr.String())
+		}
+		stdout.Reset()
+		code, err := runInitWithIO(context.Background(), []string{"init", "--root", "knowledge"}, globals{Format: formatText}, initCommandIO{
+			stdin:       strings.NewReader("\n"),
+			stdout:      &stdout,
+			interactive: true,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("declined root change failed: code=%d err=%v\n%s", code, err, stdout.String())
+		}
+		manifest, err := vfs.LoadManifest(workspace)
+		if err != nil || manifest.Workspace == nil || manifest.Workspace.Root != "docs" {
+			t.Fatalf("declined root change changed selector: %#v, %v", manifest, err)
+		}
+		if _, err := os.Stat(filepath.Join(workspace, "knowledge")); !os.IsNotExist(err) {
+			t.Fatalf("declined root change created target: %v", err)
+		}
+		for _, want := range []string{"Root change:    docs -> knowledge", "Change the workspace root bundle? [y/N]", "Initialization cancelled; no changes made."} {
+			if !strings.Contains(stdout.String(), want) {
+				t.Fatalf("declined root change output missing %q:\n%s", want, stdout.String())
+			}
+		}
+
+		stdout.Reset()
+		code, err = runInitWithIO(context.Background(), []string{"init", "--root", "knowledge"}, globals{Format: formatText}, initCommandIO{
+			stdin:       strings.NewReader("yes\n"),
+			stdout:      &stdout,
+			interactive: true,
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("confirmed root change failed: code=%d err=%v\n%s", code, err, stdout.String())
+		}
+		manifest, err = vfs.LoadManifest(workspace)
+		if err != nil || manifest.Workspace == nil || manifest.Workspace.Root != "knowledge" {
+			t.Fatalf("confirmed root change did not update selector: %#v, %v", manifest, err)
+		}
+		for _, filename := range []string{filepath.Join(workspace, "docs", "factile.toml"), filepath.Join(workspace, "knowledge", "factile.toml")} {
+			if _, err := os.Stat(filename); err != nil {
+				t.Fatalf("root change did not preserve old and create new roots at %s: %v", filename, err)
+			}
+		}
+	})
+}
+
+func TestCLIInitNonInteractiveModesNeverReadPrompts(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		global      globals
+		interactive bool
+		wantJSON    bool
+		wantAgent   bool
+		wantSkipped bool
+	}{
+		{name: "yes", args: []string{"init", "--yes", "--agent", "none"}, global: globals{Format: formatText}, interactive: true, wantSkipped: true},
+		{name: "JSON", args: []string{"init"}, global: globals{Format: formatJSON}, interactive: true, wantJSON: true},
+		{name: "non-terminal", args: []string{"init"}, global: globals{Format: formatText}},
+		{
+			name:   "complete explicit",
+			args:   []string{"init", "--root", "docs", "--name", "project-guide", "--title", "Project Guide", "--description", "Project knowledge.", "--agent", "codex"},
+			global: globals{Format: formatText}, interactive: true, wantAgent: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			var stdout bytes.Buffer
+			code, err := runInitWithIO(context.Background(), test.args, test.global, initCommandIO{
+				stdin:       unexpectedInitReader{},
+				stdout:      &stdout,
+				interactive: test.interactive,
+			})
+			if err != nil || code != 0 {
+				t.Fatalf("non-interactive init failed: code=%d err=%v\n%s", code, err, stdout.String())
+			}
+			if strings.Contains(stdout.String(), "Configure Factile workspace") || strings.Contains(stdout.String(), "Initialize this workspace?") {
+				t.Fatalf("non-interactive mode emitted prompts:\n%s", stdout.String())
+			}
+			if test.wantJSON {
+				var result bootstrap.Result
+				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+					t.Fatalf("JSON mode emitted prose: %v\n%s", err, stdout.String())
+				}
+			}
+			if test.wantAgent {
+				if _, err := os.Stat(filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")); err != nil {
+					t.Fatalf("complete explicit agent invocation did not install guidance: %v", err)
+				}
+			}
+			if test.wantSkipped && !strings.Contains(stdout.String(), "Agent guidance:     skipped") {
+				t.Fatalf("explicit agent suppression was not reported:\n%s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestCLIInitHelpUsesRootAndRejectsHere(t *testing.T) {
+	retiredOption := "--" + "here"
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"init", "--help"}, nil, &stdout, &stderr)
+	for _, option := range []string{"--root <directory>", "--name <name>", "--title <title>", "--description <text>", "--agent auto|codex|none", "--yes"} {
+		if !strings.Contains(stdout.String(), option) {
+			t.Fatalf("init help is missing %s: code=%d stdout=%s stderr=%s", option, code, stdout.String(), stderr.String())
+		}
+	}
+	if code != 0 || strings.Contains(stdout.String(), retiredOption) {
+		t.Fatalf("init help is not aligned: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"init", retiredOption, "--json"}, nil, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "unknown option: "+retiredOption) {
+		t.Fatalf("retired init option was accepted: code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestCLIInitRefusesLegacyAndMalformedLayoutsWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name  string
 		path  string
@@ -1949,10 +2610,10 @@ func TestCLIInitRefusesLegacyAndPartialLayoutsWithoutMutation(t *testing.T) {
 			},
 		},
 		{
-			name: "partial",
+			name: "malformed",
 			path: "factile.toml",
 			setup: func(t *testing.T, workspace string) {
-				writeCLIWorkspaceManifest(t, workspace, "docs")
+				writeCLITestFile(t, filepath.Join(workspace, "factile.toml"), "not toml = [\n")
 			},
 		},
 	}
@@ -2847,6 +3508,21 @@ func hasInitFile(files []struct {
 		}
 	}
 	return false
+}
+
+func cliInitHealthCheck(checks []bootstrap.HealthCheck, name string) *bootstrap.HealthCheck {
+	for _, check := range checks {
+		if check.Name == name {
+			return &check
+		}
+	}
+	return nil
+}
+
+type unexpectedInitReader struct{}
+
+func (unexpectedInitReader) Read([]byte) (int, error) {
+	return 0, errors.New("unexpected init prompt read")
 }
 
 func hasFileChange(changes []skill.FileChange, path string) bool {

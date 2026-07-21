@@ -1,7 +1,35 @@
 # Documentation Log
 
+## 2026-07-21
+
+- Reopened the `factile init` delivery epic after adversarial review exposed
+  gaps in workspace-boundary enforcement, plan freshness, generated-state
+  ownership, managed-block structure, atomic publication, option parsing,
+  terminal detection, and external-workspace handoff.
+- Kept the accepted human-first contract intact, marked the affected hardening
+  guarantees as pending, and recorded their exact failure and recovery
+  semantics before implementation resumes.
+- Completed and adversarially verified the boundary, plan-freshness,
+  generated-ownership, marker-structure, per-file publication, option-parsing,
+  terminal-detection, and external-handoff hardening; removed the temporary
+  pending labels from the implemented contract.
+- Aligned CLI help, the generated Factile skill, npm package onboarding, and
+  public guides with one repeatable `factile init` workflow and advanced-only
+  `skill install` reconfiguration.
+- Corrected the release note: v0.4.0 already includes Root Layout v2, but
+  predates the newer human-first init reconciler.
+
 ## 2026-07-20
 
+- Implemented the human-first `factile init` reconciliation contract, including
+  workspace and root resolution, interactive and non-interactive defaults,
+  repeat repair, safe metadata updates, preserved authored knowledge and agent
+  intent, and bounded in-process health checks.
+- Simplified installed Codex guidance to one canonical skill plus a concise
+  `AGENTS.md` router, retired the redundant discovery helper, and made discovery
+  prefer one brief or exact path before narrowly scoped context.
+- Made `skill doctor` verify generated skill content and reader/curator
+  agreement across the skill, managed agent guidance, and MCP configuration.
 - Reconciled every public CLI, generated-guidance, and command-reference claim
   with the implemented Root Layout v2 behavior. Removed pre-implementation
   target warnings while retaining the explicit v1 migration table and a single

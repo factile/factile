@@ -3,7 +3,7 @@ type: Domain Concept
 title: Workspaces, Bundles, Paths, Sources, and Views
 description: Accepted Root Layout v2 model for locating and composing local Factile knowledge.
 tags: [factile, workspaces, bundles, paths, mounts, sources, views]
-timestamp: 2026-07-19T00:00:00+02:00
+timestamp: 2026-07-21T00:00:00+02:00
 ---
 
 # Workspaces, Bundles, Paths, Sources, and Views
@@ -26,9 +26,11 @@ root = "docs"
 
 Implicit discovery walks upward to the nearest such file, including across Git
 boundaries. An explicit `--workspace <directory>` selects exactly that
-directory. Factile does not search nearby `docs/` directories, infer a Git
-root, or promote a bundle when no workspace exists. Missing context returns
-`no_active_workspace`.
+directory. `factile init` may establish a workspace in that existing directory;
+every other workspace-aware command requires `[workspace]` there. Discovery
+does not search nearby `docs/` directories, infer a Git root, or promote a
+bundle when no workspace exists. Missing context returns
+`no_active_workspace`; init is the explicit onboarding and repair command.
 
 One workspace selects one root bundle and therefore one logical `/`. This is
 stable from the workspace root, the root bundle, a mounted bundle, or an

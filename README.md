@@ -17,8 +17,9 @@ contract; CLI text and command ergonomics may still evolve before v1.0.
 
 Root Layout v2 is the current contract in this checkout. Legacy layouts receive
 an explicit migration diagnostic; Factile does not silently reinterpret them.
-Published v0.4.0 artifacts predate this cutover, so build the current source to
-use the v2 behavior documented here until a newer release is available.
+The tagged v0.4.0 release already includes Root Layout v2, but predates the
+human-first repeatable init reconciler documented here. Build the current source
+to use that newer init behavior until a later release is available.
 
 Factile reads one workspace's root bundle and explicitly mounted bundles, and
 can materialize read-only Git repositories into a generated per-workspace
@@ -136,18 +137,62 @@ docs/
   overview.md
 ```
 
+In an interactive terminal, the first run asks for the root directory, bundle
+title, and description, with metadata defaults derived from the repository
+directory. It shows the complete plan before writing. For automation, pass the
+desired values and use `--yes` or `--json`:
+
+```bash
+factile init --workspace . \
+  --root docs \
+  --name project-docs \
+  --title "Project Docs" \
+  --description "Documentation and knowledge for this project." \
+  --agent none \
+  --yes --json
+```
+
 The nearest ancestor `factile.toml` containing `[workspace]` is the workspace
 boundary. Its selected root bundle supplies the logical `/`; the workspace
 directory itself is not automatically knowledge. Discovery crosses Git
-boundaries and never falls back to a nearby `docs/` directory or bundle. Use
-`factile init --here` for a standalone manifest containing both `[workspace]`
-with `root = "."` and `[bundle]`.
+boundaries and never falls back to a nearby `docs/` directory or bundle. Bare
+`init` reconciles that nearest workspace even when run from a secondary bundle.
+Outside a workspace it establishes one in the current directory. An existing
+bundle there becomes the root directly; an ordinary directory gets `docs/` by
+default. To deliberately start a new boundary inside an existing workspace,
+select the current directory exactly:
 
-Use `--workspace <directory>` only when explicit selection is needed. The
-directory itself must contain `[workspace]`; the option does not search from
-that location. Contextual commands outside a workspace return
-`no_active_workspace`. Only `bundle find` and `bundle inspect`, when given
-physical directories with valid bundle manifests, remain workspace-free.
+```bash
+factile init --workspace .
+```
+
+Add `--root .` when the workspace directory itself should be the root bundle
+and one `factile.toml` should contain both `[workspace]` and `[bundle]`.
+
+For `init`, `--workspace <directory>` selects an exact existing directory and
+establishes the workspace boundary there if needed. For other commands the
+selected directory must already contain `[workspace]`; the option never
+searches upward from that location.
+Contextual commands outside a workspace return `no_active_workspace`. Only
+`bundle find` and `bundle inspect`, when given physical directories with valid
+bundle manifests, remain workspace-free.
+
+Running `factile init` again is the normal repair and upgrade path. It restores
+missing starter files, reconciles supported manifest fields, and refreshes a
+detected repo-scoped agent integration. It never overwrites existing Markdown,
+changes an installed reader/curator mode or profile, refreshes remote sources,
+or touches user-scoped configuration. The result reports file actions and five
+local health checks; warnings exit successfully, while failed health returns
+exit code `3` with the complete text or JSON result.
+
+Before writing, init validates the workspace and root layout, output types, and
+generated ownership. It refuses an unrecognized canonical skill or malformed
+managed markers; there is no force override. Each file is published atomically,
+but init is not a transaction across files. If unexpected I/O stops a run,
+rerun the same command to converge without overwriting authored Markdown.
+When an explicitly selected workspace would not be found from the caller's
+directory, the reported next commands include a shell-safe `--workspace`
+selection.
 
 Bare `factile` prints a concise workspace summary: `workspace_dir`,
 `root_bundle_dir`, `state_dir`, visible paths, shallow health, and useful next
@@ -155,12 +200,17 @@ commands. Use `factile --help` for the
 full command reference or `factile status --json` for the stable structured
 summary.
 
-Use an explicit agent install when needed:
+`--agent auto` is the default: it upgrades a managed repo install or detects
+Codex from `.codex/`, `.agents/skills/`, or `AGENTS.md`. Use an explicit choice
+when detection is not desired:
 
 ```bash
 factile init --agent codex
-factile skill install codex --scope repo
+factile init --agent none
 ```
+
+Use `factile skill install` for advanced scope, mode, or profile
+reconfiguration, and `factile skill doctor` for focused diagnostics.
 
 ## Paths
 
@@ -341,9 +391,10 @@ factile rename /runbooks/example /runbooks/new-example --rev <rev>
 factile delete /runbooks/new-example --rev <rev>
 ```
 
-## Agent Guidance
+## Advanced Agent Guidance
 
-Install local Codex discovery guidance into a repository:
+Explicitly reconfigure local Codex discovery guidance when the normal init
+defaults are not the desired installation intent:
 
 ```bash
 factile skill install codex --scope repo
@@ -351,9 +402,11 @@ factile skill install codex --scope repo --mode curator --profile software
 factile skill doctor codex --json
 ```
 
-Repo-scope install creates local agent guidance and MCP configuration in that
-workspace. Reader mode is the default and configures MCP with `--read-only`.
-Curator mode installs write guidance and a write-capable MCP command.
+Repo scope installs one generated skill, a concise managed `AGENTS.md` router,
+and local MCP configuration in that workspace. Reader mode is the default and
+configures MCP with `--read-only`; curator mode installs write guidance and a
+write-capable MCP command. Doctor rejects generated-content drift and any
+reader/curator mismatch between the skill, `AGENTS.md`, and MCP configuration.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in

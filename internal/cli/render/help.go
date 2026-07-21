@@ -22,7 +22,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		return err
 	}
 	if err := r.renderHelpSection(w, "Start here", []helpItem{
-		{command: "factile init", description: "Create or reuse a workspace and root bundle"},
+		{command: "factile init", description: "Set up or reconcile a Factile workspace"},
 		{command: "factile", description: "Show this workspace summary"},
 		{command: "factile status", description: "Show this workspace summary"},
 		{command: "factile /", description: "Browse or read from a path"},
@@ -91,8 +91,8 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "bundle inspect <directory>", description: "Inspect one physical bundle"},
 		}},
 		{title: "Agents and MCP", items: []helpItem{
-			{command: "skill install codex --scope repo|user", description: "Install agent guidance"},
-			{command: "skill doctor codex", description: "Check agent setup"},
+			{command: "skill install codex --scope repo|user", description: "Advanced agent guidance reconfiguration"},
+			{command: "skill doctor codex", description: "Diagnose agent setup"},
 			{command: "mcp serve --stdio [--read-only]", description: "Run the local MCP server"},
 		}},
 	} {

@@ -118,12 +118,12 @@ func TestLoadManifestRejectsInvalidSchema(t *testing.T) {
 
 func TestWorkspaceRootPathGrammar(t *testing.T) {
 	for _, root := range []string{".", "docs", "knowledge/reference", "docs with spaces"} {
-		if !validWorkspaceRoot(root) {
+		if !ValidWorkspaceRoot(root) {
 			t.Errorf("valid root %q rejected", root)
 		}
 	}
 	for _, root := range []string{"", "..", "../outside", "./docs", "docs/.", "docs/../outside", "docs//reference", "/docs", `docs\reference`, "C:/docs", ".factile", ".FACTILE/cache", ".git/docs"} {
-		if validWorkspaceRoot(root) {
+		if ValidWorkspaceRoot(root) {
 			t.Errorf("invalid root %q accepted", root)
 		}
 	}
@@ -340,6 +340,15 @@ func TestResolveWorkspaceValidatesRootBundleAndContainment(t *testing.T) {
 				writeWorkspaceManifest(t, filepath.Join(workspace, "docs"), "knowledge")
 			},
 			code: ErrInvalidBundle, message: "Workspace root bundle has no valid factile.toml.",
+		},
+		{
+			name: "root crosses nested workspace",
+			root: "nested/docs",
+			setup: func(t *testing.T, workspace string) {
+				writeWorkspaceManifest(t, filepath.Join(workspace, "nested"), "docs")
+				writeBundleManifest(t, filepath.Join(workspace, "nested", "docs"), "nested-docs")
+			},
+			code: ErrInvalidWorkspace, message: "Workspace root must not cross another Factile workspace.",
 		},
 	}
 

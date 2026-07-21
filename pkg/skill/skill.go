@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/factile/factile/internal/atomicfile"
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/vfs"
 )
@@ -30,11 +31,10 @@ const Summary = "Use local Factile OKF knowledge when a task depends on reposito
 
 const Description = "Use local Factile OKF knowledge for architecture, design, documentation, review, runbook, standards, policy, legal, compliance, domain, or implementation-choice tasks that need repository knowledge. Discover local knowledge paths, retrieve focused context, and cite relevant concepts. Do not use for mechanical renames, formatting, syntax fixes, or obvious local edits."
 
+const legacyV040SkillSignature = "Factile exposes one workspace's OKF knowledge as a virtual filesystem."
+
 //go:embed assets/codex/SKILL.md
 var BaseSkillMarkdown string
-
-//go:embed assets/codex/scripts/factile-discover.sh
-var DiscoverScript string
 
 //go:embed assets/codex/AGENTS.md.tmpl
 var agentsManagedBlockTemplate string
@@ -45,6 +45,9 @@ var mcpConfigBlockTemplate string
 var SkillMarkdown = skillMarkdown(ModeReader, "")
 var AgentsManagedBlock = agentsManagedBlock(ModeReader, "")
 var MCPConfigBlock = mcpConfigBlock(ModeReader)
+
+var replaceManagedFile = atomicfile.Write
+var createManagedFile = atomicfile.Create
 
 type SummaryItem struct {
 	Target      string `json:"target"`
@@ -89,6 +92,24 @@ type InstallResult struct {
 	Message string       `json:"message"`
 }
 
+// RepoInstallPlan is a read-only, fully prepared repo-scope reconciliation.
+// Its fields are private so only a plan produced by PrepareRepoInstall can be
+// applied.
+type RepoInstallPlan struct {
+	workDir string
+	mode    string
+	profile string
+	changes []preparedRepoChange
+}
+
+type preparedRepoChange struct {
+	path   string
+	action string
+	data   []byte
+	mode   os.FileMode
+	remove bool
+}
+
 type UninstallResult struct {
 	Target  string       `json:"target"`
 	Scope   string       `json:"scope"`
@@ -111,6 +132,45 @@ type DoctorResult struct {
 	Target string        `json:"target"`
 	OK     bool          `json:"ok"`
 	Checks []DoctorCheck `json:"checks"`
+}
+
+type installedSkillState struct {
+	Exists     bool
+	Recognized bool
+	Current    bool
+	Mode       string
+	Profile    string
+}
+
+type managedBlockKind uint8
+
+const (
+	managedBlockAbsent managedBlockKind = iota
+	managedBlockSingle
+	managedBlockMultiple
+	managedBlockMalformed
+)
+
+type managedBlockRange struct {
+	start int
+	end   int
+}
+
+type managedBlockLayout struct {
+	kind   managedBlockKind
+	ranges []managedBlockRange
+}
+
+type InstallIntent struct {
+	Installed     bool   `json:"installed"`
+	Managed       bool   `json:"managed"`
+	Trusted       bool   `json:"trusted"`
+	Current       bool   `json:"current"`
+	SkillCurrent  bool   `json:"skill_current"`
+	AgentsCurrent bool   `json:"agents_current"`
+	MCPCurrent    bool   `json:"mcp_current"`
+	Mode          string `json:"mode,omitempty"`
+	Profile       string `json:"profile,omitempty"`
 }
 
 func List() ListResult {
@@ -137,7 +197,6 @@ func Inspect(target string) (InspectResult, error) {
 		Description: Description,
 		Files: []string{
 			".agents/skills/factile/SKILL.md",
-			".agents/skills/factile/scripts/factile-discover.sh",
 			"AGENTS.md",
 			".codex/config.toml",
 		},
@@ -145,6 +204,141 @@ func Inspect(target string) (InspectResult, error) {
 		AgentsBlock:    agentsManagedBlock(mode, ""),
 		MCPConfigBlock: mcpConfigBlock(mode),
 	}, nil
+}
+
+// InspectRepoInstall reports generated repo integration intent and drift.
+// Only recognized generated skill formats are trusted for mode and profile.
+func InspectRepoInstall(workDir string) InstallIntent {
+	state := inspectInstalledSkill(filepath.Join(workDir, ".agents", "skills", "factile", "SKILL.md"))
+	agentsPath := filepath.Join(workDir, "AGENTS.md")
+	mcpPath := filepath.Join(workDir, ".codex", "config.toml")
+	agentsLayout, _, _ := inspectManagedFile(agentsPath, AgentsBlockStart, AgentsBlockEnd)
+	mcpLayout, _, _ := inspectManagedFile(mcpPath, MCPBlockStart, MCPBlockEnd)
+	intent := InstallIntent{
+		Installed:    state.Exists,
+		Managed:      state.Recognized || agentsLayout.kind != managedBlockAbsent || mcpLayout.kind != managedBlockAbsent,
+		Trusted:      state.Recognized,
+		SkillCurrent: state.Current,
+	}
+	if state.Recognized {
+		intent.Mode = state.Mode
+		intent.Profile = state.Profile
+		intent.AgentsCurrent = managedFileBlockMatches(agentsPath, AgentsBlockStart, AgentsBlockEnd, agentsManagedBlock(state.Mode, state.Profile))
+		intent.MCPCurrent = managedFileBlockMatches(mcpPath, MCPBlockStart, MCPBlockEnd, mcpConfigBlock(state.Mode))
+	}
+	intent.Current = intent.SkillCurrent && intent.AgentsCurrent && intent.MCPCurrent
+	return intent
+}
+
+// PreflightRepoInstall rejects repo integration paths that could escape the
+// workspace or fail predictably after another init surface has been written.
+func PreflightRepoInstall(workDir string) error {
+	skillPath := filepath.Join(workDir, ".agents", "skills", "factile", "SKILL.md")
+	for _, filename := range []string{
+		skillPath,
+		filepath.Join(workDir, ".agents", "skills", "factile", "scripts", "factile-discover.sh"),
+		filepath.Join(workDir, "AGENTS.md"),
+		filepath.Join(workDir, ".codex", "config.toml"),
+	} {
+		if err := validateRepoInstallPath(workDir, filename); err != nil {
+			return err
+		}
+	}
+	for _, filename := range []string{
+		skillPath,
+		filepath.Join(workDir, "AGENTS.md"),
+		filepath.Join(workDir, ".codex", "config.toml"),
+	} {
+		if err := validateReadableManagedFile(filename); err != nil {
+			return err
+		}
+	}
+	if err := validateManagedSkillOwnership(skillPath); err != nil {
+		return err
+	}
+	for _, block := range []struct {
+		filename string
+		start    string
+		end      string
+	}{
+		{filepath.Join(workDir, "AGENTS.md"), AgentsBlockStart, AgentsBlockEnd},
+		{filepath.Join(workDir, ".codex", "config.toml"), MCPBlockStart, MCPBlockEnd},
+	} {
+		if err := preflightManagedFile(block.filename, block.start, block.end); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRepoInstallPath(workDir, filename string) error {
+	return validateManagedPath(workDir, filename, "Repo agent")
+}
+
+func validateManagedPath(anchor, filename, label string) error {
+	rel, err := filepath.Rel(anchor, filename)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return factile.NewError(factile.ErrInvalidPath, label+" output path must stay inside its scope.")
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := anchor
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return factile.NewError(factile.ErrInvalidPath, label+" output path must use real directories: "+filepath.ToSlash(rel))
+		}
+	}
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return factile.NewError(factile.ErrInvalidPath, label+" output path must be a regular file: "+filepath.ToSlash(rel))
+	}
+	return nil
+}
+
+func validateManagedSkillOwnership(filename string) error {
+	state := inspectInstalledSkill(filename)
+	if state.Exists && !state.Recognized {
+		return factile.NewError(factile.ErrInvalidPath, "Factile cannot replace an unrecognized skill at "+filename+". Move or remove it, then retry.")
+	}
+	return nil
+}
+
+func validateReadableManagedFile(filename string) error {
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o444 == 0 {
+		return factile.NewError(factile.ErrInvalidPath, "Managed input must be readable: "+filename)
+	}
+	return nil
+}
+
+func preflightManagedFile(filename, start, end string) error {
+	layout, _, err := inspectManagedFile(filename, start, end)
+	if err != nil {
+		return err
+	}
+	if layout.kind == managedBlockMalformed {
+		return factile.NewError(factile.ErrInvalidPath, "Factile managed markers are malformed in "+filename+". Repair them before retrying.")
+	}
+	return nil
 }
 
 func Install(target string, opts InstallOptions) (InstallResult, error) {
@@ -219,6 +413,8 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	userSkill := filepath.Join(codexHome(), "skills", "factile", "SKILL.md")
 	repoSkillExists := fileExists(repoSkill)
 	userSkillExists := fileExists(userSkill)
+	repoSkillState := inspectInstalledSkill(repoSkill)
+	userSkillState := inspectInstalledSkill(userSkill)
 	if repoSkillExists || userSkillExists {
 		add("skill_installed", "pass", installedSkillMessage(workDir, repoSkillExists, userSkillExists, userSkill))
 	} else {
@@ -226,26 +422,30 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	}
 	repoExpected := repoSkillExists
 	agentsPath := filepath.Join(workDir, "AGENTS.md")
-	agentsHasBlock := fileContains(agentsPath, AgentsBlockStart) && fileContains(agentsPath, AgentsBlockEnd)
-	if repoExpected && agentsHasBlock {
-		add("agents_managed_block", "pass", "AGENTS.md contains the Factile managed block")
+	agentsLayout, _, agentsErr := inspectManagedFile(agentsPath, AgentsBlockStart, AgentsBlockEnd)
+	if repoExpected && repoSkillState.Recognized && managedFileBlockMatches(agentsPath, AgentsBlockStart, AgentsBlockEnd, agentsManagedBlock(repoSkillState.Mode, repoSkillState.Profile)) {
+		add("agents_managed_block", "pass", "AGENTS.md contains the current Factile managed block")
 	} else if repoExpected {
-		add("agents_managed_block", "fail", "Repo skill exists but AGENTS.md does not contain the Factile managed block")
-	} else if agentsHasBlock {
-		add("agents_managed_block", "pass", "AGENTS.md contains the Factile managed block")
+		add("agents_managed_block", "fail", "AGENTS.md does not match the installed Factile skill mode and profile; rerun `factile skill install codex --scope repo` with the intended options.")
+	} else if agentsErr != nil || agentsLayout.kind == managedBlockMalformed {
+		add("agents_managed_block", "fail", "AGENTS.md Factile managed markers are unreadable or malformed.")
+	} else if agentsLayout.kind != managedBlockAbsent {
+		add("agents_managed_block", "fail", "AGENTS.md contains orphan Factile managed guidance without a recognized repo skill.")
 	} else {
 		add("agents_managed_block", "warning", "Repo-scope Factile guidance is not installed")
 	}
-	addGuidanceLayoutCheck(repoSkill, userSkill, agentsPath, repoSkillExists, userSkillExists, agentsHasBlock, add)
+	addGuidanceLayoutCheck(repoSkillState, userSkillState, add)
 	configPath := filepath.Join(workDir, ".codex", "config.toml")
 	configOK := fileContains(configPath, "[mcp_servers.factile]") && fileContains(configPath, "mcp") && fileContains(configPath, "serve")
-	configLegacy := managedFileBlockContains(configPath, MCPBlockStart, MCPBlockEnd, "--root", "--mount-file")
-	if configLegacy {
-		add("mcp_config", "fail", "Local Factile MCP config uses a legacy selector; rerun `factile skill install codex --scope repo`.")
-	} else if repoExpected && configOK {
-		add("mcp_config", "pass", ".codex/config.toml contains a local Factile MCP server entry")
+	mcpLayout, _, mcpErr := inspectManagedFile(configPath, MCPBlockStart, MCPBlockEnd)
+	if repoExpected && repoSkillState.Recognized && managedFileBlockMatches(configPath, MCPBlockStart, MCPBlockEnd, mcpConfigBlock(repoSkillState.Mode)) {
+		add("mcp_config", "pass", ".codex/config.toml matches the installed Factile skill mode")
 	} else if repoExpected {
-		add("mcp_config", "fail", "Repo skill exists but .codex/config.toml does not contain the Factile MCP server entry")
+		add("mcp_config", "fail", ".codex/config.toml does not match the installed Factile skill mode; rerun `factile skill install codex --scope repo` with the intended options.")
+	} else if mcpErr != nil || mcpLayout.kind == managedBlockMalformed {
+		add("mcp_config", "fail", ".codex/config.toml Factile managed markers are unreadable or malformed.")
+	} else if mcpLayout.kind != managedBlockAbsent {
+		add("mcp_config", "fail", ".codex/config.toml contains an orphan Factile managed block without a recognized repo skill.")
 	} else if configOK {
 		add("mcp_config", "pass", ".codex/config.toml contains a local Factile MCP server entry")
 	} else {
@@ -257,45 +457,209 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 }
 
 func installRepo(opts InstallOptions) (InstallResult, error) {
-	workDir, err := repoWorkDir(opts.WorkDir)
+	plan, err := PrepareRepoInstall(opts)
 	if err != nil {
 		return InstallResult{}, err
 	}
-	var files []FileChange
-	if change, err := writeFileIfChanged(filepath.Join(workDir, ".agents", "skills", "factile", "SKILL.md"), []byte(skillMarkdown(opts.Mode, opts.Profile)), 0o644); err != nil {
-		return InstallResult{}, err
-	} else {
-		files = append(files, displayChange(workDir, change))
+	return ApplyRepoInstall(plan)
+}
+
+// PrepareRepoInstall reads and validates every repo-scope input and computes
+// every desired change without mutating the workspace.
+func PrepareRepoInstall(opts InstallOptions) (RepoInstallPlan, error) {
+	mode, err := normalizeMode(opts.Mode)
+	if err != nil {
+		return RepoInstallPlan{}, err
 	}
-	if change, err := writeFileIfChanged(filepath.Join(workDir, ".agents", "skills", "factile", "scripts", "factile-discover.sh"), []byte(DiscoverScript), 0o755); err != nil {
-		return InstallResult{}, err
-	} else {
-		files = append(files, displayChange(workDir, change))
+	if err := validateProfile(opts.Profile); err != nil {
+		return RepoInstallPlan{}, err
 	}
-	if change, err := upsertFileBlock(filepath.Join(workDir, "AGENTS.md"), AgentsBlockStart, AgentsBlockEnd, agentsManagedBlock(opts.Mode, opts.Profile)); err != nil {
-		return InstallResult{}, err
-	} else {
-		files = append(files, displayChange(workDir, change))
+	workDir, err := repoWorkDir(opts.WorkDir)
+	if err != nil {
+		return RepoInstallPlan{}, err
 	}
-	if change, err := upsertFileBlock(filepath.Join(workDir, ".codex", "config.toml"), MCPBlockStart, MCPBlockEnd, mcpConfigBlock(opts.Mode)); err != nil {
-		return InstallResult{}, err
-	} else {
-		files = append(files, displayChange(workDir, change))
+	return buildRepoInstallPlan(workDir, mode, opts.Profile)
+}
+
+// PrepareRepoInstallAt prepares reconciliation at an already validated repo
+// directory. It is used by init before the workspace manifest exists.
+func PrepareRepoInstallAt(workDir string, opts InstallOptions) (RepoInstallPlan, error) {
+	mode, err := normalizeMode(opts.Mode)
+	if err != nil {
+		return RepoInstallPlan{}, err
 	}
-	return InstallResult{Target: TargetCodex, Scope: "repo", Mode: opts.Mode, Profile: opts.Profile, Files: files, Message: "Installed repo-local Factile Codex skill, AGENTS.md guidance, and local MCP config."}, nil
+	if err := validateProfile(opts.Profile); err != nil {
+		return RepoInstallPlan{}, err
+	}
+	workDir, err = filepath.Abs(workDir)
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	workDir, err = filepath.EvalSymlinks(workDir)
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	info, err := os.Stat(workDir)
+	if err != nil || !info.IsDir() {
+		return RepoInstallPlan{}, factile.NewError(factile.ErrInvalidPath, "Repo skill target must be an existing directory: "+workDir)
+	}
+	return buildRepoInstallPlan(workDir, mode, opts.Profile)
+}
+
+func buildRepoInstallPlan(workDir, mode, profile string) (RepoInstallPlan, error) {
+	if err := PreflightRepoInstall(workDir); err != nil {
+		return RepoInstallPlan{}, err
+	}
+	plan := RepoInstallPlan{workDir: workDir, mode: mode, profile: profile}
+	skillPath := filepath.Join(workDir, ".agents", "skills", "factile", "SKILL.md")
+	change, err := prepareRepoWrite(skillPath, []byte(skillMarkdown(mode, profile)), 0o644)
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	plan.changes = append(plan.changes, change)
+	legacyScript := filepath.Join(workDir, ".agents", "skills", "factile", "scripts", "factile-discover.sh")
+	legacy, err := prepareRepoRemoval(legacyScript)
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	if legacy.action == "removed" {
+		plan.changes = append(plan.changes, legacy)
+	}
+	agents, err := prepareRepoBlock(filepath.Join(workDir, "AGENTS.md"), AgentsBlockStart, AgentsBlockEnd, agentsManagedBlock(mode, profile))
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	plan.changes = append(plan.changes, agents)
+	mcp, err := prepareRepoBlock(filepath.Join(workDir, ".codex", "config.toml"), MCPBlockStart, MCPBlockEnd, mcpConfigBlock(mode))
+	if err != nil {
+		return RepoInstallPlan{}, err
+	}
+	plan.changes = append(plan.changes, mcp)
+	return plan, nil
+}
+
+// ApplyRepoInstall publishes a previously prepared repo reconciliation.
+func ApplyRepoInstall(plan RepoInstallPlan) (InstallResult, error) {
+	if plan.workDir == "" {
+		return InstallResult{}, factile.NewError(factile.ErrInvalidPath, "Invalid empty repo skill plan")
+	}
+	files := make([]FileChange, 0, len(plan.changes))
+	for _, prepared := range plan.changes {
+		switch {
+		case prepared.action == "unchanged":
+		case prepared.remove:
+			if err := os.Remove(prepared.path); err != nil {
+				return InstallResult{}, err
+			}
+		case prepared.action == "created":
+			if err := os.MkdirAll(filepath.Dir(prepared.path), 0o755); err != nil {
+				return InstallResult{}, err
+			}
+			created, err := createManagedFile(prepared.path, prepared.data, prepared.mode)
+			if err != nil {
+				return InstallResult{}, err
+			}
+			if !created {
+				return InstallResult{}, fmt.Errorf("managed output changed during planning: %s", prepared.path)
+			}
+		case prepared.action == "updated":
+			if err := replaceManagedFile(prepared.path, prepared.data, prepared.mode); err != nil {
+				return InstallResult{}, err
+			}
+		}
+		files = append(files, displayChange(plan.workDir, FileChange{Path: prepared.path, Action: prepared.action}))
+	}
+	return InstallResult{Target: TargetCodex, Scope: "repo", Mode: plan.mode, Profile: plan.profile, Files: files, Message: "Installed repo-local Factile Codex skill, AGENTS.md guidance, and local MCP config."}, nil
+}
+
+func prepareRepoWrite(filename string, data []byte, mode os.FileMode) (preparedRepoChange, error) {
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return preparedRepoChange{path: filename, action: "created", data: data, mode: mode}, nil
+	}
+	if err != nil {
+		return preparedRepoChange{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return preparedRepoChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+	}
+	current, err := os.ReadFile(filename)
+	if err != nil {
+		return preparedRepoChange{}, err
+	}
+	if bytes.Equal(current, data) {
+		return preparedRepoChange{path: filename, action: "unchanged", mode: mode}, nil
+	}
+	return preparedRepoChange{path: filename, action: "updated", data: data, mode: mode}, nil
+}
+
+func prepareRepoBlock(filename, start, end, block string) (preparedRepoChange, error) {
+	info, err := os.Lstat(filename)
+	mode := os.FileMode(0o644)
+	var content string
+	action := "created"
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return preparedRepoChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+		}
+		data, readErr := os.ReadFile(filename)
+		if readErr != nil {
+			return preparedRepoChange{}, readErr
+		}
+		content = string(data)
+		mode = info.Mode().Perm()
+		action = "updated"
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return preparedRepoChange{}, err
+	}
+	next, err := upsertManagedBlock(content, start, end, block)
+	if err != nil {
+		return preparedRepoChange{}, err
+	}
+	if action == "updated" && next == content {
+		action = "unchanged"
+	}
+	return preparedRepoChange{path: filename, action: action, data: []byte(next), mode: mode}, nil
+}
+
+func prepareRepoRemoval(filename string) (preparedRepoChange, error) {
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return preparedRepoChange{path: filename, action: "missing"}, nil
+	}
+	if err != nil {
+		return preparedRepoChange{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return preparedRepoChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+	}
+	parent, err := os.Stat(filepath.Dir(filename))
+	if err != nil {
+		return preparedRepoChange{}, err
+	}
+	if parent.Mode().Perm()&0o222 == 0 {
+		return preparedRepoChange{}, fmt.Errorf("managed legacy output cannot be removed from read-only directory: %s", filename)
+	}
+	return preparedRepoChange{path: filename, action: "removed", remove: true}, nil
 }
 
 func installUser(opts InstallOptions) (InstallResult, error) {
-	root := filepath.Join(codexHome(), "skills", "factile")
+	anchor, root, legacyScript, err := userSkillPaths()
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if err := preflightUserSkill(anchor, filepath.Join(root, "SKILL.md"), legacyScript); err != nil {
+		return InstallResult{}, err
+	}
 	var files []FileChange
 	if change, err := writeFileIfChanged(filepath.Join(root, "SKILL.md"), []byte(skillMarkdown(opts.Mode, opts.Profile)), 0o644); err != nil {
 		return InstallResult{}, err
 	} else {
 		files = append(files, change)
 	}
-	if change, err := writeFileIfChanged(filepath.Join(root, "scripts", "factile-discover.sh"), []byte(DiscoverScript), 0o755); err != nil {
+	if change, err := removeFileIfExists(legacyScript); err != nil {
 		return InstallResult{}, err
-	} else {
+	} else if change.Action == "removed" {
 		files = append(files, change)
 	}
 	return InstallResult{Target: TargetCodex, Scope: "user", Mode: opts.Mode, Profile: opts.Profile, Files: files, Message: "Installed the user-level Factile Codex skill. Verify discovery with `factile skill doctor codex --json`."}, nil
@@ -304,6 +668,9 @@ func installUser(opts InstallOptions) (InstallResult, error) {
 func uninstallRepo(opts InstallOptions) (UninstallResult, error) {
 	workDir, err := repoWorkDir(opts.WorkDir)
 	if err != nil {
+		return UninstallResult{}, err
+	}
+	if err := PreflightRepoInstall(workDir); err != nil {
 		return UninstallResult{}, err
 	}
 	var files []FileChange
@@ -332,15 +699,56 @@ func uninstallRepo(opts InstallOptions) (UninstallResult, error) {
 
 func uninstallUser(opts InstallOptions) (UninstallResult, error) {
 	_ = opts
-	root := filepath.Join(codexHome(), "skills", "factile")
-	action := "missing"
-	if fileExists(root) {
-		if err := os.RemoveAll(root); err != nil {
+	anchor, root, legacyScript, err := userSkillPaths()
+	if err != nil {
+		return UninstallResult{}, err
+	}
+	skillPath := filepath.Join(root, "SKILL.md")
+	if err := preflightUserSkill(anchor, skillPath, legacyScript); err != nil {
+		return UninstallResult{}, err
+	}
+	var files []FileChange
+	for _, filename := range []string{legacyScript, skillPath} {
+		change, err := removeFileIfExists(filename)
+		if err != nil {
 			return UninstallResult{}, err
 		}
-		action = "removed"
+		files = append(files, change)
 	}
-	return UninstallResult{Target: TargetCodex, Scope: "user", Files: []FileChange{{Path: root, Action: action}}, Message: "Removed the user-level Factile Codex skill."}, nil
+	return UninstallResult{Target: TargetCodex, Scope: "user", Files: files, Message: "Removed the user-level Factile Codex skill."}, nil
+}
+
+func userSkillPaths() (string, string, string, error) {
+	anchor, err := filepath.Abs(codexHome())
+	if err != nil {
+		return "", "", "", err
+	}
+	info, err := os.Stat(anchor)
+	if err == nil {
+		if !info.IsDir() {
+			return "", "", "", factile.NewError(factile.ErrInvalidPath, "Codex home must be a directory: "+anchor)
+		}
+		anchor, err = filepath.EvalSymlinks(anchor)
+		if err != nil {
+			return "", "", "", err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", "", err
+	}
+	root := filepath.Join(anchor, "skills", "factile")
+	return anchor, root, filepath.Join(root, "scripts", "factile-discover.sh"), nil
+}
+
+func preflightUserSkill(anchor, skillPath, legacyScript string) error {
+	for _, filename := range []string{skillPath, legacyScript} {
+		if err := validateManagedPath(anchor, filename, "User skill"); err != nil {
+			return err
+		}
+	}
+	if err := validateReadableManagedFile(skillPath); err != nil {
+		return err
+	}
+	return validateManagedSkillOwnership(skillPath)
 }
 
 func normalizeMode(mode string) (string, error) {
@@ -368,12 +776,21 @@ func skillMarkdown(mode string, profile string) string {
 	var b strings.Builder
 	b.WriteString(BaseSkillMarkdown)
 	b.WriteString("\n")
+	b.WriteString(skillInstallMarker(mode, profile))
+	b.WriteString("\n\n")
 	b.WriteString(skillModeSection(mode))
 	if profile != "" {
 		b.WriteString("\n")
 		b.WriteString(skillProfileSection(profile))
 	}
 	return b.String()
+}
+
+func skillInstallMarker(mode string, profile string) string {
+	if profile == "" {
+		profile = "none"
+	}
+	return "<!-- factile:install mode=" + mode + " profile=" + profile + " -->"
 }
 
 func skillModeSection(mode string) string {
@@ -385,17 +802,15 @@ func skillModeSection(mode string) string {
 		b.WriteString("- Use `factile mount`, `factile unmount`, and `factile mounts` to manage `<name>.mount.toml` path mounts.\n")
 		b.WriteString("- Git mounts are always read-only; use `factile refresh <mount-path>` only for an immediate upstream check.\n")
 		b.WriteString("- Use `factile view list`, `factile view inspect`, `factile view set`, and `factile view delete` to manage workspace-level `factile.views.toml`.\n")
-		b.WriteString("- Use `factile list --brief`, `factile stat`, `factile validate`, and `factile context` before changing knowledge.\n")
+		b.WriteString("- Use `factile list / --brief --json`, `factile stat <path> --json`, and focused `factile context` before changing knowledge.\n")
 		b.WriteString("- Use narrower paths or `--view <id>` when the task needs a smaller reader scope.\n")
 		b.WriteString("- Use write commands only with required revisions and only when the user asked to change knowledge.\n")
 		b.WriteString("- Validate the affected path after mount, view, or content changes.\n")
 	default:
 		b.WriteString("Reader mode is installed. Use Factile to discover and consume workspace knowledge without mutating workspace or bundle manifests, mount descriptors, views, or OKF documents.\n\n")
-		b.WriteString("- Prefer `factile list / --brief --json`, `factile stat <path> --json`, and `factile context / '<task>' --json`.\n")
-		b.WriteString("- Use a narrower path or `--view <id>` when the task scope is specific.\n")
 		b.WriteString("- Inspect Git mount status with `factile mounts --json`; explicit refresh changes generated cache state, not source content.\n")
 		b.WriteString("- Do not use `factile create`, `write`, `patch`, `rename`, `delete`, `deprecate`, `mount`, `unmount`, `view set`, or `view delete` unless the user explicitly asks to curate knowledge.\n")
-		b.WriteString("- Treat the configured MCP server as read-only.\n")
+		b.WriteString("- The configured MCP server must include `--read-only`; `factile skill doctor codex --json` verifies the generated mode and config agree.\n")
 	}
 	return b.String()
 }
@@ -418,9 +833,9 @@ func agentsManagedBlock(mode string, profile string) string {
 
 func agentsModeBlock(mode string) string {
 	if mode == ModeCurator {
-		return "Mode: curator. Curation may use `factile mount`, `factile unmount`, `factile mounts`, `factile view ...`, and revision-aware write commands when the user asks to change knowledge. Mounts are `<name>.mount.toml`; views live in workspace-level `factile.views.toml`. Validate affected paths after changes."
+		return "Mode: curator. Mutate Factile knowledge only when the user explicitly asks; preserve source capabilities, required revisions, and affected-path validation."
 	}
-	return "Mode: reader. Do not edit Factile/OKF documents, `factile.toml`, `factile.views.toml`, or `<name>.mount.toml` unless the user explicitly asks to curate knowledge. Never put authored files in `.factile/`."
+	return "Mode: reader. Do not mutate Factile manifests, views, mount descriptors, or OKF documents unless the user explicitly asks to curate knowledge; the configured MCP server must remain read-only."
 }
 
 func agentsProfileBlock(profile string) string {
@@ -549,63 +964,146 @@ func legacyLayoutDetails(workDir string, err error) (string, string) {
 	return "", ""
 }
 
-func addGuidanceLayoutCheck(repoSkill, userSkill, agentsPath string, repoSkillExists, userSkillExists, agentsHasBlock bool, add func(string, string, string)) {
-	if !repoSkillExists && !userSkillExists && !agentsHasBlock {
+func addGuidanceLayoutCheck(repoSkill, userSkill installedSkillState, add func(string, string, string)) {
+	if !repoSkill.Exists && !userSkill.Exists {
 		add("guidance_layout", "warning", "No installed Factile guidance is available to check")
 		return
 	}
-	var stale []string
-	if repoSkillExists && fileContainsAny(repoSkill, legacyGuidanceMarkers()...) {
-		stale = append(stale, "repo skill")
+	var drifted []string
+	if repoSkill.Exists && (!repoSkill.Recognized || !repoSkill.Current) {
+		drifted = append(drifted, "repo skill")
 	}
-	if userSkillExists && fileContainsAny(userSkill, legacyGuidanceMarkers()...) {
-		stale = append(stale, "user skill")
+	if userSkill.Exists && (!userSkill.Recognized || !userSkill.Current) {
+		drifted = append(drifted, "user skill")
 	}
-	if agentsHasBlock && managedFileBlockContains(agentsPath, AgentsBlockStart, AgentsBlockEnd, legacyGuidanceMarkers()...) {
-		stale = append(stale, "AGENTS.md block")
-	}
-	if len(stale) > 0 {
-		add("guidance_layout", "fail", "Legacy Factile guidance remains in "+strings.Join(stale, ", ")+"; rerun `factile skill install codex --scope repo` or `--scope user` for the affected scope.")
+	if len(drifted) > 0 {
+		add("guidance_layout", "fail", "Generated Factile guidance is missing install metadata or differs from the current generator in "+strings.Join(drifted, ", ")+"; rerun `factile skill install codex --scope repo` or `--scope user` for the affected scope.")
 		return
 	}
-	add("guidance_layout", "pass", "Installed Factile guidance describes workspace and bundle layout")
+	add("guidance_layout", "pass", "Installed Factile skill files match the current generator")
 }
 
-func legacyGuidanceMarkers() []string {
-	return []string{".factile/config.toml", ".factile/views.toml", "`--root", "no_active_root", "A Factile root is marked"}
-}
-
-func fileContainsAny(filename string, needles ...string) bool {
+func inspectInstalledSkill(filename string) installedSkillState {
 	data, err := os.ReadFile(filename)
 	if err != nil {
-		return false
+		return installedSkillState{}
 	}
-	for _, needle := range needles {
-		if strings.Contains(string(data), needle) {
-			return true
+	state := installedSkillState{Exists: true}
+	for _, mode := range []string{ModeReader, ModeCurator} {
+		for _, profile := range []string{"", "software"} {
+			if !strings.Contains(string(data), skillInstallMarker(mode, profile)) {
+				continue
+			}
+			if state.Recognized {
+				return state
+			}
+			state.Recognized = true
+			state.Mode = mode
+			state.Profile = profile
 		}
 	}
-	return false
+	if !state.Recognized {
+		if mode, profile, ok := legacyV040InstallIntent(string(data)); ok {
+			state.Recognized = true
+			state.Mode = mode
+			state.Profile = profile
+		}
+	}
+	if state.Recognized {
+		state.Current = bytes.Equal(data, []byte(skillMarkdown(state.Mode, state.Profile)))
+	}
+	return state
 }
 
-func managedFileBlockContains(filename, start, end string, needles ...string) bool {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return false
+func legacyV040InstallIntent(content string) (string, string, bool) {
+	if !strings.Contains(content, "# Factile local knowledge workflow") || !strings.Contains(content, legacyV040SkillSignature) {
+		return "", "", false
 	}
-	content := string(data)
-	startIndex := strings.Index(content, start)
-	endIndex := strings.Index(content, end)
-	if startIndex < 0 || endIndex <= startIndex {
-		return false
+	reader := strings.Contains(content, "Reader mode is installed.")
+	curator := strings.Contains(content, "Curator mode is installed.")
+	if reader == curator {
+		return "", "", false
 	}
-	block := content[startIndex : endIndex+len(end)]
-	for _, needle := range needles {
-		if strings.Contains(block, needle) {
-			return true
+	mode := ModeReader
+	if curator {
+		mode = ModeCurator
+	}
+	profile := ""
+	if strings.Contains(content, "## Profile") {
+		if !strings.Contains(content, "Profile: `software`.") {
+			return "", "", false
 		}
+		profile = "software"
 	}
-	return false
+	return mode, profile, true
+}
+
+func managedFileBlockMatches(filename, start, end, expected string) bool {
+	layout, data, err := inspectManagedFile(filename, start, end)
+	if err != nil || layout.kind != managedBlockSingle {
+		return false
+	}
+	managed := layout.ranges[0]
+	return string(data[managed.start:managed.end]) == strings.TrimRight(expected, "\r\n")
+}
+
+func inspectManagedFile(filename, start, end string) (managedBlockLayout, []byte, error) {
+	data, err := os.ReadFile(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return managedBlockLayout{kind: managedBlockAbsent}, nil, nil
+	}
+	if err != nil {
+		return managedBlockLayout{kind: managedBlockMalformed}, nil, err
+	}
+	return classifyManagedBlocks(string(data), start, end), data, nil
+}
+
+func classifyManagedBlocks(content, start, end string) managedBlockLayout {
+	if start == "" || end == "" || start == end {
+		return managedBlockLayout{kind: managedBlockMalformed}
+	}
+	layout := managedBlockLayout{kind: managedBlockAbsent}
+	cursor := 0
+	open := -1
+	for cursor < len(content) {
+		nextStart := strings.Index(content[cursor:], start)
+		if nextStart >= 0 {
+			nextStart += cursor
+		}
+		nextEnd := strings.Index(content[cursor:], end)
+		if nextEnd >= 0 {
+			nextEnd += cursor
+		}
+		if nextStart < 0 && nextEnd < 0 {
+			break
+		}
+		if nextStart >= 0 && (nextEnd < 0 || nextStart < nextEnd) {
+			if open >= 0 {
+				return managedBlockLayout{kind: managedBlockMalformed}
+			}
+			open = nextStart
+			cursor = nextStart + len(start)
+			continue
+		}
+		if open < 0 {
+			return managedBlockLayout{kind: managedBlockMalformed}
+		}
+		layout.ranges = append(layout.ranges, managedBlockRange{start: open, end: nextEnd + len(end)})
+		open = -1
+		cursor = nextEnd + len(end)
+	}
+	if open >= 0 {
+		return managedBlockLayout{kind: managedBlockMalformed}
+	}
+	switch len(layout.ranges) {
+	case 0:
+		layout.kind = managedBlockAbsent
+	case 1:
+		layout.kind = managedBlockSingle
+	default:
+		layout.kind = managedBlockMultiple
+	}
+	return layout
 }
 
 func codexHome() string {
@@ -621,10 +1119,16 @@ func codexHome() string {
 
 func writeFileIfChanged(filename string, data []byte, mode os.FileMode) (FileChange, error) {
 	action := "created"
-	current, err := os.ReadFile(filename)
+	info, err := os.Lstat(filename)
 	if err == nil {
+		if !info.Mode().IsRegular() {
+			return FileChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+		}
+		current, err := os.ReadFile(filename)
+		if err != nil {
+			return FileChange{}, err
+		}
 		if bytes.Equal(current, data) {
-			_ = os.Chmod(filename, mode)
 			return FileChange{Path: filename, Action: "unchanged"}, nil
 		}
 		action = "updated"
@@ -634,97 +1138,156 @@ func writeFileIfChanged(filename string, data []byte, mode os.FileMode) (FileCha
 	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
 		return FileChange{}, err
 	}
-	if err := os.WriteFile(filename, data, mode); err != nil {
-		return FileChange{}, err
+	if action == "updated" {
+		if err := replaceManagedFile(filename, data, mode); err != nil {
+			return FileChange{}, err
+		}
+	} else {
+		created, err := createManagedFile(filename, data, mode)
+		if err != nil {
+			return FileChange{}, err
+		}
+		if !created {
+			return FileChange{}, fmt.Errorf("managed output changed during planning: %s", filename)
+		}
 	}
 	return FileChange{Path: filename, Action: action}, nil
 }
 
 func upsertFileBlock(filename, start, end, block string) (FileChange, error) {
 	action := "created"
-	data, err := os.ReadFile(filename)
+	mode := os.FileMode(0o644)
+	info, err := os.Lstat(filename)
+	var data []byte
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return FileChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+		}
+		data, err = os.ReadFile(filename)
+	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return FileChange{}, err
 	}
 	if err == nil {
 		action = "updated"
+		mode = info.Mode().Perm()
 	}
-	next := upsertManagedBlock(string(data), start, end, block)
+	next, err := upsertManagedBlock(string(data), start, end, block)
+	if err != nil {
+		return FileChange{}, err
+	}
 	if err == nil && next == string(data) {
 		return FileChange{Path: filename, Action: "unchanged"}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
 		return FileChange{}, err
 	}
-	if err := os.WriteFile(filename, []byte(next), 0o644); err != nil {
-		return FileChange{}, err
+	if action == "updated" {
+		if err := replaceManagedFile(filename, []byte(next), mode); err != nil {
+			return FileChange{}, err
+		}
+	} else {
+		created, err := createManagedFile(filename, []byte(next), mode)
+		if err != nil {
+			return FileChange{}, err
+		}
+		if !created {
+			return FileChange{}, fmt.Errorf("managed output changed during planning: %s", filename)
+		}
 	}
 	return FileChange{Path: filename, Action: action}, nil
 }
 
-func upsertManagedBlock(content, start, end, block string) string {
-	block = ensureTrailingNewline(block)
-	startIdx := strings.Index(content, start)
-	endIdx := strings.Index(content, end)
-	if startIdx >= 0 && endIdx > startIdx {
-		endIdx += len(end)
-		next := content[:startIdx] + strings.TrimRight(block, "\n") + content[endIdx:]
-		return ensureTrailingNewline(next)
+func upsertManagedBlock(content, start, end, block string) (string, error) {
+	layout := classifyManagedBlocks(content, start, end)
+	if layout.kind == managedBlockMalformed {
+		return "", factile.NewError(factile.ErrInvalidPath, "Factile managed markers are malformed. Repair them before retrying.")
 	}
-	if strings.TrimSpace(content) == "" {
-		return block
+	block = ensureTrailingNewline(block)
+	if layout.kind != managedBlockAbsent {
+		var next strings.Builder
+		first := layout.ranges[0]
+		next.WriteString(content[:first.start])
+		next.WriteString(strings.TrimRight(block, "\r\n"))
+		cursor := first.end
+		for _, managed := range layout.ranges[1:] {
+			next.WriteString(content[cursor:managed.start])
+			cursor = managed.end
+		}
+		next.WriteString(content[cursor:])
+		return next.String(), nil
+	}
+	if content == "" {
+		return block, nil
 	}
 	next := ensureTrailingNewline(content)
 	if !strings.HasSuffix(next, "\n\n") {
 		next += "\n"
 	}
-	return next + block
+	return next + block, nil
 }
 
 func removeFileBlock(filename, start, end string) (FileChange, error) {
-	data, err := os.ReadFile(filename)
+	info, err := os.Lstat(filename)
 	if errors.Is(err, os.ErrNotExist) {
 		return FileChange{Path: filename, Action: "missing"}, nil
 	}
 	if err != nil {
 		return FileChange{}, err
 	}
-	next, removed := removeManagedBlock(string(data), start, end)
+	if !info.Mode().IsRegular() {
+		return FileChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return FileChange{}, err
+	}
+	next, removed, err := removeManagedBlock(string(data), start, end)
+	if err != nil {
+		return FileChange{}, err
+	}
 	if !removed {
 		return FileChange{Path: filename, Action: "unchanged"}, nil
 	}
-	if err := os.WriteFile(filename, []byte(next), 0o644); err != nil {
+	if err := replaceManagedFile(filename, []byte(next), info.Mode().Perm()); err != nil {
 		return FileChange{}, err
 	}
 	return FileChange{Path: filename, Action: "updated"}, nil
 }
 
-func removeManagedBlock(content, start, end string) (string, bool) {
-	startIdx := strings.Index(content, start)
-	endIdx := strings.Index(content, end)
-	if startIdx < 0 || endIdx <= startIdx {
-		return content, false
+func removeManagedBlock(content, start, end string) (string, bool, error) {
+	layout := classifyManagedBlocks(content, start, end)
+	if layout.kind == managedBlockMalformed {
+		return "", false, factile.NewError(factile.ErrInvalidPath, "Factile managed markers are malformed. Repair them before retrying.")
 	}
-	endIdx += len(end)
-	if endIdx < len(content) && content[endIdx] == '\n' {
-		endIdx++
+	if layout.kind == managedBlockAbsent {
+		return content, false, nil
 	}
-	next := content[:startIdx] + content[endIdx:]
-	next = strings.TrimRight(next, "\n")
-	if next != "" {
-		next += "\n"
+	var next strings.Builder
+	cursor := 0
+	for _, managed := range layout.ranges {
+		next.WriteString(content[cursor:managed.start])
+		cursor = managed.end
 	}
-	return next, true
+	next.WriteString(content[cursor:])
+	return next.String(), true, nil
 }
 
 func removeFileIfExists(filename string) (FileChange, error) {
-	if err := os.Remove(filename); err == nil {
-		return FileChange{Path: filename, Action: "removed"}, nil
-	} else if errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
 		return FileChange{Path: filename, Action: "missing"}, nil
-	} else {
+	}
+	if err != nil {
 		return FileChange{}, err
 	}
+	if !info.Mode().IsRegular() {
+		return FileChange{}, fmt.Errorf("managed output path must be a regular file: %s", filename)
+	}
+	if err := os.Remove(filename); err != nil {
+		return FileChange{}, err
+	}
+	return FileChange{Path: filename, Action: "removed"}, nil
 }
 
 func displayChange(workDir string, change FileChange) FileChange {

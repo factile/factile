@@ -102,6 +102,31 @@ function installAndCheck(name, tarballs) {
       env: npmEnv(),
       stdio: "inherit",
     });
+
+    const canonicalReadme = fs.readFileSync(
+      path.join(workspace, "node_modules", "factile", "README.md"),
+      "utf8"
+    );
+    assert(
+      canonicalReadme.includes("Normal repository onboarding and repair use one command") &&
+        canonicalReadme.includes("factile init"),
+      "canonical package README does not present factile init as one-command onboarding"
+    );
+    const aliasReadmePath = path.join(
+      workspace,
+      "node_modules",
+      "@factile",
+      "cli",
+      "README.md"
+    );
+    if (fs.existsSync(aliasReadmePath)) {
+      const aliasReadme = fs.readFileSync(aliasReadmePath, "utf8");
+      assert(
+        aliasReadme.includes("factile init") && aliasReadme.includes("repeat repair command"),
+        "scoped package README does not present factile init as the repeat repair command"
+      );
+    }
+
     runBin(workspace, "factile", ["version"]);
     runBin(workspace, "ft", ["version"]);
 

@@ -451,6 +451,72 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 	return ValidationResult{Path: resultPath, Valid: !hasErrors(issues), Issues: issues}, nil
 }
 
+// ValidateRootBundle validates only the selected local root bundle. It does
+// not hydrate or refresh mounted Git sources.
+func (w *LocalWorkspace) ValidateRootBundle(ctx context.Context) (ValidationResult, error) {
+	metadataIssues, metadataBlocking, err := w.validateRootMetadata()
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	if metadataBlocking {
+		return ValidationResult{Path: "/", Valid: false, Issues: metadataIssues}, nil
+	}
+	mounts, err := w.mounts()
+	if err != nil {
+		return ValidationResult{}, NormalizeError(err)
+	}
+	var root *vfs.Mount
+	for i := range mounts {
+		if mounts[i].MountPath == "/" {
+			root = &mounts[i]
+			break
+		}
+	}
+	if root == nil {
+		return ValidationResult{}, NewError(ErrMountNotFound, "Root bundle is not mounted")
+	}
+	if err := ensureReadable(*root); err != nil {
+		return ValidationResult{}, err
+	}
+	concepts, issues, err := w.validateMountScope(*root, "")
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	index, indexIssues := validateRootIndex(*root)
+	if index != nil {
+		concepts = append(concepts, *index)
+	}
+	issues = append(issues, indexIssues...)
+	issues = append(metadataIssues, issues...)
+	issues = append(issues, localRootLinkIssues(concepts, mounts)...)
+	_ = ctx
+	return ValidationResult{Path: "/", Valid: !hasErrors(issues), Issues: issues}, nil
+}
+
+func validateRootIndex(mount vfs.Mount) (*scopedConcept, []ValidationIssue) {
+	filename := filepath.Join(mount.SourcePath, "index.md")
+	info, err := os.Lstat(filename)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, []ValidationIssue{{
+			Severity: "error",
+			Code:     ErrValidationFailed,
+			Message:  "Root bundle index.md is missing or is not a regular file",
+			Path:     "/",
+		}}
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, []ValidationIssue{{Severity: "error", Code: ErrValidationFailed, Message: err.Error(), Path: "/"}}
+	}
+	doc, err := okf.ParseConcept("", data)
+	if err != nil {
+		return nil, []ValidationIssue{{Severity: "error", Code: ErrOKFParse, Message: "Invalid root index.md: " + err.Error(), Path: "/"}}
+	}
+	concept := conceptFromDoc(mount, doc, data)
+	item := &scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
+	return item, validateDocument("/", doc)
+}
+
 func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error) {
 	context, err := w.resolvedWorkspace()
 	if err != nil {
@@ -1554,6 +1620,55 @@ func linkIssues(concepts []scopedConcept) []ValidationIssue {
 		byPath[item.Concept.Path] = true
 	}
 	return linkIssuesAgainst(concepts, byPath)
+}
+
+func localRootLinkIssues(concepts []scopedConcept, mounts []vfs.Mount) []ValidationIssue {
+	byPath := map[string]bool{}
+	for _, item := range concepts {
+		byPath[item.Concept.Path] = true
+	}
+	rootSource := ""
+	for _, mount := range mounts {
+		if mount.MountPath == "/" {
+			rootSource = mount.SourcePath
+			break
+		}
+	}
+	var issues []ValidationIssue
+	for _, item := range concepts {
+		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			if !ok || byPath[target] || localReservedFileExists(rootSource, target) || coveredByNonRootMount(target, mounts) {
+				continue
+			}
+			issues = append(issues, ValidationIssue{
+				Severity:  "warning",
+				Code:      "broken_link",
+				Message:   "Broken Markdown link: " + link.Target,
+				Path:      item.Concept.Path,
+				ConceptID: item.Concept.ConceptID,
+			})
+		}
+	}
+	return issues
+}
+
+func localReservedFileExists(rootSource, target string) bool {
+	if rootSource == "" || target == "/" || !okf.IsReservedFile(path.Base(target)+".md") {
+		return false
+	}
+	filename := filepath.Join(rootSource, filepath.FromSlash(strings.TrimPrefix(target, "/"))+".md")
+	info, err := os.Lstat(filename)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func coveredByNonRootMount(target string, mounts []vfs.Mount) bool {
+	for _, mount := range mounts {
+		if mount.MountPath != "/" && mountMatchesPath(mount.MountPath, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []ValidationIssue {

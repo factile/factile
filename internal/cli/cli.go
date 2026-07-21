@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	clirender "github.com/factile/factile/internal/cli/render"
 	"github.com/factile/factile/pkg/bootstrap"
 	"github.com/factile/factile/pkg/factile"
@@ -55,6 +58,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 	started := time.Now()
 	global, rest, err := parseGlobals(args)
 	if err != nil {
+		if structuredErrorOutputRequested(args) {
+			global.Format = formatJSON
+		}
 		if _, ok := err.(*factile.AppError); !ok {
 			err = factile.NewError(factile.ErrInvalidPath, err.Error())
 		}
@@ -137,7 +143,7 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		}
 		return writeSummaryResult(stdout, global, result)
 	case "init":
-		return runInit(ctx, args, global, stdout)
+		return runInit(ctx, args, global, stdin, stdout)
 	case "list":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile list [path] [--brief] [--view <id>]")
@@ -299,36 +305,270 @@ func runPathShortcut(ctx context.Context, ws factile.Workspace, path string, glo
 	return writeListResult(stdout, global, listResult)
 }
 
-func runInit(ctx context.Context, args []string, global globals, stdout io.Writer) (int, error) {
+type initCommandIO struct {
+	stdin       io.Reader
+	stdout      io.Writer
+	interactive bool
+}
+
+func runInit(ctx context.Context, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
+	return runInitWithIO(ctx, args, global, initCommandIO{
+		stdin:       stdin,
+		stdout:      stdout,
+		interactive: initTerminal(stdin, stdout),
+	})
+}
+
+func runInitWithIO(ctx context.Context, args []string, global globals, commandIO initCommandIO) (int, error) {
+	const usageText = "factile init [--root <directory>] [--name <name>] [--title <title>] [--description <text>] [--agent auto|codex|none] [--yes]"
 	if hasHelp(args) {
-		return showUsage(stdout, "factile init [--here] [--agent <agent>]")
+		return showUsage(commandIO.stdout, usageText)
 	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	agent := fs.String("agent", "", "")
-	here := fs.Bool("here", false, "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--agent": true, "--here": false})
+	agent := fs.String("agent", bootstrap.AgentAuto, "")
+	root := fs.String("root", "", "")
+	name := fs.String("name", "", "")
+	title := fs.String("title", "", "")
+	description := fs.String("description", "", "")
+	yes := fs.Bool("yes", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--agent": true, "--root": true, "--name": true, "--title": true, "--description": true, "--yes": false})
 	if orderErr != nil {
-		return 2, orderErr
+		return 0, factile.NewError(factile.ErrInvalidPath, orderErr.Error())
 	}
 	if err := fs.Parse(ordered); err != nil {
-		return 2, err
+		return 0, factile.NewError(factile.ErrInvalidPath, err.Error())
 	}
 	if fs.NArg() != 0 {
-		return usage(global, stdout, "factile init [--here] [--agent <agent>]")
+		return usage(global, commandIO.stdout, usageText)
 	}
-	var agents []string
-	if *agent != "" {
-		agents = []string{*agent}
+	explicit := map[string]bool{}
+	fs.Visit(func(item *flag.Flag) {
+		explicit[item.Name] = true
+	})
+	opts := bootstrap.Options{
+		Workspace:           global.Workspace,
+		Root:                *root,
+		RootExplicit:        explicit["root"],
+		Name:                *name,
+		NameExplicit:        explicit["name"],
+		Title:               *title,
+		TitleExplicit:       explicit["title"],
+		Description:         *description,
+		DescriptionExplicit: explicit["description"],
+		Agent:               *agent,
 	}
-	result, err := bootstrap.Init(ctx, bootstrap.Options{WorkDir: global.Workspace, Here: *here, Agents: agents})
+	plan, err := bootstrap.Prepare(opts)
 	if err != nil {
 		return 0, err
 	}
-	if !global.structuredOutput() {
-		return writeInitResult(stdout, global, result)
+	complete := explicit["root"] && explicit["name"] && explicit["title"] && explicit["description"] && explicit["agent"]
+	shouldPrompt := commandIO.interactive && !*yes && !global.structuredOutput() && !complete
+	if shouldPrompt && plan.NewWorkspace {
+		var proceed bool
+		opts, plan, proceed, err = promptNewInit(commandIO, opts, plan, explicit)
+		if err != nil {
+			return 1, err
+		}
+		if !proceed {
+			return cancelInit(commandIO.stdout)
+		}
+	} else if shouldPrompt && opts.RootExplicit && plan.RootChanged {
+		if err := writeInitPlan(commandIO.stdout, plan); err != nil {
+			return 1, err
+		}
+		proceed, answered, err := promptInitConfirmation(bufio.NewReader(commandIO.stdin), commandIO.stdout, "Change the workspace root bundle?", false)
+		if err != nil {
+			return 1, err
+		}
+		if !answered || !proceed {
+			return cancelInit(commandIO.stdout)
+		}
 	}
-	return writeResult(stdout, global, result)
+	result, err := bootstrap.Apply(ctx, plan)
+	if err != nil {
+		return 0, err
+	}
+	var code int
+	if !global.structuredOutput() {
+		code, err = writeInitResult(commandIO.stdout, global, result)
+	} else {
+		code, err = writeResult(commandIO.stdout, global, result)
+	}
+	if err != nil {
+		return code, err
+	}
+	if !result.Health.OK {
+		return 3, nil
+	}
+	return code, nil
+}
+
+func promptNewInit(commandIO initCommandIO, opts bootstrap.Options, plan bootstrap.InitPlan, explicit map[string]bool) (bootstrap.Options, bootstrap.InitPlan, bool, error) {
+	if _, err := fmt.Fprintln(commandIO.stdout, "Configure Factile workspace\n\nPress Enter to accept each default."); err != nil {
+		return opts, plan, false, err
+	}
+	reader := bufio.NewReader(commandIO.stdin)
+	questions := []struct {
+		explicit bool
+		label    string
+		value    func(bootstrap.InitPlan) string
+		set      func(*bootstrap.Options, string)
+	}{
+		{
+			explicit: explicit["root"],
+			label:    "Root bundle directory",
+			value:    func(plan bootstrap.InitPlan) string { return plan.RootBundlePath },
+			set: func(opts *bootstrap.Options, value string) {
+				opts.Root = value
+				opts.RootExplicit = true
+			},
+		},
+		{
+			explicit: explicit["title"],
+			label:    "Bundle title",
+			value:    func(plan bootstrap.InitPlan) string { return plan.Bundle.Title },
+			set: func(opts *bootstrap.Options, value string) {
+				opts.Title = value
+				opts.TitleExplicit = true
+			},
+		},
+		{
+			explicit: explicit["description"],
+			label:    "Description",
+			value:    func(plan bootstrap.InitPlan) string { return plan.Bundle.Description },
+			set: func(opts *bootstrap.Options, value string) {
+				opts.Description = value
+				opts.DescriptionExplicit = true
+			},
+		},
+	}
+	for _, question := range questions {
+		if question.explicit {
+			continue
+		}
+		for {
+			answer, answered, err := promptInitLine(reader, commandIO.stdout, question.label, question.value(plan))
+			if err != nil {
+				return opts, plan, false, err
+			}
+			if !answered {
+				return opts, plan, false, nil
+			}
+			candidate := opts
+			question.set(&candidate, answer)
+			candidatePlan, err := bootstrap.Prepare(candidate)
+			if err != nil {
+				if _, writeErr := fmt.Fprintf(commandIO.stdout, "Invalid value: %s\n", err); writeErr != nil {
+					return opts, plan, false, writeErr
+				}
+				continue
+			}
+			opts = candidate
+			plan = candidatePlan
+			break
+		}
+	}
+	if err := writeInitPlan(commandIO.stdout, plan); err != nil {
+		return opts, plan, false, err
+	}
+	proceed, answered, err := promptInitConfirmation(reader, commandIO.stdout, "Initialize this workspace?", true)
+	if err != nil {
+		return opts, plan, false, err
+	}
+	return opts, plan, answered && proceed, nil
+}
+
+func promptInitLine(reader *bufio.Reader, stdout io.Writer, label, defaultValue string) (string, bool, error) {
+	if _, err := fmt.Fprintf(stdout, "%s [%s]: ", label, defaultValue); err != nil {
+		return "", false, err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", false, err
+	}
+	if err == io.EOF && line == "" {
+		return "", false, nil
+	}
+	value := strings.TrimSpace(line)
+	if value == "" {
+		value = defaultValue
+	}
+	return value, true, nil
+}
+
+func promptInitConfirmation(reader *bufio.Reader, stdout io.Writer, question string, defaultYes bool) (bool, bool, error) {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	for {
+		if _, err := fmt.Fprintf(stdout, "%s %s ", question, suffix); err != nil {
+			return false, false, err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return false, false, err
+		}
+		if err == io.EOF && line == "" {
+			return false, false, nil
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "":
+			return defaultYes, true, nil
+		case "y", "yes":
+			return true, true, nil
+		case "n", "no":
+			return false, true, nil
+		default:
+			if _, err := fmt.Fprintln(stdout, "Please answer yes or no."); err != nil {
+				return false, false, err
+			}
+		}
+	}
+}
+
+func writeInitPlan(stdout io.Writer, plan bootstrap.InitPlan) error {
+	agent := "none detected"
+	if plan.AgentSelection == bootstrap.AgentNone {
+		agent = "skipped (--agent none)"
+	} else if plan.Agent != nil {
+		agent = "Codex " + plan.Agent.Mode + " mode"
+		if plan.Agent.Profile != "" {
+			agent += ", " + plan.Agent.Profile + " profile"
+		}
+		if plan.Agent.Detected {
+			agent += " (detected)"
+		}
+	}
+	if _, err := fmt.Fprintln(stdout, "\nPlan:"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "  Workspace:      %s\n  Root bundle:    %s\n  Bundle name:    %s\n  Title:          %s\n  Description:    %s\n  Agent guidance: %s\n\n", plan.WorkspacePath, plan.RootBundlePath, plan.Bundle.Name, plan.Bundle.Title, plan.Bundle.Description, agent); err != nil {
+		return err
+	}
+	if plan.RootChanged {
+		_, err := fmt.Fprintf(stdout, "  Root change:    %s -> %s\n\n", plan.PreviousRoot, plan.RootBundlePath)
+		return err
+	}
+	return nil
+}
+
+func cancelInit(stdout io.Writer) (int, error) {
+	_, err := fmt.Fprintln(stdout, "\nInitialization cancelled; no changes made.")
+	return 0, err
+}
+
+func initTerminal(stdin io.Reader, stdout io.Writer) bool {
+	in, ok := stdin.(*os.File)
+	if !ok {
+		return false
+	}
+	out, ok := stdout.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(in.Fd()) && term.IsTerminal(out.Fd())
 }
 
 func runUI(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
@@ -1020,47 +1260,62 @@ func parseGlobals(args []string) (globals, []string, error) {
 	global := globals{Format: formatText, Color: clirender.ColorAuto}
 	formatSet := false
 	jsonSet := false
+	command := invocationCommand(args)
 	var legacyErr error
+	var initRoot []string
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
 		case "--workspace":
-			i++
-			if i >= len(args) {
+			value, next, ok := optionValue(args, i)
+			if !ok {
 				return global, nil, fmt.Errorf("--workspace requires a directory")
 			}
-			if global.Workspace != "" && global.Workspace != args[i] {
+			i = next
+			if global.Workspace != "" && global.Workspace != value {
 				return global, nil, fmt.Errorf("--workspace may select only one directory")
 			}
-			global.Workspace = args[i]
-		case "--root", "--mount-file":
-			legacy := arg
-			if i+1 < len(args) && !isGlobalOption(args[i+1]) {
-				i++
+			global.Workspace = value
+		case "--root":
+			if command == "init" {
+				value, next, ok := optionValue(args, i)
+				if !ok {
+					return global, nil, fmt.Errorf("--root requires a directory")
+				}
+				i = next
+				initRoot = append(initRoot, "--root", value)
+				continue
+			}
+			if _, next, ok := optionValue(args, i); ok {
+				i = next
 			}
 			if legacyErr == nil {
-				if legacy == "--root" {
-					legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--root is no longer supported; use --workspace <directory>.")
-				} else {
-					legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--mount-file is no longer supported; migrate entries to <name>.mount.toml descriptors in the workspace root bundle.")
-				}
+				legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--root is an init option; use --workspace <directory> to select an existing workspace for other commands.")
+			}
+		case "--mount-file":
+			if _, next, ok := optionValue(args, i); ok {
+				i = next
+			}
+			if legacyErr == nil {
+				legacyErr = factile.NewError(factile.ErrUnsupportedCommand, "--mount-file is no longer supported; migrate entries to <name>.mount.toml descriptors in the workspace root bundle.")
 			}
 		case "--format":
-			i++
-			if i >= len(args) {
+			value, next, ok := optionValue(args, i)
+			if !ok {
 				return global, nil, fmt.Errorf("--format requires text or json")
 			}
-			if args[i] != formatText && args[i] != formatJSON {
-				return global, nil, fmt.Errorf("unsupported format: %s", args[i])
+			i = next
+			if value != formatText && value != formatJSON {
+				return global, nil, fmt.Errorf("unsupported format: %s", value)
 			}
-			if jsonSet && args[i] == formatText {
+			if jsonSet && value == formatText {
 				return global, nil, fmt.Errorf("--json cannot be combined with --format text")
 			}
-			if formatSet && args[i] != global.Format {
-				return global, nil, fmt.Errorf("conflicting output formats: %s and %s", global.Format, args[i])
+			if formatSet && value != global.Format {
+				return global, nil, fmt.Errorf("conflicting output formats: %s and %s", global.Format, value)
 			}
-			global.Format = args[i]
+			global.Format = value
 			formatSet = true
 		case "--json":
 			if formatSet && global.Format == formatText {
@@ -1069,11 +1324,12 @@ func parseGlobals(args []string) (globals, []string, error) {
 			global.Format = formatJSON
 			jsonSet = true
 		case "--color":
-			i++
-			if i >= len(args) {
+			value, next, ok := optionValue(args, i)
+			if !ok {
 				return global, nil, fmt.Errorf("--color requires auto, always, or never")
 			}
-			color, err := clirender.ParseColorMode(args[i])
+			i = next
+			color, err := clirender.ParseColorMode(value)
 			if err != nil {
 				return global, nil, err
 			}
@@ -1095,16 +1351,70 @@ func parseGlobals(args []string) (globals, []string, error) {
 	if legacyErr != nil {
 		return global, rest, legacyErr
 	}
+	rest = append(rest, initRoot...)
 	return global, rest, nil
+}
+
+func invocationCommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if isRecognizedOption(arg) {
+			if optionNeedsValue(arg) && i+1 < len(args) && !isRecognizedOption(args[i+1]) {
+				i++
+			}
+			continue
+		}
+		return arg
+	}
+	return ""
 }
 
 func isGlobalOption(arg string) bool {
 	switch arg {
-	case "--workspace", "--root", "--mount-file", "--format", "--json", "--color", "--quiet", "--version", "--help", "-h":
+	case "--workspace", "--format", "--json", "--color", "--quiet", "--version", "--help", "-h":
 		return true
 	default:
 		return false
 	}
+}
+
+func isInitOption(arg string) bool {
+	switch arg {
+	case "--root", "--name", "--title", "--description", "--agent", "--yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRecognizedOption(arg string) bool {
+	return isGlobalOption(arg) || isInitOption(arg) || arg == "--mount-file"
+}
+
+func optionNeedsValue(arg string) bool {
+	switch arg {
+	case "--workspace", "--format", "--color", "--root", "--name", "--title", "--description", "--agent", "--mount-file":
+		return true
+	default:
+		return false
+	}
+}
+
+func optionValue(args []string, index int) (string, int, bool) {
+	next := index + 1
+	if next >= len(args) || isRecognizedOption(args[next]) {
+		return "", index, false
+	}
+	return args[next], next, true
+}
+
+func structuredErrorOutputRequested(args []string) bool {
+	for i, arg := range args {
+		if arg == "--json" || arg == "--format" && i+1 < len(args) && args[i+1] == formatJSON {
+			return true
+		}
+	}
+	return false
 }
 
 func usage(global globals, stdout io.Writer, text string) (int, error) {
@@ -1146,7 +1456,7 @@ func reorderFlags(args []string, known map[string]bool) ([]string, error) {
 			flags = append(flags, arg)
 			if needsValue {
 				i++
-				if i >= len(args) {
+				if i >= len(args) || optionRecognizedBy(args[i], known) {
 					return nil, fmt.Errorf("%s requires a value", arg)
 				}
 				flags = append(flags, args[i])
@@ -1156,6 +1466,11 @@ func reorderFlags(args []string, known map[string]bool) ([]string, error) {
 		positionals = append(positionals, arg)
 	}
 	return append(flags, positionals...), nil
+}
+
+func optionRecognizedBy(arg string, known map[string]bool) bool {
+	_, ok := known[arg]
+	return ok || isRecognizedOption(arg)
 }
 
 func writeResult(stdout io.Writer, global globals, value any) (int, error) {
@@ -1184,8 +1499,20 @@ func writeInitResult(stdout io.Writer, global globals, result bootstrap.Result) 
 		return writeResult(stdout, global, result)
 	}
 	return writeRendered(stdout, global, func(renderer *clirender.Renderer) error {
-		return renderer.RenderInit(stdout, result)
+		return renderer.RenderInit(stdout, result, initHandoffWorkspace(result))
 	})
+}
+
+func initHandoffWorkspace(result bootstrap.Result) string {
+	selected, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{Workspace: filepath.FromSlash(result.WorkspacePath)})
+	if err != nil {
+		return result.WorkspacePath
+	}
+	discovered, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{})
+	if err != nil || discovered.WorkspaceDir != selected.WorkspaceDir {
+		return result.WorkspacePath
+	}
+	return ""
 }
 
 func writeSummaryResult(stdout io.Writer, global globals, result factile.SummaryResult) (int, error) {
