@@ -1,6 +1,6 @@
 {
   "name": "@factile/cli",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Scoped alias for the Factile CLI npm package.",
   "license": "Apache-2.0",
   "repository": {
@@ -16,7 +16,7 @@
     "ft": "bin/factile.js"
   },
   "dependencies": {
-    "factile": "0.4.0"
+    "factile": "0.5.0"
   },
   "publishConfig": {
     "access": "public"
