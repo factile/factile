@@ -3,7 +3,7 @@ type: Guide
 title: Editing Documents Safely
 description: Create and change OKF documents with optimistic revisions and targeted patches.
 tags: [factile, cli, writing, revisions, patch]
-timestamp: 2026-07-15T00:00:00+02:00
+timestamp: 2026-07-27T00:00:00+02:00
 ---
 
 # Editing Documents Safely
@@ -20,6 +20,16 @@ factile create /runbooks/cache-recovery \
   --type Runbook \
   --title "Cache Recovery" \
   --body ./cache-recovery.md
+```
+
+To pipe the complete Markdown body instead, use `-`:
+
+```bash
+printf '# Cache Recovery\n\nFollow the recovery steps.\n' |
+  factile create /runbooks/cache-recovery \
+    --type Runbook \
+    --title "Cache Recovery" \
+    --body -
 ```
 
 `type` must be non-empty, but Factile does not require a central type registry.
@@ -47,6 +57,10 @@ factile write /runbooks/cache-recovery \
   --body ./cache-recovery.md
 ```
 
+`write --body -` reads its complete replacement body from standard input too.
+Use `./-` when the intended input is a literal file named `-`. Empty standard
+input behaves like an empty body file.
+
 ## Patch selected fields or sections
 
 ```bash
@@ -62,12 +76,17 @@ Available patch operations can be repeated:
 |---|---|
 | `--set key=value` | Set one parsed frontmatter value. |
 | `--delete-key key` | Remove one frontmatter key. |
-| `--replace-section "Heading" file.md` | Replace one existing Markdown section. |
-| `--append-section "Heading" file.md` | Append content to one existing section. |
-| `--replace-body file.md` | Replace the complete body through the patch operation. |
+| `--replace-section "Heading" <file|->` | Replace one existing Markdown section. |
+| `--append-section "Heading" <file|->` | Append content to one existing section. |
+| `--replace-body <file|->` | Replace the complete body through the patch operation. |
 
 Patch preserves unrelated frontmatter and sections. A missing requested section
 returns `section_not_found` without a partial write.
+
+Exactly one patch content operand may read standard input. This rule applies
+across all three content options, even when they target different sections.
+Factile rejects a second `-` before consuming input or changing the document.
+Ordinary files may be repeated, and `./-` reads a literal file named `-`.
 
 ## Rename, deprecate, or delete
 

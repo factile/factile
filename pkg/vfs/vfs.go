@@ -93,13 +93,18 @@ func NormalizePath(input string) (string, error) {
 	if input == "" || !strings.HasPrefix(input, "/") {
 		return "", &Error{Code: "invalid_path", Message: "Factile path must start with /"}
 	}
-	normalizedInput := strings.ReplaceAll(input, "\\", "/")
-	for _, part := range strings.Split(normalizedInput, "/") {
+	if strings.Contains(input, "\\") {
+		return "", &Error{Code: "invalid_path", Message: "Factile path must not contain backslashes"}
+	}
+	if strings.Contains(input, "//") {
+		return "", &Error{Code: "invalid_path", Message: "Factile path must not contain repeated slashes"}
+	}
+	for _, part := range strings.Split(input, "/") {
 		if part == "." || part == ".." {
 			return "", &Error{Code: "invalid_path", Message: "Factile path must not contain . or .. segments"}
 		}
 	}
-	clean := path.Clean(normalizedInput)
+	clean := path.Clean(input)
 	if clean == "." {
 		clean = "/"
 	}

@@ -79,9 +79,9 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		}},
 		{title: "Write commands", items: []helpItem{
 			{command: "mkdir <path> [--title <title>] [--log] [--overview] [--bundle]", description: "Create a directory scaffold"},
-			{command: "create <document-path> --type <type> --title <title> --body <file>", description: "Create a document"},
-			{command: "write <document-path> --rev <rev> --body <file>", description: "Replace Markdown body"},
-			{command: "patch <document-path> --rev <rev> [patch options]", description: "Edit frontmatter or sections"},
+			{command: "create <document-path> --type <type> --title <title> --body <file|->", description: "Create a document"},
+			{command: "write <document-path> --rev <rev> --body <file|->", description: "Replace Markdown body"},
+			{command: "patch <document-path> --rev <rev> [patch options <file|->]", description: "Edit frontmatter or sections; at most one content operand may use -"},
 			{command: "rename <old-path> <new-path> --rev <rev>", description: "Move one document"},
 			{command: "delete <document-path> --rev <rev>", description: "Delete one document"},
 			{command: "deprecate <document-path> --rev <rev> --reason <text>", description: "Mark a document deprecated"},

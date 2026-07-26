@@ -77,6 +77,29 @@ writable = true
 	}
 }
 
+func TestNormalizePathRejectsNonCanonicalSeparators(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		message string
+	}{
+		{name: "leading repeated slash", input: "//guides/checklist", message: "repeated slashes"},
+		{name: "interior repeated slash", input: "/guides//checklist", message: "repeated slashes"},
+		{name: "trailing repeated slash", input: "/guides//", message: "repeated slashes"},
+		{name: "leading backslash", input: `/\guides/checklist`, message: "backslashes"},
+		{name: "interior backslash", input: `/guides\checklist`, message: "backslashes"},
+		{name: "mixed separators", input: `/guides\/checklist`, message: "backslashes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NormalizePath(tc.input)
+			var pathErr *Error
+			if !errors.As(err, &pathErr) || pathErr.Code != "invalid_path" || !strings.Contains(pathErr.Message, tc.message) {
+				t.Fatalf("NormalizePath(%q) error = %#v, want invalid_path containing %q", tc.input, err, tc.message)
+			}
+		})
+	}
+}
+
 func TestResolveLongestPrefixWins(t *testing.T) {
 	tmp := t.TempDir()
 	docsBundle := filepath.Join(tmp, "docs")
@@ -433,20 +456,17 @@ writable = "invalid"
 	}
 }
 
-func TestLoadDescriptorMountsRejectsDuplicateDescriptorPath(t *testing.T) {
+func TestLoadDescriptorMountsRejectsBackslashDescriptorPath(t *testing.T) {
 	if os.PathSeparator == '\\' {
-		t.Skip("backslash filename duplicate case is Unix-specific")
+		t.Skip("backslash filename case is Unix-specific")
 	}
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "a\\b.mount.toml"), `source = "./one"
 writable = true
 `)
-	mustWrite(t, filepath.Join(root, "a", "b.mount.toml"), `source = "../two"
-writable = true
-`)
 
-	if _, err := LoadDescriptorMounts(root); err == nil || !strings.Contains(err.Error(), "Duplicate mount descriptor path: /a/b") {
-		t.Fatalf("expected duplicate descriptor path error, got %v", err)
+	if _, err := LoadDescriptorMounts(root); err == nil || !strings.Contains(err.Error(), "Factile path must not contain backslashes") {
+		t.Fatalf("expected invalid backslash descriptor path error, got %v", err)
 	}
 }
 

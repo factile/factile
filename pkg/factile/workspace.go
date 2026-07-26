@@ -524,7 +524,7 @@ func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error)
 	}
 	root := context.RootBundleDir
 
-	var issues []ValidationIssue
+	issues := []ValidationIssue{}
 	blocking := false
 	if _, err := vfs.LoadDescriptorMounts(root); err != nil {
 		issues = append(issues, ValidationIssue{

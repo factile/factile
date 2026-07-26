@@ -282,7 +282,7 @@ func TestHandlerReaderOperations(t *testing.T) {
 		{name: "search", method: http.MethodPost, target: APIPrefix + "/reader/search", body: `{"path":"/","query":"invoice"}`, want: `"results"`},
 		{name: "context", method: http.MethodPost, target: APIPrefix + "/reader/context", body: `{"path":"/","query":"invoice","depth":0}`, want: `"concepts"`},
 		{name: "graph", method: http.MethodGet, target: APIPrefix + "/reader/graph?path=%2F&depth=1", want: `"edges"`},
-		{name: "validate", method: http.MethodGet, target: APIPrefix + "/reader/validate?path=%2F", want: `"valid":true`},
+		{name: "validate", method: http.MethodGet, target: APIPrefix + "/reader/validate?path=%2F", want: `"issues":[]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := requestWithBody(handler, tc.method, tc.target, tc.body)
@@ -484,6 +484,42 @@ func TestHandlerReadErrors(t *testing.T) {
 	unsupportedWrite := request(handler, http.MethodPost, APIPrefix+"/writer/write")
 	if unsupportedWrite.Code != http.StatusNotImplemented || !strings.Contains(unsupportedWrite.Body.String(), `"code":"unsupported_operation"`) {
 		t.Fatalf("unsupported write response = %d %s", unsupportedWrite.Code, unsupportedWrite.Body.String())
+	}
+}
+
+func TestHandlerRejectsNonCanonicalPathSeparatorsBeforeWorkspaceResolution(t *testing.T) {
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	handler := NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{Workspace: missingWorkspace}), Options{})
+	for _, tc := range []struct {
+		name    string
+		method  string
+		target  string
+		body    string
+		message string
+	}{
+		{
+			name:    "repeated slashes",
+			method:  http.MethodGet,
+			target:  APIPrefix + "/reader/stat?path=%2Fguides%2F%2Fchecklist",
+			message: "repeated slashes",
+		},
+		{
+			name:    "backslash",
+			method:  http.MethodPost,
+			target:  APIPrefix + "/reader/search",
+			body:    `{"path":"/guides\\checklist","query":"checklist"}`,
+			message: "backslashes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := requestWithBody(handler, tc.method, tc.target, tc.body)
+			if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"invalid_path"`) || !strings.Contains(response.Body.String(), tc.message) {
+				t.Fatalf("%s response = %d %s", tc.name, response.Code, response.Body.String())
+			}
+		})
+	}
+	if _, err := os.Stat(missingWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("UI path rejection accessed or created the missing workspace: %v", err)
 	}
 }
 

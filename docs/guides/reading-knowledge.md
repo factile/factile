@@ -3,7 +3,7 @@ type: Guide
 title: Reading Knowledge
 description: Navigate, read, search, assemble context, inspect links, and validate a Factile workspace.
 tags: [factile, cli, reader, context]
-timestamp: 2026-07-15T00:00:00+02:00
+timestamp: 2026-07-27T00:00:00+02:00
 ---
 
 # Reading Knowledge
@@ -56,6 +56,12 @@ budget:
 factile context / "how do releases roll back?"
 factile context / "release rollback" --max-tokens 8000 --depth 1
 ```
+
+Search ignores common question framing such as `how do` and trims surrounding
+question marks, exclamation marks, commas, semicolons, quotes, and brackets
+when substantive terms remain. It does not stem words or infer synonyms, and
+identifier characters in paths and resources remain literal. JSON results
+still echo the original query.
 
 `--depth 0` disables related-link expansion. `--depth 1` includes one-hop links
 and backlinks; deeper values are not supported. Omitted documents are reported

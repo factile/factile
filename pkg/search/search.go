@@ -22,11 +22,19 @@ type Scored struct {
 	Path    string
 }
 
+var questionScaffolding = map[string]bool{
+	"how": true, "what": true, "where": true, "when": true, "why": true,
+	"who": true, "which": true, "do": true, "does": true, "did": true,
+	"is": true, "are": true, "was": true, "were": true, "can": true,
+	"could": true, "should": true, "would": true,
+}
+
 func Score(query string, fields []Fields) []Scored {
-	terms := strings.Fields(strings.ToLower(query))
+	terms := queryTerms(query)
 	if len(terms) == 0 {
 		return nil
 	}
+	phrase := strings.Join(terms, " ")
 	var scored []Scored
 	for i, item := range fields {
 		score := 0.0
@@ -36,7 +44,7 @@ func Score(query string, fields []Fields) []Scored {
 		score += scoreText(strings.ToLower(item.ConceptID), terms, 5)
 		score += scoreText(strings.ToLower(item.Resource), terms, 4)
 		score += scoreText(strings.ToLower(item.Body), terms, 1)
-		if strings.Contains(strings.ToLower(item.Title), strings.ToLower(query)) {
+		if strings.Contains(strings.ToLower(item.Title), phrase) {
 			score += 10
 		}
 		if score > 0 {
@@ -55,6 +63,29 @@ func Score(query string, fields []Fields) []Scored {
 		return scored[i].Score > scored[j].Score
 	})
 	return scored
+}
+
+func queryTerms(query string) []string {
+	cleaned := make([]string, 0)
+	seen := map[string]bool{}
+	for _, term := range strings.Fields(strings.ToLower(query)) {
+		term = strings.Trim(term, ",;!?\"'`()[]{}<>")
+		if term == "" || seen[term] {
+			continue
+		}
+		seen[term] = true
+		cleaned = append(cleaned, term)
+	}
+	substantive := make([]string, 0, len(cleaned))
+	for _, term := range cleaned {
+		if !questionScaffolding[term] {
+			substantive = append(substantive, term)
+		}
+	}
+	if len(substantive) == 0 {
+		return cleaned
+	}
+	return substantive
 }
 
 func scoreText(text string, terms []string, weight float64) float64 {

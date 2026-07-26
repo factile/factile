@@ -3,7 +3,7 @@ type: Reference
 title: Root Layout v2 Command Reference
 description: Accepted command syntax for the explicit Factile workspace and bundle model.
 tags: [factile, cli, commands, reference]
-timestamp: 2026-07-21T00:00:00+02:00
+timestamp: 2026-07-27T00:00:00+02:00
 ---
 
 # Root Layout v2 Command Reference
@@ -152,9 +152,9 @@ deprecated compatibility flag.
 factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]
 
 factile create <document-path>
-  --type <type> --title <title> --body <file>
+  --type <type> --title <title> --body <file|->
 
-factile write <document-path> --rev <rev> --body <file>
+factile write <document-path> --rev <rev> --body <file|->
 
 factile patch <document-path> --rev <rev> [patch options]
 
@@ -163,18 +163,25 @@ factile delete <document-path> --rev <rev>
 factile deprecate <document-path> --rev <rev> --reason <text>
 ```
 
+For `create` and `write`, a body operand of exactly `-` reads the complete
+Markdown body from standard input. Use `./-` to read a literal file named `-`.
+Ordinary file operands retain their existing behavior.
+
 Patch options are:
 
 ```text
 --set <key=value>
 --delete-key <key>
---replace-section <heading> <file>
---append-section <heading> <file>
---replace-body <file>
+--replace-section <heading> <file|->
+--append-section <heading> <file|->
+--replace-body <file|->
 ```
 
-The options may be repeated. All existing-document writes require the current
-document revision.
+The options may be repeated. Across all patch content options, at most one
+operand may be exactly `-`; it reads standard input. Factile rejects a second
+`-` before reading standard input or changing the document. Ordinary files may
+be repeated, and `./-` addresses a literal file named `-`. All
+existing-document writes require the current document revision.
 
 ## Bundle inspection
 

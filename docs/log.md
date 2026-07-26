@@ -1,5 +1,16 @@
 # Documentation Log
 
+## 2026-07-27
+
+- Clarified that public Factile paths use single forward-slash separators;
+  repeated slashes and backslashes are rejected before source resolution.
+- Documented deterministic cleanup of natural-language search questions while
+  preserving literal path and resource identifiers and the original query.
+- Added standard-input bodies for `create` and `write` through `--body -`,
+  while retaining ordinary files and `./-` for a literal dash filename.
+- Added one standard-input content operand per `patch` invocation, with
+  complete argument validation before input consumption or document mutation.
+
 ## 2026-07-21
 
 - Reopened the `factile init` delivery epic after adversarial review exposed

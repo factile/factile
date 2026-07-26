@@ -3,7 +3,7 @@ type: Domain Concept
 title: Workspaces, Bundles, Paths, Sources, and Views
 description: Accepted Root Layout v2 model for locating and composing local Factile knowledge.
 tags: [factile, workspaces, bundles, paths, mounts, sources, views]
-timestamp: 2026-07-21T00:00:00+02:00
+timestamp: 2026-07-27T00:00:00+02:00
 ---
 
 # Workspaces, Bundles, Paths, Sources, and Views
@@ -87,8 +87,9 @@ Factile paths describe logical knowledge, not checkout locations:
 | `/guides/setup` | `guides/setup.md` |
 
 Public document paths omit `.md`; input containing `.md` can be normalized.
-Paths begin with `/`. `.factile` and `.git` are private implementation segments
-and cannot become public knowledge paths.
+Paths begin with `/` and use one forward slash between segments. Repeated
+slashes and backslashes are invalid. `.factile` and `.git` are private
+implementation segments and cannot become public knowledge paths.
 
 `index.md` is directory navigation and `log.md` is chronological history. They
 are reserved files rather than document concepts. Other Markdown documents use

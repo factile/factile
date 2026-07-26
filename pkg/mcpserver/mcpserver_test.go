@@ -137,6 +137,34 @@ func TestServeToolsListAndReadCall(t *testing.T) {
 	}
 }
 
+func TestMCPRejectsNonCanonicalPathSeparators(t *testing.T) {
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: mcpWorkspace(t)})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_stat","arguments":{"path":"/guides//checklist"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_read","arguments":{"path":"/guides\\checklist"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	for _, tc := range []struct {
+		id      int
+		message string
+	}{
+		{id: 1, message: "repeated slashes"},
+		{id: 2, message: "backslashes"},
+	} {
+		response := responses[tc.id]
+		if response.Error == nil {
+			t.Fatalf("MCP path rejection %d succeeded: %#v", tc.id, response)
+		}
+		data, ok := response.Error.Data.(map[string]any)
+		if !ok || data["code"] != factile.ErrInvalidPath || !strings.Contains(response.Error.Message, tc.message) {
+			t.Fatalf("MCP path rejection %d = %#v, want invalid_path containing %q", tc.id, response, tc.message)
+		}
+	}
+}
+
 func TestServeV2MountToolsAndReaderCards(t *testing.T) {
 	tmp := t.TempDir()
 	writeMCPCombinedWorkspace(t, tmp)
@@ -735,6 +763,32 @@ func TestServeStructuredContentContracts(t *testing.T) {
 	validation := mcpStructured[factile.ValidationResult](t, responses[6])
 	if validation.Path != "/product-docs" || !validation.Valid || len(validation.Issues) != 0 {
 		t.Fatalf("unexpected MCP validate contract: %#v", validation)
+	}
+	var validationPayload map[string]json.RawMessage
+	if err := json.Unmarshal(responses[6].Result.StructuredContent, &validationPayload); err != nil {
+		t.Fatalf("MCP validation structured content did not parse: %v", err)
+	}
+	if string(validationPayload["issues"]) != "[]" {
+		t.Fatalf("clean MCP validation issues = %s, want []", validationPayload["issues"])
+	}
+}
+
+func TestMCPNaturalQuestionSearchPreservesOriginalQuery(t *testing.T) {
+	workspace := mcpWorkspace(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
+	const query = "what does invoice import?"
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/product-docs","query":"what does invoice import?"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	results := mcpStructured[factile.SearchResults](t, mcpResponses(t, out.String())[1])
+	if results.Query != query || len(results.Results) == 0 || results.Results[0].Concept.Path != "/product-docs/workflows/invoice-import" {
+		t.Fatalf("natural question search = %#v", results)
+	}
+	if !strings.Contains(strings.ToLower(results.Results[0].Snippet), "invoice") {
+		t.Fatalf("natural question snippet does not use a substantive term: %q", results.Results[0].Snippet)
 	}
 }
 

@@ -957,6 +957,9 @@ title = "Mounted Docs"
 	if !validated.Valid {
 		t.Fatalf("expected valid root and mounted docs: %#v", validated.Issues)
 	}
+	if validated.Issues == nil {
+		t.Fatal("clean validation issues must be an empty slice")
+	}
 }
 
 func TestWorkspaceV2RootWritePatchRenameDeleteDeprecate(t *testing.T) {
@@ -1298,6 +1301,107 @@ func TestWorkspaceListVirtualFoldersFromNestedMounts(t *testing.T) {
 	}
 	if !runbookValidation.Valid {
 		t.Fatalf("expected valid runbook scope: %#v", runbookValidation.Issues)
+	}
+}
+
+func TestWorkspaceReaderOperationsRejectNonCanonicalSeparatorsBeforeResolution(t *testing.T) {
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: missingWorkspace})
+	ctx := context.Background()
+	operations := []struct {
+		name string
+		call func(string) error
+	}{
+		{name: "list", call: func(path string) error {
+			_, err := ws.List(ctx, path, factile.ListOptions{})
+			return err
+		}},
+		{name: "stat", call: func(path string) error {
+			_, err := ws.Stat(ctx, path, factile.StatOptions{})
+			return err
+		}},
+		{name: "read", call: func(path string) error {
+			_, err := ws.Read(ctx, path, factile.ReadOptions{})
+			return err
+		}},
+		{name: "search", call: func(path string) error {
+			_, err := ws.Search(ctx, path, "checklist", factile.SearchOptions{})
+			return err
+		}},
+		{name: "context", call: func(path string) error {
+			_, err := ws.Context(ctx, path, "checklist", factile.ContextOptions{})
+			return err
+		}},
+		{name: "graph", call: func(path string) error {
+			_, err := ws.Graph(ctx, path, factile.GraphOptions{})
+			return err
+		}},
+		{name: "validate", call: func(path string) error {
+			_, err := ws.Validate(ctx, path, factile.ValidateOptions{})
+			return err
+		}},
+	}
+	invalidPaths := []string{
+		"//guides/checklist",
+		"/guides//checklist",
+		"/guides//",
+		`/\guides/checklist`,
+		`/guides\checklist`,
+		`/guides\/checklist`,
+	}
+	for _, operation := range operations {
+		for _, path := range invalidPaths {
+			t.Run(operation.name+"/"+strconv.Quote(path), func(t *testing.T) {
+				err := operation.call(path)
+				if factile.ErrorCode(factile.NormalizeError(err)) != factile.ErrInvalidPath {
+					t.Fatalf("%s(%q) error = %v, want invalid_path", operation.name, path, err)
+				}
+			})
+		}
+	}
+	if _, err := os.Stat(missingWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("reader path rejection accessed or created the missing workspace: %v", err)
+	}
+}
+
+func TestWorkspaceNaturalQuestionSearchAndContext(t *testing.T) {
+	root := t.TempDir()
+	writeRootConfig(t, root)
+	writeOKFFile(
+		t,
+		filepath.Join(root, "coding", "practices", "boundary-contracts.md"),
+		"Guide",
+		"Boundary Contracts",
+		"# Boundary Contracts\n\nHow do contract releases work? How do boundaries evolve?\n",
+	)
+	writeOKFFile(
+		t,
+		filepath.Join(root, "coding", "practices", "project", "releases.md"),
+		"Guide",
+		"Project Releases",
+		"# Project Releases\n\nRoll back a release by restoring the prior artifact.\n",
+	)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	ctx := context.Background()
+	const query = "how do releases roll back?"
+
+	results, err := ws.Search(ctx, "/", query, factile.SearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results.Query != query || len(results.Results) == 0 || results.Results[0].Concept.Path != "/coding/practices/project/releases" {
+		t.Fatalf("natural question search = %#v", results)
+	}
+	if !strings.Contains(strings.ToLower(results.Results[0].Snippet), "releases") {
+		t.Fatalf("natural question snippet does not use a substantive term: %q", results.Results[0].Snippet)
+	}
+
+	pack, err := ws.Context(ctx, "/", query, factile.ContextOptions{MaxTokens: 4000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.Query != query || len(pack.Concepts) == 0 || pack.Concepts[0].Path != "/coding/practices/project/releases" {
+		t.Fatalf("natural question context = %#v", pack)
 	}
 }
 

@@ -254,11 +254,11 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 	case "mkdir":
 		return runMkdir(ctx, ws, args, global, stdout)
 	case "create":
-		return runCreate(ctx, ws, args, global, stdout)
+		return runCreate(ctx, ws, args, global, stdin, stdout)
 	case "write":
-		return runWrite(ctx, ws, args, global, stdout)
+		return runWrite(ctx, ws, args, global, stdin, stdout)
 	case "patch":
-		return runPatch(ctx, ws, args, global, stdout)
+		return runPatch(ctx, ws, args, global, stdin, stdout)
 	case "rename":
 		return runRename(ctx, ws, args, global, stdout)
 	case "delete":
@@ -702,9 +702,19 @@ func runMkdir(ctx context.Context, ws factile.Workspace, args []string, global g
 	return writeMkdirResult(stdout, global, result)
 }
 
-func runCreate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+func readContent(filename string, stdin io.Reader) ([]byte, error) {
+	if filename != "-" {
+		return os.ReadFile(filename)
+	}
+	if stdin == nil {
+		return nil, fmt.Errorf("standard input is unavailable")
+	}
+	return io.ReadAll(stdin)
+}
+
+func runCreate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile create <document-path> --type <type> --title <title> --body <file>")
+		return showUsage(stdout, "factile create <document-path> --type <type> --title <title> --body <file|->")
 	}
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -719,9 +729,9 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 		return 2, err
 	}
 	if fs.NArg() != 1 || *typeValue == "" || *title == "" || *bodyFile == "" {
-		return usage(global, stdout, "factile create <document-path> --type <type> --title <title> --body <file>")
+		return usage(global, stdout, "factile create <document-path> --type <type> --title <title> --body <file|->")
 	}
-	body, err := os.ReadFile(*bodyFile)
+	body, err := readContent(*bodyFile, stdin)
 	if err != nil {
 		return 0, err
 	}
@@ -732,9 +742,9 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 	return writeConceptConfirmation(stdout, global, "Created", result)
 }
 
-func runWrite(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+func runWrite(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile write <document-path> --rev <rev> --body <file>")
+		return showUsage(stdout, "factile write <document-path> --rev <rev> --body <file|->")
 	}
 	fs := flag.NewFlagSet("write", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -748,9 +758,9 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 		return 2, err
 	}
 	if fs.NArg() != 1 || *bodyFile == "" {
-		return usage(global, stdout, "factile write <document-path> --rev <rev> --body <file>")
+		return usage(global, stdout, "factile write <document-path> --rev <rev> --body <file|->")
 	}
-	body, err := os.ReadFile(*bodyFile)
+	body, err := readContent(*bodyFile, stdin)
 	if err != nil {
 		return 0, err
 	}
@@ -761,15 +771,26 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 	return writeConceptConfirmation(stdout, global, "Wrote", result)
 }
 
-func runPatch(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+const patchUsage = `factile patch <document-path> --rev <rev> [patch options]
+Content options: --replace-section <heading> <file|->, --append-section <heading> <file|->, --replace-body <file|->
+At most one patch content operand may be -.`
+
+func runPatch(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile patch <document-path> --rev <rev> [patch options]")
+		return showUsage(stdout, patchUsage)
 	}
 	if len(args) < 2 {
-		return usage(global, stdout, "factile patch <document-path> --rev <rev> [patch options]")
+		return usage(global, stdout, patchUsage)
 	}
 	path := args[1]
 	input := factile.PatchConceptInput{Set: map[string]any{}, ReplaceSections: map[string]string{}, AppendSections: map[string]string{}}
+	type contentOperand struct {
+		option   string
+		heading  string
+		filename string
+	}
+	var content []contentOperand
+	stdinOperands := 0
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--rev":
@@ -802,37 +823,52 @@ func runPatch(ctx context.Context, ws factile.Workspace, args []string, global g
 			if i+2 >= len(args) {
 				return 2, fmt.Errorf("--replace-section requires heading and file")
 			}
-			heading := args[i+1]
-			data, err := os.ReadFile(args[i+2])
-			if err != nil {
-				return 0, err
+			operand := contentOperand{option: args[i], heading: args[i+1], filename: args[i+2]}
+			content = append(content, operand)
+			if operand.filename == "-" {
+				stdinOperands++
 			}
-			input.ReplaceSections[heading] = string(data)
 			i += 2
 		case "--append-section":
 			if i+2 >= len(args) {
 				return 2, fmt.Errorf("--append-section requires heading and file")
 			}
-			heading := args[i+1]
-			data, err := os.ReadFile(args[i+2])
-			if err != nil {
-				return 0, err
+			operand := contentOperand{option: args[i], heading: args[i+1], filename: args[i+2]}
+			content = append(content, operand)
+			if operand.filename == "-" {
+				stdinOperands++
 			}
-			input.AppendSections[heading] = string(data)
 			i += 2
 		case "--replace-body":
 			i++
 			if i >= len(args) {
 				return 2, fmt.Errorf("--replace-body requires a file")
 			}
-			data, err := os.ReadFile(args[i])
-			if err != nil {
-				return 0, err
+			operand := contentOperand{option: args[i-1], filename: args[i]}
+			content = append(content, operand)
+			if operand.filename == "-" {
+				stdinOperands++
 			}
-			body := string(data)
-			input.ReplaceBody = &body
 		default:
 			return 2, fmt.Errorf("unknown patch option: %s", args[i])
+		}
+	}
+	if stdinOperands > 1 {
+		return usage(global, stdout, "At most one patch content operand may be -")
+	}
+	for _, operand := range content {
+		data, err := readContent(operand.filename, stdin)
+		if err != nil {
+			return 0, err
+		}
+		switch operand.option {
+		case "--replace-section":
+			input.ReplaceSections[operand.heading] = string(data)
+		case "--append-section":
+			input.AppendSections[operand.heading] = string(data)
+		case "--replace-body":
+			body := string(data)
+			input.ReplaceBody = &body
 		}
 	}
 	result, err := ws.Patch(ctx, path, input)

@@ -49,6 +49,9 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			"Curator commands",
 			"Bundle admin",
 			"Agents and MCP",
+			"--body <file|->",
+			"patch options <file|->",
+			"at most one content operand may use -",
 			"Advanced agent guidance reconfiguration",
 			"Diagnose agent setup",
 			"Use --json for scripts and agents",
@@ -238,7 +241,9 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "status", args: []string{"status", "--help"}, want: "factile status"},
 		{name: "search", args: []string{"search", "--help"}, want: "factile search <path> <query> [--view <id>]"},
 		{name: "mkdir", args: []string{"mkdir", "--help"}, want: "factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]"},
-		{name: "create", args: []string{"create", "--help"}, want: "factile create <document-path> --type <type> --title <title> --body <file>"},
+		{name: "create", args: []string{"create", "--help"}, want: "factile create <document-path> --type <type> --title <title> --body <file|->"},
+		{name: "write", args: []string{"write", "--help"}, want: "factile write <document-path> --rev <rev> --body <file|->"},
+		{name: "patch", args: []string{"patch", "--help"}, want: patchUsage},
 		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]"},
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
 		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]"},
@@ -303,7 +308,7 @@ func TestCLICreateRequiresTitle(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("create without title exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	if strings.TrimSpace(stdout.String()) != "factile create <document-path> --type <type> --title <title> --body <file>" {
+	if strings.TrimSpace(stdout.String()) != "factile create <document-path> --type <type> --title <title> --body <file|->" {
 		t.Fatalf("unexpected create usage: %s", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -352,6 +357,34 @@ func TestCLIJSONFlagMatchesFormatJSON(t *testing.T) {
 		t.Fatalf("--json --color always read exit code = %d stderr=%s", code, coloredJSONErr.String())
 	}
 	assertNoTerminalEscapes(t, coloredJSONOut.String())
+}
+
+func TestCLIRejectsNonCanonicalPathSeparatorsBeforeWorkspaceResolution(t *testing.T) {
+	missingWorkspace := filepath.Join(t.TempDir(), "missing")
+	for _, tc := range []struct {
+		name    string
+		message string
+		args    []string
+	}{
+		{
+			name:    "repeated slashes",
+			message: "repeated slashes",
+			args:    []string{"stat", "/guides//checklist"},
+		},
+		{
+			name:    "backslash",
+			message: "backslashes",
+			args:    []string{"read", `/guides\checklist`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"--workspace", missingWorkspace, "--json"}, tc.args...)
+			assertCLIJSONError(t, 2, factile.ErrInvalidPath, tc.message, args...)
+		})
+	}
+	if _, err := os.Stat(missingWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("CLI path rejection accessed or created the missing workspace: %v", err)
+	}
 }
 
 func TestCLIPathShortcut(t *testing.T) {
@@ -539,6 +572,45 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 	}
 }
 
+func TestCLIValidateEncodesEmptyIssuesAsArray(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"--workspace", fixture, "validate", "/product-docs", "--json"},
+		nil,
+		&stdout,
+		&stderr,
+	)
+	if code != 0 {
+		t.Fatalf("validate exit code = %d stderr=%s", code, stderr.String())
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("validate output did not parse: %v\n%s", err, stdout.String())
+	}
+	if string(payload["issues"]) != "[]" {
+		t.Fatalf("clean validation issues = %s, want []", payload["issues"])
+	}
+}
+
+func TestCLINaturalQuestionSearchPreservesOriginalQuery(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	const query = "what does invoice import?"
+	results := runCLIJSON[factile.SearchResults](
+		t,
+		"--workspace", fixture,
+		"search", "/product-docs", query,
+		"--json",
+	)
+	if results.Query != query || len(results.Results) == 0 || results.Results[0].Concept.Path != "/product-docs/workflows/invoice-import" {
+		t.Fatalf("natural question search = %#v", results)
+	}
+	if !strings.Contains(strings.ToLower(results.Results[0].Snippet), "invoice") {
+		t.Fatalf("natural question snippet does not use a substantive term: %q", results.Results[0].Snippet)
+	}
+}
+
 func TestCLIJSONWriterContractShapes(t *testing.T) {
 	fixture := cliFixtureWorkspace(t)
 	body := filepath.Join(t.TempDir(), "body.md")
@@ -578,6 +650,305 @@ func TestCLIJSONWriterContractShapes(t *testing.T) {
 	deleted := runCLIJSON[factile.DeleteResult](t, "--workspace", fixture, "delete", path, "--rev", patched.Concept.Revision, "--json")
 	if deleted.Path != path || !deleted.Deleted {
 		t.Fatalf("unexpected delete contract: %#v", deleted)
+	}
+}
+
+func TestCLICreateAndWriteBodiesFromStdin(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	path := "/product-docs/workflows/piped-input"
+	created := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader("# Piped Input\n\nCreated from standard input.\n"),
+		"--workspace", fixture,
+		"create", path,
+		"--type", "Workflow",
+		"--title", "Piped Input",
+		"--body", "-",
+		"--json",
+	)
+	if created.Concept.Path != path || !strings.Contains(created.Concept.Markdown, "Created from standard input.") || created.Concept.Revision == "" {
+		t.Fatalf("stdin create = %#v", created.Concept)
+	}
+
+	written := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader("# Piped Input\n\nReplaced from standard input.\n"),
+		"--workspace", fixture,
+		"write", path,
+		"--rev", created.Concept.Revision,
+		"--body", "-",
+		"--json",
+	)
+	if !strings.Contains(written.Concept.Markdown, "Replaced from standard input.") || written.Concept.Revision == created.Concept.Revision {
+		t.Fatalf("stdin write = %#v", written.Concept)
+	}
+
+	emptied := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader(""),
+		"--workspace", fixture,
+		"write", path,
+		"--rev", written.Concept.Revision,
+		"--body", "-",
+		"--json",
+	)
+	if strings.TrimSpace(emptied.Concept.Markdown) != "" || emptied.Concept.Revision == written.Concept.Revision {
+		t.Fatalf("empty stdin write = %#v", emptied.Concept)
+	}
+
+	emptyCreated := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader(""),
+		"--workspace", fixture,
+		"create", "/product-docs/workflows/empty-input",
+		"--type", "Workflow",
+		"--title", "Empty Input",
+		"--body", "-",
+		"--json",
+	)
+	if strings.TrimSpace(emptyCreated.Concept.Markdown) != "" || emptyCreated.Concept.Revision == "" {
+		t.Fatalf("empty stdin create = %#v", emptyCreated.Concept)
+	}
+}
+
+func TestReadContentRejectsUnavailableStdin(t *testing.T) {
+	if _, err := readContent("-", nil); err == nil || !strings.Contains(err.Error(), "standard input is unavailable") {
+		t.Fatalf("readContent(-, nil) error = %v", err)
+	}
+}
+
+func TestCLIContentInputPreservesFilesAndWriterFailures(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	bodyDir := t.TempDir()
+	writeCLITestFile(t, filepath.Join(bodyDir, "-"), "# Literal Dash\n\nRead from a file.\n")
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(bodyDir)
+	literal := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader("# Wrong Source\n"),
+		"--workspace", fixture,
+		"create", "/product-docs/workflows/literal-dash",
+		"--type", "Workflow",
+		"--title", "Literal Dash",
+		"--body", "./-",
+		"--json",
+	)
+	if !strings.Contains(literal.Concept.Markdown, "Read from a file.") || strings.Contains(literal.Concept.Markdown, "Wrong Source") {
+		t.Fatalf("literal ./- input = %#v", literal.Concept)
+	}
+	t.Chdir(originalDir)
+
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+		exit int
+		code string
+	}{
+		{name: "missing", path: "/product-docs/workflows/missing-body", body: filepath.Join(bodyDir, "missing.md"), exit: 4, code: factile.ErrConceptNotFound},
+		{name: "unreadable", path: "/product-docs/workflows/unreadable-body", body: bodyDir, exit: 1, code: "general_failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertCLIJSONErrorWithInput(
+				t,
+				strings.NewReader("# Ignored\n"),
+				tc.exit,
+				tc.code,
+				"",
+				"--workspace", fixture,
+				"create", tc.path,
+				"--type", "Workflow",
+				"--title", "Rejected",
+				"--body", tc.body,
+				"--json",
+			)
+			ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: fixture})
+			if _, err := ws.Read(context.Background(), tc.path, factile.ReadOptions{}); factile.ErrorCode(err) != factile.ErrConceptNotFound {
+				t.Fatalf("rejected content input created %s: %v", tc.path, err)
+			}
+		})
+	}
+
+	existingPath := "/product-docs/workflows/invoice-import"
+	before := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", existingPath, "--json")
+	assertCLIJSONErrorWithInput(
+		t,
+		strings.NewReader("# Missing Revision\n"),
+		5,
+		factile.ErrRevisionRequired,
+		"Expected revision is required",
+		"--workspace", fixture,
+		"write", existingPath,
+		"--body", "-",
+		"--json",
+	)
+	assertCLIJSONErrorWithInput(
+		t,
+		strings.NewReader("# Stale Revision\n"),
+		5,
+		factile.ErrRevisionMismatch,
+		"Revision mismatch",
+		"--workspace", fixture,
+		"write", existingPath,
+		"--rev", "sha256:stale",
+		"--body", "-",
+		"--json",
+	)
+	after := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", existingPath, "--json")
+	if after.Concept.Revision != before.Concept.Revision || after.Concept.Markdown != before.Concept.Markdown {
+		t.Fatalf("rejected stdin write changed the document: before=%#v after=%#v", before.Concept, after.Concept)
+	}
+
+	readOnlyWorkspace := cliV2Workspace(t)
+	readOnlyPath := "/engineering/common/guides/setup"
+	readOnlyBefore := runCLIJSON[factile.ConceptResult](t, "--workspace", readOnlyWorkspace, "read", readOnlyPath, "--json")
+	assertCLIJSONErrorWithInput(
+		t,
+		strings.NewReader("# Read Only Change\n"),
+		6,
+		factile.ErrSourceReadOnly,
+		"",
+		"--workspace", readOnlyWorkspace,
+		"write", readOnlyPath,
+		"--rev", readOnlyBefore.Concept.Revision,
+		"--body", "-",
+		"--json",
+	)
+	readOnlyAfter := runCLIJSON[factile.ConceptResult](t, "--workspace", readOnlyWorkspace, "read", readOnlyPath, "--json")
+	if readOnlyAfter.Concept.Revision != readOnlyBefore.Concept.Revision || readOnlyAfter.Concept.Markdown != readOnlyBefore.Concept.Markdown {
+		t.Fatalf("read-only stdin write changed the document: before=%#v after=%#v", readOnlyBefore.Concept, readOnlyAfter.Concept)
+	}
+}
+
+func TestCLIPatchContentFromStdin(t *testing.T) {
+	path := "/product-docs/workflows/invoice-import"
+	cases := []struct {
+		name  string
+		input string
+		args  []string
+		want  string
+	}{
+		{
+			name:  "replace body",
+			input: "# Replaced Body\n\nThe complete body came from standard input.\n",
+			args:  []string{"--replace-body", "-"},
+			want:  "The complete body came from standard input.",
+		},
+		{
+			name:  "replace section",
+			input: "The current flow came from standard input.\n",
+			args:  []string{"--replace-section", "Current Flow", "-"},
+			want:  "The current flow came from standard input.",
+		},
+		{
+			name:  "append section",
+			input: "This related note came from standard input.\n",
+			args:  []string{"--append-section", "Related", "-"},
+			want:  "This related note came from standard input.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := cliFixtureWorkspace(t)
+			before := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", path, "--json")
+			args := []string{"--workspace", fixture, "patch", path, "--rev", before.Concept.Revision}
+			args = append(args, tc.args...)
+			args = append(args, "--json")
+			patched := runCLIJSONWithInput[factile.ConceptResult](t, strings.NewReader(tc.input), args...)
+			if patched.Concept.Path != path || patched.Concept.Revision == before.Concept.Revision || !strings.Contains(patched.Concept.Markdown, tc.want) {
+				t.Fatalf("%s stdin patch = %#v", tc.name, patched.Concept)
+			}
+		})
+	}
+}
+
+func TestCLIPatchStdinMixesWithRepeatedOrdinaryFilesAndMetadata(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	path := "/product-docs/workflows/invoice-import"
+	before := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", path, "--json")
+
+	inputDir := t.TempDir()
+	writeCLITestFile(t, filepath.Join(inputDir, "-"), "Content read from the literal dash file.\n")
+	t.Chdir(inputDir)
+
+	patched := runCLIJSONWithInput[factile.ConceptResult](
+		t,
+		strings.NewReader("Content read from standard input.\n"),
+		"--workspace", fixture,
+		"patch", path,
+		"--rev", before.Concept.Revision,
+		"--replace-section", "Current Flow", "./-",
+		"--append-section", "Related", "-",
+		"--append-section", "Agent Notes", "./-",
+		"--set", "status=active",
+		"--delete-key", "description",
+		"--json",
+	)
+	if patched.Concept.Revision == before.Concept.Revision ||
+		!strings.Contains(patched.Concept.Markdown, "Content read from standard input.") ||
+		strings.Count(patched.Concept.Markdown, "Content read from the literal dash file.") != 2 ||
+		patched.Concept.Frontmatter["status"] != "active" {
+		t.Fatalf("mixed stdin patch = %#v", patched.Concept)
+	}
+	if _, exists := patched.Concept.Frontmatter["description"]; exists {
+		t.Fatalf("mixed stdin patch retained deleted description: %#v", patched.Concept.Frontmatter)
+	}
+}
+
+func TestCLIPatchRejectsMultipleStdinOperandsBeforeReadingOrMutation(t *testing.T) {
+	fixture := cliFixtureWorkspace(t)
+	path := "/product-docs/workflows/invoice-import"
+	before := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", path, "--json")
+	missing := filepath.Join(t.TempDir(), "missing.md")
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "body and replacement",
+			args: []string{"--replace-body", "-", "--replace-section", "Current Flow", "-"},
+		},
+		{
+			name: "replacement and append",
+			args: []string{"--replace-section", "Current Flow", "-", "--append-section", "Related", "-"},
+		},
+		{
+			name: "repeated append",
+			args: []string{"--append-section", "Current Flow", "-", "--append-section", "Related", "-"},
+		},
+		{
+			name: "complete parse before files",
+			args: []string{"--replace-section", "Current Flow", missing, "--append-section", "Related", "-", "--replace-body", "-"},
+		},
+	}
+	const wantError = "{\"error\":{\"code\":\"invalid_path\",\"message\":\"At most one patch content operand may be -\"}}\n"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stdin := strings.NewReader("This input must remain unread.\n")
+			unread := stdin.Len()
+			args := []string{"--workspace", fixture, "patch", path, "--rev", before.Concept.Revision}
+			args = append(args, tc.args...)
+			args = append(args, "--json")
+			var stdout, stderr bytes.Buffer
+			code := Run(context.Background(), args, stdin, &stdout, &stderr)
+			if code != 2 || stdout.Len() != 0 || stderr.String() != wantError {
+				t.Fatalf("multiple stdin patch code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stdin.Len() != unread {
+				t.Fatalf("multiple stdin patch consumed %d input bytes", unread-stdin.Len())
+			}
+			after := runCLIJSON[factile.ConceptResult](t, "--workspace", fixture, "read", path, "--json")
+			if after.Concept.Revision != before.Concept.Revision ||
+				after.Concept.Markdown != before.Concept.Markdown ||
+				fmtJSON(after.Concept.Frontmatter) != fmtJSON(before.Concept.Frontmatter) {
+				t.Fatalf("multiple stdin patch changed the document: before=%#v after=%#v", before.Concept, after.Concept)
+			}
+		})
 	}
 }
 
@@ -3359,6 +3730,20 @@ func runCLIJSON[T any](t *testing.T, args ...string) T {
 	return runCLIJSONWithCode[T](t, 0, args...)
 }
 
+func runCLIJSONWithInput[T any](t *testing.T, stdin io.Reader, args ...string) T {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), args, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("%v exit code = %d, want 0 stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("%v wrote stderr: %s", args, stderr.String())
+	}
+	assertNoTerminalEscapes(t, stdout.String())
+	return decodeJSON[T](t, stdout.Bytes())
+}
+
 func runCLIJSONWithCode[T any](t *testing.T, wantCode int, args ...string) T {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -3375,8 +3760,13 @@ func runCLIJSONWithCode[T any](t *testing.T, wantCode int, args ...string) T {
 
 func assertCLIJSONError(t *testing.T, wantExit int, wantCode string, wantMessage string, args ...string) {
 	t.Helper()
+	assertCLIJSONErrorWithInput(t, nil, wantExit, wantCode, wantMessage, args...)
+}
+
+func assertCLIJSONErrorWithInput(t *testing.T, stdin io.Reader, wantExit int, wantCode string, wantMessage string, args ...string) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), args, nil, &stdout, &stderr)
+	code := Run(context.Background(), args, stdin, &stdout, &stderr)
 	if code != wantExit {
 		t.Fatalf("%v exit code = %d, want %d stdout=%s stderr=%s", args, code, wantExit, stdout.String(), stderr.String())
 	}
