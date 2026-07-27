@@ -792,6 +792,40 @@ func TestMCPNaturalQuestionSearchPreservesOriginalQuery(t *testing.T) {
 	}
 }
 
+func TestMCPTokenAwareSearchStructuredContent(t *testing.T) {
+	workspace := filepath.Join("..", "..", "testdata", "bundles", "search-relevance")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})
+	input := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/","query":"CAT?"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/","query":"factile:test/path"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/","query":"how should an existing repository align with shared engineering practices?"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"factile_search","arguments":{"path":"/","query":"lumen harbor"}}}
+`)
+	var out bytes.Buffer
+	if err := Serve(context.Background(), ws, input, &out, Options{ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	responses := mcpResponses(t, out.String())
+	plain := mcpStructured[factile.SearchResults](t, responses[1])
+	if plain.Query != "CAT?" || len(plain.Results) != 1 || plain.Results[0].Concept.Path != "/guides/cat" {
+		t.Fatalf("token-aware MCP search = %#v", plain)
+	}
+	identifier := mcpStructured[factile.SearchResults](t, responses[2])
+	if identifier.Query != "factile:test/path" || len(identifier.Results) != 1 || identifier.Results[0].Concept.Path != "/guides/identifiers" {
+		t.Fatalf("literal identifier MCP search = %#v", identifier)
+	}
+	ranked := mcpStructured[factile.SearchResults](t, responses[3])
+	if len(ranked.Results) < 3 || ranked.Results[0].Concept.Path != "/workflows/project-alignment" {
+		t.Fatalf("coverage-ranked MCP search = %#v", ranked)
+	}
+	passage := mcpStructured[factile.SearchResults](t, responses[4])
+	if len(passage.Results) != 2 ||
+		passage.Results[0].Concept.Path != "/guides/passage-recovery" ||
+		passage.Results[0].Score != 7 ||
+		!strings.Contains(passage.Results[0].Snippet, "## Recovery procedure") {
+		t.Fatalf("passage-ranked MCP search = %#v", passage)
+	}
+}
+
 func TestServeIgnoresInitializedNotification(t *testing.T) {
 	workspace := mcpWorkspace(t)
 	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace})

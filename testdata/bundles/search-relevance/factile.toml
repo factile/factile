@@ -1,0 +1,11 @@
+version = 2
+
+[workspace]
+root = "."
+
+[bundle]
+name = "search-relevance"
+title = "Search Relevance"
+
+[defaults]
+format = "okf"

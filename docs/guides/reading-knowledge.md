@@ -57,11 +57,28 @@ factile context / "how do releases roll back?"
 factile context / "release rollback" --max-tokens 8000 --depth 1
 ```
 
-Search ignores common question framing such as `how do` and trims surrounding
-question marks, exclamation marks, commas, semicolons, quotes, and brackets
-when substantive terms remain. It does not stem words or infer synonyms, and
-identifier characters in paths and resources remain literal. JSON results
-still echo the original query.
+Search ignores common question framing such as `how do` and conservative prose
+terms such as `a`, `an`, `the`, and `with` when substantive terms remain. A
+query made only of those terms keeps them as a deliberate fallback. Plain words
+match complete Unicode letter-or-digit tokens, so `cat` does not match
+`application`. Paths, resources, and terms containing identifier punctuation
+remain case-insensitive literals. Search does not stem words or infer synonyms,
+and JSON results still echo the original query.
+
+Ranking keeps the established metadata field weights, caps repeated evidence
+for one term after its third occurrence in a field, and scales multi-term
+scores by the share of distinct query terms the document matches. Body evidence
+comes from the best single Markdown passage: a heading-bounded section, or a
+blank-line paragraph when the document has no headings. Fenced code remains
+inside its surrounding passage. Subheadings add modest evidence without
+duplicating an H1 title, and exact multi-term phrases in descriptions and the
+winning body passage receive a small fixed bonus.
+
+Each result snippet comes from that same winning passage and favors an exact
+phrase or the smallest span covering the matched terms. Context preserves the
+Search order but still returns complete Markdown documents. These deterministic
+rules favor broad, coherent evidence without turning search into semantic
+retrieval.
 
 `--depth 0` disables related-link expansion. `--depth 1` includes one-hop links
 and backlinks; deeper values are not supported. Omitted documents are reported

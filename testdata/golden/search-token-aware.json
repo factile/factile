@@ -1,0 +1,17 @@
+{
+  "path": "/",
+  "query": "CAT?",
+  "results": [
+    {
+      "concept": {
+        "path": "/guides/cat",
+        "concept_id": "guides/cat",
+        "type": "Guide",
+        "title": "Cat Guide",
+        "revision": "sha256:1c985d60d07631f447986d2968357ca2c57942a1afff93f58aef1fc4086aac10"
+      },
+      "score": 29,
+      "snippet": "# Cat Guide  A cat rests here."
+    }
+  ]
+}

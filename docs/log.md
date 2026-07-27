@@ -4,8 +4,15 @@
 
 - Clarified that public Factile paths use single forward-slash separators;
   repeated slashes and backslashes are rejected before source resolution.
-- Documented deterministic cleanup of natural-language search questions while
-  preserving literal path and resource identifiers and the original query.
+- Made natural-language search discard conservative prose noise when useful
+  terms remain and match plain words as complete Unicode tokens, while
+  preserving literal identifiers, fallback-only queries, and the original
+  query.
+- Ranked multi-term search by distinct query coverage, capped per-field
+  repetition after three occurrences, and added fixed description and body
+  phrase evidence.
+- Limited body ranking to the best heading section or headingless paragraph and
+  derived each snippet from that passage while keeping Context documents whole.
 - Added standard-input bodies for `create` and `write` through `--body -`,
   while retaining ordinary files and `./-` for a literal dash filename.
 - Added one standard-input content operand per `patch` invocation, with

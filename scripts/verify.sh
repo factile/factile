@@ -43,6 +43,37 @@ require_contains() {
   fi
 }
 
+require_not_contains() {
+  local file="$1"
+  local text="$2"
+  if grep -F -- "$text" "$file" >/dev/null; then
+    echo "expected $file not to contain: $text" >&2
+    exit 1
+  fi
+}
+
+require_first_search_path() {
+  local file="$1"
+  local path="$2"
+  local first_path
+  first_path="$(grep -m1 '^        "path": ' "$file")"
+  if [[ "$first_path" != *"\"path\": \"$path\""* ]]; then
+    echo "expected first search path in $file to be: $path" >&2
+    exit 1
+  fi
+}
+
+require_first_context_path() {
+  local file="$1"
+  local path="$2"
+  local first_path
+  first_path="$(grep -m1 '^      "path": ' "$file")"
+  if [[ "$first_path" != *"\"path\": \"$path\""* ]]; then
+    echo "expected first context path in $file to be: $path" >&2
+    exit 1
+  fi
+}
+
 require_no_change_actions() {
   local file="$1"
   if grep -E -- '"action": "(created|updated|removed)"' "$file" >/dev/null; then
@@ -160,6 +191,27 @@ require_no_change_actions "$tmpdir/combined-repeated.json"
 
 "$factile_bin" bundle inspect "$tmpdir/bundles/product-docs" --json >/dev/null
 "$factile_bin" bundle find "$tmpdir/bundles" --json >/dev/null
+
+cp -R ./testdata/bundles/search-relevance "$tmpdir/search-relevance"
+"$factile_bin" --workspace "$tmpdir/search-relevance" search / 'CAT?' --json > "$tmpdir/search-token-aware.json"
+require_contains "$tmpdir/search-token-aware.json" '"query": "CAT?"'
+require_contains "$tmpdir/search-token-aware.json" '"path": "/guides/cat"'
+require_not_contains "$tmpdir/search-token-aware.json" '/guides/application'
+"$factile_bin" --workspace "$tmpdir/search-relevance" search / 'factile:test/path' --json > "$tmpdir/search-identifier.json"
+require_contains "$tmpdir/search-identifier.json" '"path": "/guides/identifiers"'
+"$factile_bin" --workspace "$tmpdir/search-relevance" context / 'CAT?' --depth 0 --json > "$tmpdir/context-token-aware.json"
+require_contains "$tmpdir/context-token-aware.json" '"path": "/guides/cat"'
+require_not_contains "$tmpdir/context-token-aware.json" '/guides/application'
+"$factile_bin" --workspace "$tmpdir/search-relevance" search / 'how should an existing repository align with shared engineering practices?' --json > "$tmpdir/search-coverage.json"
+require_first_search_path "$tmpdir/search-coverage.json" '/workflows/project-alignment'
+"$factile_bin" --workspace "$tmpdir/search-relevance" search / 'lumen harbor' --json > "$tmpdir/search-passage.json"
+require_first_search_path "$tmpdir/search-passage.json" '/guides/passage-recovery'
+require_contains "$tmpdir/search-passage.json" '"snippet": "## Recovery procedure  Use the lumen harbor procedure for the complete recovery."'
+require_not_contains "$tmpdir/search-passage.json" 'Lumen appears alone'
+"$factile_bin" --workspace "$tmpdir/search-relevance" context / 'lumen harbor' --depth 0 --json > "$tmpdir/context-passage.json"
+require_first_context_path "$tmpdir/context-passage.json" '/guides/passage-recovery'
+require_contains "$tmpdir/context-passage.json" 'Lumen appears alone'
+require_contains "$tmpdir/context-passage.json" 'Use the lumen harbor procedure'
 
 "$factile_bin" --workspace "$descriptor_workspace" list / --json >/dev/null
 "$factile_bin" --workspace "$descriptor_workspace" list / --brief --json >/dev/null

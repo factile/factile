@@ -539,7 +539,7 @@ func TestCLIJSONReaderContractShapes(t *testing.T) {
 	if first.Concept.Path != "/product-docs/workflows/invoice-import" ||
 		first.Concept.Resource != "factile:test/product-docs/workflows/invoice-import" ||
 		first.Score <= 0 ||
-		!strings.Contains(first.Snippet, "Supplier invoices") {
+		!strings.Contains(first.Snippet, "Current Flow") {
 		t.Fatalf("unexpected first search result: %#v", first)
 	}
 
@@ -608,6 +608,98 @@ func TestCLINaturalQuestionSearchPreservesOriginalQuery(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(results.Results[0].Snippet), "invoice") {
 		t.Fatalf("natural question snippet does not use a substantive term: %q", results.Results[0].Snippet)
+	}
+}
+
+func TestCLITokenAwareSearchGoldenJSON(t *testing.T) {
+	fixture := filepath.Join("..", "..", "testdata", "bundles", "search-relevance")
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"--workspace", fixture, "search", "/", "CAT?", "--json"},
+		nil,
+		&stdout,
+		&stderr,
+	)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("token-aware search exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	expected, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "search-token-aware.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != string(expected) {
+		t.Fatalf("token-aware search golden mismatch\nwant:\n%s\ngot:\n%s", string(expected), stdout.String())
+	}
+}
+
+func TestCLICoverageRankingJSONAndText(t *testing.T) {
+	fixture := filepath.Join("..", "..", "testdata", "bundles", "search-relevance")
+	const query = "how should an existing repository align with shared engineering practices?"
+	results := runCLIJSON[factile.SearchResults](
+		t,
+		"--workspace", fixture,
+		"search", "/", query,
+		"--json",
+	)
+	if results.Query != query || len(results.Results) < 3 || results.Results[0].Concept.Path != "/workflows/project-alignment" {
+		t.Fatalf("coverage-ranked CLI JSON = %#v", results)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"--workspace", fixture, "search", "/", query, "--color", "never"},
+		nil,
+		&stdout,
+		&stderr,
+	)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("coverage-ranked CLI text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1. 52.00 /workflows/project-alignment") {
+		t.Fatalf("coverage-ranked CLI text = %s", stdout.String())
+	}
+}
+
+func TestCLIPassageRankingGoldenJSONAndText(t *testing.T) {
+	fixture := filepath.Join("..", "..", "testdata", "bundles", "search-relevance")
+	const query = "lumen harbor"
+	var stdout, stderr bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"--workspace", fixture, "search", "/", query, "--json"},
+		nil,
+		&stdout,
+		&stderr,
+	)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("passage-ranked search exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	expected, err := os.ReadFile(filepath.Join("..", "..", "testdata", "golden", "search-passage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != string(expected) {
+		t.Fatalf("passage-ranked search golden mismatch\nwant:\n%s\ngot:\n%s", string(expected), stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(
+		context.Background(),
+		[]string{"--workspace", fixture, "search", "/", query, "--color", "never"},
+		nil,
+		&stdout,
+		&stderr,
+	)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("passage-ranked text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1. 7.00 /guides/passage-recovery") ||
+		!strings.Contains(stdout.String(), "## Recovery procedure") ||
+		strings.Contains(stdout.String(), "Lumen appears alone") {
+		t.Fatalf("passage-ranked CLI text = %s", stdout.String())
 	}
 }
 
@@ -3137,7 +3229,7 @@ func TestCLIReaderQueryGraphValidateTextOutput(t *testing.T) {
 		t.Fatalf("search text exit code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	searchOutput := stdout.String()
-	for _, want := range []string{"Search /product-docs", "Query: invoice", "1. 51.00 /product-docs/workflows/invoice-import", "Invoice Import Workflow", "Supplier invoices"} {
+	for _, want := range []string{"Search /product-docs", "Query: invoice", "1. 39.00 /product-docs/workflows/invoice-import", "Invoice Import Workflow", "Current Flow"} {
 		if !strings.Contains(searchOutput, want) {
 			t.Fatalf("search text missing %q:\n%s", want, searchOutput)
 		}

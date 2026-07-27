@@ -296,6 +296,45 @@ func TestHandlerReaderOperations(t *testing.T) {
 	}
 }
 
+func TestHandlerTokenAwareSearch(t *testing.T) {
+	workspace := filepath.Join("..", "..", "testdata", "bundles", "search-relevance")
+	handler := NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{Workspace: workspace}), Options{})
+	response := requestWithBody(
+		handler,
+		http.MethodPost,
+		APIPrefix+"/reader/search",
+		`{"path":"/","query":"CAT?"}`,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("token-aware search status = %d body=%s", response.Code, response.Body.String())
+	}
+	var result factile.SearchResults
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Query != "CAT?" || len(result.Results) != 1 || result.Results[0].Concept.Path != "/guides/cat" {
+		t.Fatalf("token-aware UI search = %#v", result)
+	}
+
+	response = requestWithBody(
+		handler,
+		http.MethodPost,
+		APIPrefix+"/reader/search",
+		`{"path":"/","query":"lumen harbor"}`,
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("passage-ranked search status = %d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Results) != 2 ||
+		result.Results[0].Concept.Path != "/guides/passage-recovery" ||
+		!strings.Contains(result.Results[0].Snippet, "## Recovery procedure") {
+		t.Fatalf("passage-ranked UI search = %#v", result)
+	}
+}
+
 func TestHandlerSourceIncludesCachedGitStatus(t *testing.T) {
 	response := request(NewHandler(fakeReader{}, Options{}), http.MethodGet, APIPrefix+"/source")
 	if response.Code != http.StatusOK {
