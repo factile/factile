@@ -14,6 +14,7 @@ import (
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/skill"
+	"github.com/factile/factile/pkg/version"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -718,6 +719,9 @@ func TestInitFailedRootChangePreflightLeavesWorkspaceUntouched(t *testing.T) {
 }
 
 func TestInitAgentAutoRepairsManagedFilesAndPreservesIntent(t *testing.T) {
+	currentVersion := version.Version
+	t.Cleanup(func() { version.Version = currentVersion })
+	version.Version = "v0.0.1"
 	workspace := t.TempDir()
 	if _, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentNone}); err != nil {
 		t.Fatal(err)
@@ -727,10 +731,9 @@ func TestInitAgentAutoRepairsManagedFilesAndPreservesIntent(t *testing.T) {
 	}
 	docsBefore := snapshotTree(t, filepath.Join(workspace, "docs"))
 
-	skillPath := filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")
 	agentsPath := filepath.Join(workspace, "AGENTS.md")
 	configPath := filepath.Join(workspace, ".codex", "config.toml")
-	writeBootstrapTestFile(t, skillPath, strings.Replace(readBootstrapTestFile(t, skillPath), "# Factile local knowledge workflow", "# Drifted workflow", 1))
+	version.Version = currentVersion
 	writeBootstrapTestFile(t, agentsPath, strings.Replace(readBootstrapTestFile(t, agentsPath), "Mode: curator", "Mode: drifted", 1))
 	writeBootstrapTestFile(t, configPath, strings.Replace(readBootstrapTestFile(t, configPath), `"mcp", "serve"`, `"mcp", "drifted"`, 1))
 	legacyScript := filepath.Join(workspace, ".agents", "skills", "factile", "scripts", "factile-discover.sh")

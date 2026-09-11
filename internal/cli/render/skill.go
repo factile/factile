@@ -30,6 +30,7 @@ func (r *Renderer) RenderSkillInspect(w io.Writer, result skill.InspectResult) e
 		return err
 	}
 	metadata := map[string]any{
+		"version":     result.Version,
 		"summary":     result.Summary,
 		"description": result.Description,
 	}
@@ -68,6 +69,7 @@ func (r *Renderer) RenderSkillInstall(w io.Writer, result skill.InstallResult) e
 		return err
 	}
 	metadata := map[string]any{
+		"version": result.Version,
 		"mode":    result.Mode,
 		"profile": result.Profile,
 		"message": result.Message,

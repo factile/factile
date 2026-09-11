@@ -16,8 +16,8 @@ tags: [factile, cli, documentation]
 - [Reading knowledge](guides/reading-knowledge.md)
 - [Validate concept schemas](/guides/concept-schemas) - Portable frontmatter and bundle-local validation.
 - [Curating workspaces, mounts, and views](guides/curating-knowledge.md)
-- [Editing documents safely](guides/editing-documents.md)
-- [Agents and local MCP](guides/agents-and-mcp.md)
+- [Precise document editing and compact receipts](guides/editing-documents.md)
+- [Agents, skill versions and upgrades, and local MCP](/guides/agents-and-mcp.md)
 - [Contributing](guides/contributing.md)
 - [Troubleshooting](guides/troubleshooting.md)
 - [Command reference](reference/commands.md)

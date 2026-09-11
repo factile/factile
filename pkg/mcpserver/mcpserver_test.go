@@ -1187,3 +1187,46 @@ func mcpHasGraphEdge(edges []factile.GraphEdge, from string, to string, kind str
 	}
 	return false
 }
+
+func TestPatchSchemaAndReadOnlyGate(t *testing.T) {
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: mcpWorkspace(t)})
+	server := New(ws, Options{})
+	found := false
+	for _, tool := range server.Tools() {
+		if tool.Name != "factile_patch" {
+			continue
+		}
+		found = true
+		props := tool.InputSchema["properties"].(map[string]any)
+		for _, key := range []string{"operations", "brief", "diff"} {
+			if props[key] == nil {
+				t.Fatalf("missing %s", key)
+			}
+		}
+		operations := props["operations"].(map[string]any)
+		if operations["items"].(map[string]any)["additionalProperties"] != false {
+			t.Fatal("operation schema allows typos")
+		}
+	}
+	if !found {
+		t.Fatal("missing patch tool")
+	}
+	for _, args := range []map[string]any{
+		{"path": "/index", "expected_revision": "old", "operations": []any{map[string]any{"op": "replace_text", "old": "a", "new": "b"}}, "brief": true},
+		{"path": "/log", "replace_body": "changed"},
+	} {
+		_, err := New(ws, Options{ReadOnly: true}).callTool(context.Background(), "factile_patch", args)
+		if factile.ErrorCode(err) != factile.ErrSourceReadOnly {
+			t.Fatalf("read only patch: %v", err)
+		}
+	}
+	for _, args := range []map[string]any{
+		{"path": "/index", "operations": []any{map[string]any{"op": "replace_text", "old": "a", "typo": true}}},
+		{"path": "/index", "brief": "yes"},
+	} {
+		_, err := server.callTool(context.Background(), "factile_patch", args)
+		if factile.ErrorCode(err) != factile.ErrInvalidPatch {
+			t.Fatalf("bad patch arguments: %v", err)
+		}
+	}
+}

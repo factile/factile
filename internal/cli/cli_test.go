@@ -17,6 +17,7 @@ import (
 	"github.com/factile/factile/pkg/bootstrap"
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/gitsource"
+	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/skill"
 	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/version"
@@ -50,8 +51,11 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			"Bundle admin",
 			"Agents and MCP",
 			"--body <file|->",
-			"patch options <file|->",
-			"at most one content operand may use -",
+			"--replace-text",
+			"--input -",
+			"--brief --json",
+			"--diff",
+			"at most one content operand to use -",
 			"Advanced agent guidance reconfiguration",
 			"Diagnose agent setup",
 			"Use --json for scripts and agents",
@@ -241,9 +245,12 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "status", args: []string{"status", "--help"}, want: "factile status"},
 		{name: "search", args: []string{"search", "--help"}, want: "factile search <path> <query> [--view <id>]"},
 		{name: "mkdir", args: []string{"mkdir", "--help"}, want: "factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]"},
-		{name: "create", args: []string{"create", "--help"}, want: "factile create <document-path> --type <type> --title <title> --body <file|->"},
-		{name: "write", args: []string{"write", "--help"}, want: "factile write <document-path> --rev <rev> --body <file|->"},
+		{name: "create", args: []string{"create", "--help"}, want: createUsage},
+		{name: "write", args: []string{"write", "--help"}, want: writeUsage},
 		{name: "patch", args: []string{"patch", "--help"}, want: patchUsage},
+		{name: "rename", args: []string{"rename", "--help"}, want: renameUsage},
+		{name: "delete", args: []string{"delete", "--help"}, want: deleteUsage},
+		{name: "deprecate", args: []string{"deprecate", "--help"}, want: deprecateUsage},
 		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]"},
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
 		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]\nValidate base OKF and optional bundle-local Concept Schema v1 profiles.\nChecks frontmatter only; unknown types remain unprofiled. Writes do not enforce profiles.\nJSON separates okf and concept_schemas, with scope and field diagnostics.\nExit 3 reports validation failures; resource limits abort the operation."},
@@ -1464,7 +1471,7 @@ func TestCLIJSONSkillContracts(t *testing.T) {
 	}
 
 	inspect := runCLIJSON[skill.InspectResult](t, "skill", "inspect", "codex", "--json")
-	if inspect.Target != "codex" || inspect.Name != "factile" || len(inspect.Files) != 3 || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || hasString(inspect.Files, ".agents/skills/factile/scripts/factile-discover.sh") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[workspace]") || !strings.Contains(inspect.SkillMarkdown, "selected root bundle has `[bundle]`") || !strings.Contains(inspect.SkillMarkdown, "same manifest when the workspace root is also the") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, "factile.views.toml") || strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") {
+	if inspect.Target != "codex" || inspect.Name != "factile" || len(inspect.Files) != 3 || !hasString(inspect.Files, ".agents/skills/factile/SKILL.md") || hasString(inspect.Files, ".agents/skills/factile/scripts/factile-discover.sh") || !strings.Contains(inspect.SkillMarkdown, "Factile local knowledge workflow") || !strings.Contains(inspect.SkillMarkdown, "factile.toml` with `[workspace]") || !strings.Contains(inspect.SkillMarkdown, "<name>.mount.toml") || !strings.Contains(inspect.SkillMarkdown, "factile.views.toml") || strings.Contains(inspect.SkillMarkdown, ".factile/config.toml") {
 		t.Fatalf("unexpected skill inspect contract: %#v", inspect)
 	}
 
@@ -1981,24 +1988,11 @@ func TestCLISkillInstallRepoIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(skillFile), "Reader mode is installed") ||
-		!strings.Contains(string(skillFile), "factile.toml` with `[workspace]") ||
-		!strings.Contains(string(skillFile), "selected root bundle has `[bundle]`") ||
-		!strings.Contains(string(skillFile), "same manifest when the workspace root is also the") ||
-		!strings.Contains(string(skillFile), "<name>.mount.toml") ||
-		!strings.Contains(string(skillFile), "factile.views.toml") ||
-		!strings.Contains(string(skillFile), "do not run both full and brief root listings") ||
-		!strings.Contains(string(skillFile), "factile context <path> '<one sentence task summary>' --json") ||
-		strings.Contains(string(skillFile), "--format json") ||
-		strings.Contains(string(skillFile), "Knowledge Base") ||
-		strings.Contains(string(skillFile), ".factile/mounts.toml") ||
-		strings.Contains(string(skillFile), ".factile/config.toml") ||
-		strings.Contains(string(skillFile), ".factile/views.toml") ||
-		strings.Contains(string(skillFile), "`--root") ||
-		strings.Contains(string(skillFile), "no_active_root") ||
-		strings.Contains(string(skillFile), "`factile kb") {
-		t.Fatalf("reader mode guidance missing:\n%s", string(skillFile))
+	skillDoc, err := okf.ParseConcept("SKILL", skillFile)
+	if err != nil || skillDoc.Frontmatter["name"] != "factile" || skillDoc.Frontmatter["description"] != skill.Description || strings.Contains(string(skillFile), "{{") {
+		t.Fatalf("installed skill metadata differs from inspect: %v", err)
 	}
+
 	if !strings.Contains(string(agents), "use the installed\n`factile` skill") || !strings.Contains(string(agents), "Mode: reader") || strings.Contains(string(agents), "factile context") || strings.Contains(string(agents), "Knowledge Base") || strings.Contains(string(agents), ".factile/mounts.toml") || strings.Contains(string(agents), ".factile/views.toml") {
 		t.Fatalf("AGENTS managed block should be a concise skill router:\n%s", string(agents))
 	}
@@ -2042,7 +2036,7 @@ func TestCLISkillInstallCuratorModeWithProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(skillFile), "Curator mode is installed") || !strings.Contains(string(skillFile), "Profile: `software`") || !strings.Contains(string(skillFile), "factile mount") || !strings.Contains(string(skillFile), "factile.views.toml") || strings.Contains(string(skillFile), ".factile/views.toml") {
+	if !strings.Contains(string(skillFile), "Curator mode is installed") || !strings.Contains(string(skillFile), "Profile: `software`") || !strings.Contains(string(skillFile), "factile.views.toml") || strings.Contains(string(skillFile), ".factile/views.toml") {
 		t.Fatalf("curator/profile guidance missing:\n%s", string(skillFile))
 	}
 	agents, err := os.ReadFile("AGENTS.md")
@@ -2763,18 +2757,16 @@ func TestCLIInitJSONHealthAndFailureExit(t *testing.T) {
 }
 
 func TestCLIInitTextReportsAgentUpgrade(t *testing.T) {
+	currentVersion := version.Version
+	t.Cleanup(func() { version.Version = currentVersion })
+	version.Version = "v0.0.1"
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	var stdout, stderr bytes.Buffer
 	if code := Run(context.Background(), []string{"init", "--agent", "codex", "--json"}, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("fixture init failed: code=%d stderr=%s", code, stderr.String())
 	}
-	skillPath := filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")
-	skillData, err := os.ReadFile(skillPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeCLITestFile(t, skillPath, strings.Replace(string(skillData), "# Factile local knowledge workflow", "# Stale Factile workflow", 1))
+	version.Version = currentVersion
 	stdout.Reset()
 	stderr.Reset()
 	code := Run(context.Background(), []string{"init", "--color", "never"}, nil, &stdout, &stderr)

@@ -1,0 +1,11 @@
+version = 2
+
+[workspace]
+root = "."
+
+[bundle]
+name = "editing"
+title = "Editing regression fixtures"
+
+[defaults]
+format = "okf"

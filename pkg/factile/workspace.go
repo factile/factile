@@ -691,52 +691,7 @@ func (w *LocalWorkspace) Mkdir(ctx context.Context, inputPath string, opts Mkdir
 }
 
 func (w *LocalWorkspace) Write(ctx context.Context, inputPath string, input WriteConceptInput) (ConceptResult, error) {
-	_, target, err := w.resolveExistingConceptWrite(inputPath)
-	if err != nil {
-		return ConceptResult{}, err
-	}
-	_ = ctx
-	if input.ExpectedRevision == "" {
-		return ConceptResult{}, NewError(ErrRevisionRequired, "Expected revision is required")
-	}
-	if err := w.ensureWritable(target.Mount); err != nil {
-		return ConceptResult{}, err
-	}
-	store, err := storage.NewLocal(target.Mount.SourcePath)
-	if err != nil {
-		return ConceptResult{}, NormalizeError(err)
-	}
-	file, err := store.ConceptFile(target.ConceptID)
-	if err != nil {
-		return ConceptResult{}, NormalizeError(err)
-	}
-	err = w.withWorkspaceLocks([]string{file}, func() error {
-		data, _, err := store.ReadConcept(target.ConceptID)
-		if err != nil {
-			return err
-		}
-		current := revision.DigestBytes(data)
-		if current != input.ExpectedRevision {
-			return NewError(ErrRevisionMismatch, "Revision mismatch")
-		}
-		doc, err := okf.ParseConcept(target.ConceptID, data)
-		if err != nil {
-			return err
-		}
-		doc.Markdown = input.Markdown
-		if issues := validateDocument(target.Path, doc); hasErrors(issues) {
-			return validationError(issues)
-		}
-		return store.AtomicReplace(target.ConceptID, okf.Serialize(doc))
-	})
-	if err != nil {
-		return ConceptResult{}, NormalizeError(err)
-	}
-	concept, err := w.readConcept(target.Mount, target.ConceptID)
-	if err != nil {
-		return ConceptResult{}, err
-	}
-	return ConceptResult{Concept: concept}, nil
+	return w.Patch(ctx, inputPath, PatchConceptInput{ExpectedRevision: input.ExpectedRevision, ReplaceBody: &input.Markdown})
 }
 
 func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input PatchConceptInput) (ConceptResult, error) {
@@ -759,53 +714,52 @@ func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input Patc
 	if err != nil {
 		return ConceptResult{}, NormalizeError(err)
 	}
+	var result ConceptResult
 	err = w.withWorkspaceLocks([]string{file}, func() error {
 		data, _, err := store.ReadConcept(target.ConceptID)
 		if err != nil {
 			return err
 		}
-		if revision.DigestBytes(data) != input.ExpectedRevision {
-			return NewError(ErrRevisionMismatch, "Revision mismatch")
+		current := revision.DigestBytes(data)
+		if current != input.ExpectedRevision {
+			return revisionMismatch(target.Path, input.ExpectedRevision, current)
 		}
-		doc, err := okf.ParseConcept(target.ConceptID, data)
+		next, summary, err := applyPatch(target.ConceptID, data, input)
 		if err != nil {
 			return err
 		}
-		for key, value := range input.Set {
-			if _, exists := doc.Frontmatter[key]; !exists {
-				doc.Order = append(doc.Order, key)
-			}
-			doc.Frontmatter[key] = value
+		doc, err := okf.ParseConcept(target.ConceptID, next)
+		if err != nil {
+			return err
 		}
-		for _, key := range input.DeleteKeys {
-			delete(doc.Frontmatter, key)
-		}
-		for heading, body := range input.ReplaceSections {
-			next, err := patchpkg.ReplaceSection(doc.Markdown, heading, body)
-			if err != nil {
-				return NewError(ErrSectionNotFound, err.Error())
-			}
-			doc.Markdown = next
-		}
-		for heading, body := range input.AppendSections {
-			doc.Markdown = patchpkg.AppendSection(doc.Markdown, heading, body)
-		}
-		if input.ReplaceBody != nil {
-			doc.Markdown = *input.ReplaceBody
-		}
-		if issues := validateDocument(target.Path, doc); hasErrors(issues) {
+		issues := validateDocument(target.Path, doc)
+		if hasErrors(issues) {
 			return validationError(issues)
 		}
-		return store.AtomicReplace(target.ConceptID, okf.Serialize(doc))
+		changed := string(data) != string(next)
+		if changed {
+			if err := store.AtomicReplace(target.ConceptID, next); err != nil {
+				return err
+			}
+		}
+		// The response describes the bytes saved under this lock, even if another writer follows.
+		result.Concept = conceptFromDoc(target.Mount, doc, next)
+		if input.Brief || input.Diff {
+			if issues == nil {
+				issues = []ValidationIssue{}
+			}
+			result.Receipt = &EditReceipt{Path: target.Path, Revision: result.Concept.Revision, Changed: changed, Summary: summary, Validation: EditValidation{Scope: "document_frontmatter", Valid: true, Issues: issues}}
+			if input.Diff {
+				diff := patchpkg.Diff(target.Path, string(data), string(next))
+				result.Receipt.Diff = &diff
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return ConceptResult{}, NormalizeError(err)
 	}
-	concept, err := w.readConcept(target.Mount, target.ConceptID)
-	if err != nil {
-		return ConceptResult{}, err
-	}
-	return ConceptResult{Concept: concept}, nil
+	return result, nil
 }
 
 func (w *LocalWorkspace) Rename(ctx context.Context, oldPath string, newPath string, opts RenameOptions) (RenameResult, error) {
@@ -846,7 +800,7 @@ func (w *LocalWorkspace) Rename(ctx context.Context, oldPath string, newPath str
 			return err
 		}
 		if revision.DigestBytes(data) != opts.ExpectedRevision {
-			return NewError(ErrRevisionMismatch, "Revision mismatch")
+			return revisionMismatch(target.Path, opts.ExpectedRevision, revision.DigestBytes(data))
 		}
 		if _, err := os.Stat(newFile); err == nil {
 			return NewError(ErrConceptAlreadyExist, "Destination concept already exists")
@@ -890,7 +844,7 @@ func (w *LocalWorkspace) Delete(ctx context.Context, inputPath string, opts Dele
 			return err
 		}
 		if revision.DigestBytes(data) != opts.ExpectedRevision {
-			return NewError(ErrRevisionMismatch, "Revision mismatch")
+			return revisionMismatch(target.Path, opts.ExpectedRevision, revision.DigestBytes(data))
 		}
 		return store.DeleteConcept(target.ConceptID)
 	})

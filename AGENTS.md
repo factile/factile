@@ -155,13 +155,14 @@ A task is done only when:
 ## Local knowledge
 
 For architecture, design, domain, workflow, policy, documentation, review, or
-implementation-choice tasks that need repository knowledge, use the installed
+implementation-choice tasks that need repository knowledge, and for requested
+Factile document edits, use the installed
 `factile` skill. It owns the discovery workflow and workspace model; do not
 duplicate that guidance here.
 
 Mode: reader. Do not mutate Factile manifests, views, mount descriptors, or OKF documents unless the user explicitly asks to curate knowledge; the configured MCP server must remain read-only.
 
-Skip Factile for mechanical renames, formatting, syntax fixes, and obvious local edits.
+Skip Factile for mechanical code edits that need no knowledge context.
 
 If Factile is unavailable, continue with normal repository inspection.
 <!-- factile:codex:end -->

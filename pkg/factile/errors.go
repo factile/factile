@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/factile/factile/pkg/okf"
+	"github.com/factile/factile/pkg/patch"
 	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/vfs"
 )
@@ -34,6 +35,10 @@ const (
 	ErrUnsafeSourcePath        = "unsafe_source_path"
 	ErrOKFParse                = "okf_parse_error"
 	ErrSectionNotFound         = "section_not_found"
+	ErrSectionAmbiguous        = "section_ambiguous"
+	ErrTextNotFound            = "text_not_found"
+	ErrTextAmbiguous           = "text_ambiguous"
+	ErrInvalidPatch            = "invalid_patch"
 	ErrUnsupportedSource       = "unsupported_source"
 	ErrUnsupportedCommand      = "unsupported_command"
 	ErrRemoteSourceUnavailable = "remote_source_unavailable"
@@ -70,6 +75,10 @@ func NormalizeError(err error) error {
 	if errors.As(err, &app) {
 		return app
 	}
+	var patchErr *patch.Error
+	if errors.As(err, &patchErr) {
+		return NewError(patchErr.Code, patchErr.Message)
+	}
 	var vfsErr *vfs.Error
 	if errors.As(err, &vfsErr) {
 		var details map[string]any
@@ -104,4 +113,8 @@ func NormalizeError(err error) error {
 
 func errorf(code, format string, args ...any) *AppError {
 	return NewError(code, fmt.Sprintf(format, args...))
+}
+
+func revisionMismatch(path, expected, current string) *AppError {
+	return &AppError{Code: ErrRevisionMismatch, Message: "Revision mismatch; read the document and reapply the intended edits using its revision", Details: map[string]any{"path": path, "expected_revision": expected, "current_revision": current}}
 }

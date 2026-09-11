@@ -174,6 +174,14 @@ refreshes the canonical skill and its managed `AGENTS.md` and MCP blocks while
 preserving the installed reader or curator mode and optional profile. Init never
 changes user-scoped skills or configuration.
 
+Generated skills carry the binary release version and a checksum of the complete
+generated file. Init refreshes untouched skills from the running binary's
+embedded assets. A checksum mismatch or invalid version/checksum metadata fails
+preflight and preserves the skill and workspace. Custom instructions must be
+preserved separately before repair. Recognized unversioned legacy skills retain
+the explicit upgrade path, but their local edits cannot be identified reliably.
+Ordinary CLI commands only diagnose drift; they do not reconcile integration.
+
 Generated ownership must be proven, not inferred from a canonical path. Auto
 and explicit Codex reconciliation refuse to overwrite an unrecognized repo
 skill and leave the whole plan unchanged; the user resolves that collision.

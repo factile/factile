@@ -572,16 +572,13 @@ func patchHandler(ws curatorWorkspace) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "path is required"))
 			return
 		}
-		result, err := ws.Patch(r.Context(), input.Path, factile.PatchConceptInput{
-			ExpectedRevision: input.ExpectedRevision,
-			Set:              input.Set,
-			DeleteKeys:       input.DeleteKeys,
-			ReplaceSections:  input.ReplaceSections,
-			AppendSections:   input.AppendSections,
-			ReplaceBody:      input.ReplaceBody,
-		})
+		result, err := ws.Patch(r.Context(), input.Path, input.PatchConceptInput)
 		if err != nil {
 			writeError(w, errorStatus(err), err)
+			return
+		}
+		if input.Brief {
+			writeJSON(w, result.Receipt)
 			return
 		}
 		writeJSON(w, result)
@@ -744,13 +741,8 @@ type writeInput struct {
 
 type patchInput struct {
 	sourceSelector
-	Path             string            `json:"path"`
-	ExpectedRevision string            `json:"expected_revision"`
-	Set              map[string]any    `json:"set,omitempty"`
-	DeleteKeys       []string          `json:"delete_keys,omitempty"`
-	ReplaceSections  map[string]string `json:"replace_sections,omitempty"`
-	AppendSections   map[string]string `json:"append_sections,omitempty"`
-	ReplaceBody      *string           `json:"replace_body,omitempty"`
+	Path string `json:"path"`
+	factile.PatchConceptInput
 }
 
 type deprecateInput struct {
@@ -857,7 +849,7 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 func errorStatus(err error) int {
 	switch factile.ErrorCode(factile.NormalizeError(err)) {
-	case factile.ErrInvalidPath:
+	case factile.ErrInvalidPath, factile.ErrInvalidPatch:
 		return http.StatusBadRequest
 	case factile.ErrNoActiveWorkspace, factile.ErrInvalidWorkspace, factile.ErrInvalidBundle,
 		factile.ErrConceptNotFound, factile.ErrMountNotFound, factile.ErrPathIsNotConcept, factile.ErrPathIsNotBundle:
@@ -870,7 +862,7 @@ func errorStatus(err error) int {
 		return http.StatusForbidden
 	case factile.ErrUnsupportedSource, factile.ErrUnsupportedCommand:
 		return http.StatusBadRequest
-	case factile.ErrValidationFailed, factile.ErrOKFParse, factile.ErrSectionNotFound:
+	case factile.ErrValidationFailed, factile.ErrOKFParse, factile.ErrSectionNotFound, factile.ErrSectionAmbiguous, factile.ErrTextNotFound, factile.ErrTextAmbiguous:
 		return http.StatusUnprocessableEntity
 	case factile.ErrLockTimeout:
 		return http.StatusLocked

@@ -104,6 +104,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 			traceCLI(rest, code, started)
 			return code
 		}
+		writeSkillWarnings(stderr, global, rest)
 		traceCLI(rest, code, started)
 		return code
 	}
@@ -113,15 +114,29 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 		traceCLI(rest, code, started)
 		return code
 	}
+	if code == 0 {
+		writeSkillWarnings(stderr, global, rest)
+	}
 	traceCLI(rest, code, started)
 	return code
 }
 
 func runCommand(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer, stderr io.Writer) (int, error) {
+	if len(args) == 2 && args[1] == "help" {
+		args = append([]string{}, args...)
+		args[1] = "--help"
+	}
 	if isPathShortcut(args) {
 		return runPathShortcut(ctx, ws, args[0], global, stdout)
 	}
 	switch args[0] {
+	case "help":
+		if len(args) == 1 || len(args) == 2 && isHelpArg(args[1]) {
+			return 0, writeHelp(stdout, global)
+		}
+		return runCommand(ctx, ws, append(append([]string{}, args[1:]...), "--help"), global, stdin, stdout, stderr)
+	case "--help", "-h":
+		return 0, writeHelp(stdout, global)
 	case "version":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile version")
@@ -714,7 +729,7 @@ func readContent(filename string, stdin io.Reader) ([]byte, error) {
 
 func runCreate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile create <document-path> --type <type> --title <title> --body <file|->")
+		return showUsage(stdout, createUsage)
 	}
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -744,7 +759,7 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runWrite(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile write <document-path> --rev <rev> --body <file|->")
+		return showUsage(stdout, writeUsage)
 	}
 	fs := flag.NewFlagSet("write", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -771,9 +786,64 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 	return writeConceptConfirmation(stdout, global, "Wrote", result)
 }
 
+const createUsage = `factile create <document-path> --type <type> --title <title> --body <file|->
+Create a new typed OKF document. --body supplies Markdown, without frontmatter;
+use - for stdin. Existing paths are rejected.
+Example: printf '# Note\n' | factile create /note --type Note --title Note --body - --json`
+
+const writeUsage = `factile write <document-path> --rev <rev> --body <file|->
+Replace the whole Markdown body and preserve frontmatter. Use patch for smaller edits.
+--body - reads stdin; an empty body clears the body. --rev must come from a read
+or the preceding successful mutation. Plain index/log documents are supported.
+Example: factile write /note --rev <observed-revision> --body ./body.md --json`
+
+const renameUsage = `factile rename <old-path> <new-path> --rev <rev>
+Move one document using its observed revision. Report backlink warnings;
+links in other documents are not rewritten.`
+
+const deleteUsage = `factile delete <document-path> --rev <rev>
+Delete one document using its observed revision. Use deprecate to retain the
+document with a transition notice.`
+
+const deprecateUsage = `factile deprecate <document-path> --rev <rev> --reason <text>
+Set deprecated metadata and append the reason to a Deprecation section.
+Use the revision from a read or the preceding successful mutation.`
+
 const patchUsage = `factile patch <document-path> --rev <rev> [patch options]
-Content options: --replace-section <heading> <file|->, --append-section <heading> <file|->, --replace-body <file|->
-At most one patch content operand may be -.`
+Apply ordered edits atomically to one document; preserve unrelated bytes.
+
+Edit flags (repeatable, applied in command-line order):
+  --replace-text <old> <new>       Replace exactly one body-text match; '' deletes it
+  --set <key=value>               Set one frontmatter value
+  --delete-key <key>              Remove one frontmatter entry
+  --replace-section <heading> <file|->  Replace a section body and nested sections
+  --append-section <heading> <file|->   Append to a section, creating it if missing
+  --replace-body <file|->         Replace the whole Markdown body
+  --input <file|->                JSON patch object, instead of edit flags
+
+Output: --brief returns path, revision, changed, summary, and validation.
+        --diff adds a unified diff. Use --json for agent-readable results.
+At most one patch content operand may be -. Use --input - for multiple inline edits.
+
+Use an observed --rev from read or the preceding mutation. Text matches must be
+unique; section matching ignores fenced code and rejects duplicate headings.
+Any failure leaves the document unchanged. Receipts validate document frontmatter,
+not Markdown syntax or bundle links. Plain index/log documents are supported.
+
+One edit:
+  factile read /guide --json
+  factile patch /guide --rev <observed-revision> --replace-text 'An old sentence.' 'A new sentence.' --brief --json
+
+Batch several edits to that document:
+  factile patch /guide --rev <observed-revision> --input - --brief --json <<'JSON'
+{"operations":[{"op":"replace_text","old":"An old sentence.","new":"A new sentence."},{"op":"set","key":"status","value":"active"}]}
+JSON
+JSON operations: replace_text (old/new), set (key/value), delete_key (key),
+replace_section or append_section (heading/markdown), replace_body (markdown).
+JSON also accepts expected_revision, brief, diff, and the legacy set, delete_keys,
+replace_sections, append_sections, replace_body fields. Legacy fields run first
+in that order; section maps use sorted headings. A JSON revision must agree with --rev.
+Batching covers one document; edit each document with its own revision.`
 
 func runPatch(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
@@ -782,105 +852,130 @@ func runPatch(ctx context.Context, ws factile.Workspace, args []string, global g
 	if len(args) < 2 {
 		return usage(global, stdout, patchUsage)
 	}
-	path := args[1]
-	input := factile.PatchConceptInput{Set: map[string]any{}, ReplaceSections: map[string]string{}, AppendSections: map[string]string{}}
+	input := factile.PatchConceptInput{}
 	type contentOperand struct {
-		option   string
-		heading  string
-		filename string
+		operation int
+		filename  string
 	}
 	var content []contentOperand
+	inputFile := ""
 	stdinOperands := 0
 	for i := 2; i < len(args); i++ {
-		switch args[i] {
+		option := args[i]
+		count := 1
+		switch option {
+		case "--brief":
+			input.Brief = true
+			continue
+		case "--diff":
+			input.Diff = true
+			continue
+		case "--replace-text", "--replace-section", "--append-section":
+			count = 2
+		case "--rev", "--set", "--delete-key", "--replace-body", "--input":
+		default:
+			return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("unknown patch option: %s", option))
+		}
+		if i+count >= len(args) {
+			return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("%s requires %d value(s)", option, count))
+		}
+		value := args[i+1]
+		switch option {
 		case "--rev":
-			i++
-			if i >= len(args) {
-				return 2, fmt.Errorf("--rev requires a value")
+			input.ExpectedRevision = value
+		case "--input":
+			if inputFile != "" {
+				return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("--input may appear only once"))
 			}
-			input.ExpectedRevision = args[i]
+			inputFile = value
+			if value == "-" {
+				stdinOperands++
+			}
 		case "--set":
-			i++
-			if i >= len(args) {
-				return 2, fmt.Errorf("--set requires key=value")
-			}
-			parts := strings.SplitN(args[i], "=", 2)
+			parts := strings.SplitN(value, "=", 2)
 			if len(parts) != 2 || parts[0] == "" {
-				return 2, fmt.Errorf("--set requires key=value")
+				return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("--set requires key=value"))
 			}
-			value, err := okf.ParseValue(parts[1])
+			parsed, err := okf.ParseValue(parts[1])
 			if err != nil {
 				return 2, err
 			}
-			input.Set[parts[0]] = value
+			input.Operations = append(input.Operations, factile.PatchOperation{Op: "set", Key: parts[0], Value: parsed})
 		case "--delete-key":
-			i++
-			if i >= len(args) {
-				return 2, fmt.Errorf("--delete-key requires a key")
-			}
-			input.DeleteKeys = append(input.DeleteKeys, args[i])
-		case "--replace-section":
-			if i+2 >= len(args) {
-				return 2, fmt.Errorf("--replace-section requires heading and file")
-			}
-			operand := contentOperand{option: args[i], heading: args[i+1], filename: args[i+2]}
-			content = append(content, operand)
-			if operand.filename == "-" {
-				stdinOperands++
-			}
-			i += 2
-		case "--append-section":
-			if i+2 >= len(args) {
-				return 2, fmt.Errorf("--append-section requires heading and file")
-			}
-			operand := contentOperand{option: args[i], heading: args[i+1], filename: args[i+2]}
-			content = append(content, operand)
-			if operand.filename == "-" {
-				stdinOperands++
-			}
-			i += 2
-		case "--replace-body":
-			i++
-			if i >= len(args) {
-				return 2, fmt.Errorf("--replace-body requires a file")
-			}
-			operand := contentOperand{option: args[i-1], filename: args[i]}
-			content = append(content, operand)
-			if operand.filename == "-" {
-				stdinOperands++
-			}
+			input.Operations = append(input.Operations, factile.PatchOperation{Op: "delete_key", Key: value})
+		case "--replace-text":
+			input.Operations = append(input.Operations, factile.PatchOperation{Op: "replace_text", Old: value, New: args[i+2]})
 		default:
-			return 2, fmt.Errorf("unknown patch option: %s", args[i])
+			op := factile.PatchOperation{Op: strings.ReplaceAll(strings.TrimPrefix(option, "--"), "-", "_")}
+			filename := value
+			if count == 2 {
+				op.Heading = value
+				filename = args[i+2]
+			}
+			content = append(content, contentOperand{len(input.Operations), filename})
+			input.Operations = append(input.Operations, op)
+			if filename == "-" {
+				stdinOperands++
+			}
 		}
+		i += count
 	}
 	if stdinOperands > 1 {
 		return usage(global, stdout, "At most one patch content operand may be -")
+	}
+	if inputFile != "" {
+		if len(input.Operations) > 0 {
+			return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("--input cannot be combined with edit flags"))
+		}
+		data, err := readContent(inputFile, stdin)
+		if err != nil {
+			return 0, err
+		}
+		var decoded *factile.PatchConceptInput
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&decoded); err != nil {
+			return 2, factile.NewError(factile.ErrInvalidPatch, "Invalid patch input: "+err.Error())
+		}
+		if decoded == nil {
+			return 2, factile.NewError(factile.ErrInvalidPatch, "Patch input must be a JSON object")
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return 2, factile.NewError(factile.ErrInvalidPatch, "Patch input must contain one JSON object")
+		}
+		if input.ExpectedRevision != "" {
+			if decoded.ExpectedRevision != "" && decoded.ExpectedRevision != input.ExpectedRevision {
+				return 2, factile.NewError(factile.ErrInvalidPatch, fmt.Sprintf("--rev conflicts with input expected_revision"))
+			}
+			decoded.ExpectedRevision = input.ExpectedRevision
+		}
+		decoded.Brief = decoded.Brief || input.Brief
+		decoded.Diff = decoded.Diff || input.Diff
+		input = *decoded
 	}
 	for _, operand := range content {
 		data, err := readContent(operand.filename, stdin)
 		if err != nil {
 			return 0, err
 		}
-		switch operand.option {
-		case "--replace-section":
-			input.ReplaceSections[operand.heading] = string(data)
-		case "--append-section":
-			input.AppendSections[operand.heading] = string(data)
-		case "--replace-body":
-			body := string(data)
-			input.ReplaceBody = &body
-		}
+		input.Operations[operand.operation].Markdown = string(data)
 	}
-	result, err := ws.Patch(ctx, path, input)
+	result, err := ws.Patch(ctx, args[1], input)
 	if err != nil {
 		return 0, err
+	}
+	if input.Brief {
+		return writeResult(stdout, global, result.Receipt)
+	}
+	if input.Diff && !global.structuredOutput() {
+		return writeResult(stdout, global, result)
 	}
 	return writeConceptConfirmation(stdout, global, "Patched", result)
 }
 
 func runRename(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile rename <old-path> <new-path> --rev <rev>")
+		return showUsage(stdout, renameUsage)
 	}
 	fs := flag.NewFlagSet("rename", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -904,7 +999,7 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runDelete(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile delete <document-path> --rev <rev>")
+		return showUsage(stdout, deleteUsage)
 	}
 	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -928,7 +1023,7 @@ func runDelete(ctx context.Context, ws factile.Workspace, args []string, global 
 
 func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile deprecate <document-path> --rev <rev> --reason <text>")
+		return showUsage(stdout, deprecateUsage)
 	}
 	fs := flag.NewFlagSet("deprecate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1467,6 +1562,9 @@ func showUsage(stdout io.Writer, text string) (int, error) {
 }
 
 func hasHelp(args []string) bool {
+	if len(args) == 2 && args[1] == "help" {
+		return true
+	}
 	for _, arg := range args {
 		if isHelpArg(arg) {
 			return true
@@ -1953,13 +2051,13 @@ func traceCLIArgs(args []string) (string, string, string) {
 
 func exitCode(code string) int {
 	switch code {
-	case factile.ErrInvalidPath, factile.ErrUnsupportedCommand:
+	case factile.ErrInvalidPath, factile.ErrUnsupportedCommand, factile.ErrInvalidPatch:
 		return 2
 	case factile.ErrValidationFailed, factile.ErrOKFParse:
 		return 3
 	case factile.ErrMountNotFound, factile.ErrNoActiveWorkspace, factile.ErrInvalidWorkspace, factile.ErrInvalidBundle, factile.ErrAmbiguousTarget, factile.ErrConceptNotFound, factile.ErrPathIsNotBundle, factile.ErrPathIsNotConcept:
 		return 4
-	case factile.ErrConceptAlreadyExist, factile.ErrPathAlreadyExists, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound:
+	case factile.ErrConceptAlreadyExist, factile.ErrPathAlreadyExists, factile.ErrRevisionRequired, factile.ErrRevisionMismatch, factile.ErrSectionNotFound, factile.ErrSectionAmbiguous, factile.ErrTextNotFound, factile.ErrTextAmbiguous:
 		return 5
 	case factile.ErrSourceReadOnly, factile.ErrUnsafeSourcePath, factile.ErrUnsupportedSource, factile.ErrRemoteSourceUnavailable, factile.ErrRevisionNotAvailable:
 		return 6

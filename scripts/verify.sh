@@ -31,8 +31,11 @@ GOOS=linux GOARCH=amd64 go build -o "$tmpdir/factile-linux-amd64" ./cmd/factile
 GOOS=darwin GOARCH=amd64 go build -o "$tmpdir/factile-darwin-amd64" ./cmd/factile
 GOOS=windows GOARCH=amd64 go build -o "$tmpdir/factile-windows-amd64.exe" ./cmd/factile
 go build -o "$tmpdir/factile" ./cmd/factile
+go build -ldflags '-X github.com/factile/factile/pkg/version.Version=v0.0.1' -o "$tmpdir/factile-old" ./cmd/factile
 
 factile_bin="$tmpdir/factile"
+
+python3 scripts/compare-editing.py "$factile_bin" > "$tmpdir/editing-comparison.json"
 
 require_contains() {
   local file="$1"
@@ -125,16 +128,35 @@ mkdir -p "$curator_skill_workspace"
 (
   cd "$curator_skill_workspace"
   "$factile_bin" init --root knowledge --name curator-guide --title "Curator Guide" --description "Curated project guidance." --agent none --yes --json >/dev/null
-  PATH="$tmpdir:$PATH" "$factile_bin" skill install codex --scope repo --mode curator --profile software --json >/dev/null
-  sed -i 's/# Factile local knowledge workflow/# Stale Factile workflow/' .agents/skills/factile/SKILL.md
+  PATH="$tmpdir:$PATH" "$tmpdir/factile-old" skill install codex --scope repo --mode curator --profile software --json >/dev/null
+  cp .agents/skills/factile/SKILL.md "$tmpdir/skill-before-read.md"
+  "$factile_bin" read /overview > "$tmpdir/skill-read.txt" 2> "$tmpdir/skill-warning.txt"
+  "$factile_bin" read /overview --json > "$tmpdir/skill-read.json" 2> "$tmpdir/skill-json.stderr"
+  cmp .agents/skills/factile/SKILL.md "$tmpdir/skill-before-read.md"
+  require_contains "$tmpdir/skill-warning.txt" 'factile init'
+  require_contains "$tmpdir/skill-warning.txt" 'v0.0.1'
+  test ! -s "$tmpdir/skill-json.stderr"
+  python3 -m json.tool "$tmpdir/skill-read.json" >/dev/null
   "$factile_bin" init --json > "$tmpdir/curator-reconcile.json"
   PATH="$tmpdir:$PATH" "$factile_bin" skill doctor codex --json >/dev/null
+  cp .agents/skills/factile/SKILL.md "$tmpdir/skill-generated.md"
+  printf '\nLocally customized skill guidance.\n' >> .agents/skills/factile/SKILL.md
+  cp .agents/skills/factile/SKILL.md "$tmpdir/skill-edited.md"
+  if "$factile_bin" init > "$tmpdir/skill-edited-init.txt" 2> "$tmpdir/skill-edited-init.stderr"; then
+    echo 'init accepted a locally edited versioned skill' >&2
+    exit 1
+  fi
+  require_contains "$tmpdir/skill-edited-init.stderr" 'edited skill'
+  cmp .agents/skills/factile/SKILL.md "$tmpdir/skill-edited.md"
+  cp "$tmpdir/skill-generated.md" .agents/skills/factile/SKILL.md
 )
 require_contains "$tmpdir/curator-reconcile.json" '"root_bundle_path": "knowledge"'
 require_contains "$tmpdir/curator-reconcile.json" '"mode": "curator"'
 require_contains "$tmpdir/curator-reconcile.json" '"profile": "software"'
 require_contains "$tmpdir/curator-reconcile.json" '"action": "updated"'
 require_contains "$tmpdir/curator-reconcile.json" '"ok": true'
+require_contains "$curator_skill_workspace/.agents/skills/factile/SKILL.md" "  version: \"v$version\""
+require_contains "$curator_skill_workspace/.agents/skills/factile/SKILL.md" '  factile-content-sha256: '
 if grep -F -- '"--read-only"' "$curator_skill_workspace/.codex/config.toml" >/dev/null; then
   echo 'curator init reconciliation downgraded MCP to reader mode' >&2
   exit 1

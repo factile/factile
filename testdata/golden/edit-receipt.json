@@ -1,0 +1,14 @@
+{
+  "path": "/log",
+  "revision": "sha256:7aa7a5359173d05b63cfd682e3c38487f3cb4f7f1d60659fe59fab1505977d4c",
+  "changed": true,
+  "summary": [
+    "replace_text"
+  ],
+  "validation": {
+    "scope": "document_frontmatter",
+    "valid": true,
+    "issues": []
+  },
+  "diff": "--- a/log\n+++ b/log\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+}

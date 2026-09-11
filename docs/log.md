@@ -6,6 +6,22 @@
   explicit Core tag validation (ft-0zn). Added parser and CLI JSON regressions;
   verified the shared EOF/tag and schema-definition cases against Server.
 
+## 2026-09-10
+
+- Aligned top-level and editing-command help with exact and batched patches,
+  added help command routes, and shortened agent guidance around authorized
+  read/patch workflows with revision reuse.
+
+- Versioned generated agent skills with the binary release and a content checksum;
+  added read-only mismatch diagnostics, explicit repair guidance, and protection
+  for local edits while retaining the legacy upgrade path.
+- Added shared ordered edits, exact text replacement, and compact receipts/diffs
+  to CLI, MCP, and the local UI bridge; retained default JSON contracts.
+- Preserved unrelated Markdown/frontmatter bytes, fixed fenced and ambiguous
+  section matching, and enabled plain reserved index/log reads and edits.
+- Documented revision reuse, explicit conflict recovery, and the shortest
+  authorized curator workflow with a reproducible editing payload comparison.
+
 ## 2026-07-27
 
 - Clarified that public Factile paths use single forward-slash separators;

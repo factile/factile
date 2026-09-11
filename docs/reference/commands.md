@@ -14,7 +14,8 @@ The Root Layout v2 command shape is:
 factile [global options] (<command> [args] | <path>)
 ```
 
-Run `factile --help` or `factile <command> --help` for executable usage.
+Run `factile help` (or `--help`) for the overview. Use `factile help patch`,
+`factile patch help`, or `factile patch --help` for command options and examples.
 Global options may appear before or after a command.
 
 ## Global options
@@ -177,18 +178,40 @@ Ordinary file operands retain their existing behavior.
 Patch options are:
 
 ```text
+--replace-text <old> <new>
 --set <key=value>
 --delete-key <key>
 --replace-section <heading> <file|->
 --append-section <heading> <file|->
 --replace-body <file|->
+--input <file|->
+--brief
+--diff
 ```
 
-The options may be repeated. Across all patch content options, at most one
+Edit flags run in order and may be repeated. Exact text replacements require
+one match in the Markdown body. Across all patch content options, at most one
 operand may be exactly `-`; it reads standard input. Factile rejects a second
 `-` before reading standard input or changing the document. Ordinary files may
 be repeated, and `./-` addresses a literal file named `-`. All
 existing-document writes require the current document revision.
+
+`--input` accepts one JSON patch object and cannot be combined with edit flags.
+Use `operations` for ordered `replace_text`, `replace_section`, `append_section`,
+`replace_body`, `set`, and `delete_key` edits. It accepts `expected_revision`,
+`brief`, `diff`, and the legacy patch fields too. All edits to a document save
+atomically. Section operations ignore fenced code and reject duplicate headings.
+
+`--brief --json` returns a compact receipt with `path`, `revision`, `changed`,
+`summary`, and `validation`. `--diff` adds a unified diff. Default JSON remains
+`{"concept": ...}`; requesting only a diff adds a `receipt` beside it. Validation
+scope is document frontmatter, excluding Markdown syntax and bundle/link checks.
+No-op edits retain their revision. Conflicts include expected/current revisions;
+read and reconcile before retrying. Plain or typed `/index` and `/log` support
+read/write/patch with the same source and revision checks.
+
+See [Editing documents](/guides/editing-documents.md) for inline JSON examples.
+
 
 ## Bundle inspection
 
@@ -231,7 +254,7 @@ focused diagnostics.
 | `2` | invalid path syntax, unsupported command, or command usage |
 | `3` | validation or OKF parsing failure, including failed post-init health |
 | `4` | missing workspace, invalid bundle context, mount, path, concept, or wrong path kind |
-| `5` | existing destination, missing/stale revision, or missing patch section |
+| `5` | existing destination, missing/stale revision, or missing/ambiguous patch match |
 | `6` | read-only, unsafe, unsupported, or unavailable source/revision |
 | `7` | partial failure |
 | `8` | lock timeout |

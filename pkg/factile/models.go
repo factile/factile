@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/factile/factile/pkg/conceptschema"
+	"github.com/factile/factile/pkg/patch"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -104,7 +105,8 @@ type ListResult struct {
 }
 
 type ConceptResult struct {
-	Concept Concept `json:"concept"`
+	Concept Concept      `json:"concept"`
+	Receipt *EditReceipt `json:"receipt,omitempty"`
 }
 
 type Directory struct {
@@ -332,13 +334,34 @@ type WriteConceptInput struct {
 	Markdown         string
 }
 
+// EditReceipt reports validation of this document only, not links or the bundle.
+type EditReceipt struct {
+	Path       string         `json:"path"`
+	Revision   string         `json:"revision"`
+	Changed    bool           `json:"changed"`
+	Summary    []string       `json:"summary"`
+	Validation EditValidation `json:"validation"`
+	Diff       *string        `json:"diff,omitempty"`
+}
+
+type EditValidation struct {
+	Scope  string            `json:"scope"`
+	Valid  bool              `json:"valid"`
+	Issues []ValidationIssue `json:"issues"`
+}
+
+type PatchOperation = patch.Operation
+
 type PatchConceptInput struct {
-	ExpectedRevision string
-	Set              map[string]any
-	DeleteKeys       []string
-	ReplaceSections  map[string]string
-	AppendSections   map[string]string
-	ReplaceBody      *string
+	ExpectedRevision string            `json:"expected_revision"`
+	Set              map[string]any    `json:"set,omitempty"`
+	DeleteKeys       []string          `json:"delete_keys,omitempty"`
+	ReplaceSections  map[string]string `json:"replace_sections,omitempty"`
+	AppendSections   map[string]string `json:"append_sections,omitempty"`
+	ReplaceBody      *string           `json:"replace_body,omitempty"`
+	Operations       []PatchOperation  `json:"operations,omitempty"`
+	Brief            bool              `json:"brief,omitempty"`
+	Diff             bool              `json:"diff,omitempty"`
 }
 
 type Workspace interface {

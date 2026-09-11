@@ -1,0 +1,13 @@
+{
+  "version": "v2.0.0",
+  "installations": [
+    {
+      "scope": "repo",
+      "path": ".agents/skills/factile/SKILL.md",
+      "version": "v1.0.0",
+      "status": "outdated",
+      "mode": "reader",
+      "message": "Factile repo skill v1.0.0 differs from the guidance bundled with binary v2.0.0; run `factile init` in the selected workspace."
+    }
+  ]
+}

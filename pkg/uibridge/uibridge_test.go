@@ -766,3 +766,51 @@ func uiHasMount(mounts []factile.Mount, mountPath string) bool {
 	}
 	return false
 }
+
+func TestPatchBridgeUsesSharedEditing(t *testing.T) {
+	dir := t.TempDir()
+	writeUICombinedWorkspace(t, dir)
+	source := "---\r\n# Preserve\r\ntype: Guide\r\ntitle: \"Title\"\r\n---\r\nOld sentence.\r\n"
+	writeUITestFile(t, filepath.Join(dir, "guide.md"), source)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: dir})
+	read, err := ws.Read(context.Background(), "/guide", factile.ReadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{"path": "/guide", "expected_revision": read.Concept.Revision, "operations": []factile.PatchOperation{{Op: "replace_text", Old: "Old sentence.", New: "New sentence."}}, "brief": true, "diff": true}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(ws, Options{Curator: true})
+	response := requestWithBody(handler, http.MethodPost, APIPrefix+"/writer/patch", string(body))
+	if response.Code != http.StatusOK {
+		t.Fatalf("patch: %s", response.Body.String())
+	}
+	var receipt factile.EditReceipt
+	if err = json.Unmarshal(response.Body.Bytes(), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, "guide.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != strings.Replace(source, "Old sentence.", "New sentence.", 1) || !receipt.Changed || receipt.Diff == nil || strings.Contains(response.Body.String(), `"concept"`) {
+		t.Fatalf("bridge patch: %s %q", response.Body.String(), saved)
+	}
+	conflict := requestWithBody(handler, http.MethodPost, APIPrefix+"/writer/patch", string(body))
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), receipt.Revision) {
+		t.Fatalf("conflict details: %s", conflict.Body.String())
+	}
+	input["expected_revision"] = receipt.Revision
+	input["operations"] = []factile.PatchOperation{{Op: "replace_text", Old: "missing", New: "new"}}
+	body, _ = json.Marshal(input)
+	response = requestWithBody(handler, http.MethodPost, APIPrefix+"/writer/patch", string(body))
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("matching status: %d %s", response.Code, response.Body.String())
+	}
+	reader := requestWithBody(NewHandler(ws, Options{}), http.MethodPost, APIPrefix+"/writer/patch", string(body))
+	if reader.Code != http.StatusNotImplemented {
+		t.Fatalf("reader patch status: %d", reader.Code)
+	}
+}

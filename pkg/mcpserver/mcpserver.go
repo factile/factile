@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/factile/factile/pkg/factile"
@@ -119,7 +120,7 @@ func (s *Server) Tools() []Tool {
 				"expected_revision": stringSchema("Current concept revision."),
 				"markdown":          stringSchema("Replacement Markdown body."),
 			}, "path", "expected_revision", "markdown")),
-			tool("factile_patch", "Patch concept frontmatter or Markdown.", objectSchema(map[string]any{
+			tool("factile_patch", "Edit a document, including index/log, atomically. Read once, reuse its revision, then reuse the returned revision. Prefer ordered operations and brief receipts for precise edits.", objectSchema(map[string]any{
 				"path":              stringSchema("Virtual Factile concept path."),
 				"expected_revision": stringSchema("Current concept revision."),
 				"set":               objectValueSchema("Frontmatter keys to set."),
@@ -127,6 +128,9 @@ func (s *Server) Tools() []Tool {
 				"replace_sections":  stringMapSchema("Markdown sections to replace."),
 				"append_sections":   stringMapSchema("Markdown sections to append to."),
 				"replace_body":      stringSchema("Replacement Markdown body."),
+				"operations":        patchOperationsSchema(),
+				"brief":             boolSchema("Return a compact receipt without the complete document."),
+				"diff":              boolSchema("Include a unified diff; validation covers document frontmatter only, not links or the bundle."),
 			}, "path", "expected_revision")),
 			tool("factile_rename", "Rename one concept.", objectSchema(map[string]any{
 				"old_path":          stringSchema("Current virtual Factile concept path."),
@@ -398,14 +402,27 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
 		}
-		return s.workspace.Patch(ctx, stringArg(args, "path"), factile.PatchConceptInput{
-			ExpectedRevision: stringArg(args, "expected_revision"),
-			Set:              anyMapArg(args, "set"),
-			DeleteKeys:       stringSliceArg(args, "delete_keys"),
-			ReplaceSections:  stringMapArg(args, "replace_sections"),
-			AppendSections:   stringMapArg(args, "append_sections"),
-			ReplaceBody:      optionalStringArg(args, "replace_body"),
-		})
+		var input struct {
+			Path string `json:"path"`
+			factile.PatchConceptInput
+		}
+		data, err := json.Marshal(args)
+		if err != nil {
+			return nil, err
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			return nil, factile.NewError("invalid_patch", err.Error())
+		}
+		result, err := s.workspace.Patch(ctx, input.Path, input.PatchConceptInput)
+		if err != nil {
+			return nil, err
+		}
+		if input.Brief {
+			return result.Receipt, nil
+		}
+		return result, nil
 	case "factile_rename":
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
@@ -648,4 +665,16 @@ func mustJSON(value any) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func patchOperationsSchema() map[string]any {
+	return map[string]any{"type": "array", "description": "Edits run in order after legacy fields (set, delete_keys, sorted replace_sections, sorted append_sections, replace_body). Text replacement matches exactly once in the Markdown body. Use more surrounding text for duplicate matches. Example: [{\"op\":\"replace_text\",\"old\":\"old sentence\",\"new\":\"new sentence\"}].", "items": objectSchema(map[string]any{
+		"op":       map[string]any{"type": "string", "enum": []string{"replace_text", "replace_section", "append_section", "replace_body", "set", "delete_key"}},
+		"old":      stringSchema("Exact non-empty old text for replace_text, including original line endings."),
+		"new":      stringSchema("Replacement text; empty deletes the old text."),
+		"heading":  stringSchema("Unique section heading; headings inside fences are ignored."),
+		"markdown": stringSchema("Content for section or body operations."),
+		"key":      stringSchema("Frontmatter key for set or delete_key."),
+		"value":    map[string]any{"description": "Value for set."},
+	}, "op")}
 }

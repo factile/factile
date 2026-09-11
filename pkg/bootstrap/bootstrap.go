@@ -388,7 +388,7 @@ func prepareAgentInstall(workDir string, plan *agentInstallPlan) error {
 	prepared, err := skill.PrepareRepoInstallAt(workDir, skill.InstallOptions{Scope: "repo", Mode: plan.mode, Profile: plan.profile})
 	if err != nil {
 		return initError(
-			"Repo agent integration cannot be reconciled safely.",
+			"Repo agent integration cannot be reconciled safely. "+err.Error(),
 			map[string]string{"cause": err.Error()},
 		)
 	}

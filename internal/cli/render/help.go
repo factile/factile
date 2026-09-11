@@ -31,6 +31,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		{command: "factile context / \"what should I know?\"", description: "Gather task context"},
 		{command: "factile ui", description: "Open the local browser reader"},
 		{command: "factile version", description: "Show build version"},
+		{command: "factile help <command>", description: "Show command options and examples"},
 	}); err != nil {
 		return err
 	}
@@ -80,8 +81,8 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		{title: "Write commands", items: []helpItem{
 			{command: "mkdir <path> [--title <title>] [--log] [--overview] [--bundle]", description: "Create a directory scaffold"},
 			{command: "create <document-path> --type <type> --title <title> --body <file|->", description: "Create a document"},
-			{command: "write <document-path> --rev <rev> --body <file|->", description: "Replace Markdown body"},
-			{command: "patch <document-path> --rev <rev> [patch options <file|->]", description: "Edit frontmatter or sections; at most one content operand may use -"},
+			{command: "write <document-path> --rev <rev> --body <file|->", description: "Replace the whole body; preserve frontmatter"},
+			{command: "patch <document-path> --rev <rev> [options]", description: "Exact text, metadata, sections, or ordered edits via --input -"},
 			{command: "rename <old-path> <new-path> --rev <rev>", description: "Move one document"},
 			{command: "delete <document-path> --rev <rev>", description: "Delete one document"},
 			{command: "deprecate <document-path> --rev <rev> --reason <text>", description: "Mark a document deprecated"},
@@ -103,7 +104,13 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintln(w, "Use --json for scripts and agents. Use '<command> --help' for command-specific usage."); err != nil {
+	if _, err := fmt.Fprintln(w, `Agent editing: read <path> --json, then use its revision with:
+  factile patch <path> --rev <rev> --replace-text 'old' 'new' --brief --json
+  Batch edits to one document with --input -; add --diff when needed.
+  create/write --body - reads stdin; patch allows at most one content operand to use -.`); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "Use --json for scripts and agents. Use 'factile help <command>' or '<command> --help' for details."); err != nil {
 		return err
 	}
 	return nil

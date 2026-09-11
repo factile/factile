@@ -1,0 +1,3 @@
+# Log
+
+Initial entry.

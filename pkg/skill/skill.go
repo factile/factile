@@ -15,6 +15,7 @@ import (
 
 	"github.com/factile/factile/internal/atomicfile"
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/version"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -27,9 +28,9 @@ const AgentsBlockEnd = "<!-- factile:codex:end -->"
 const MCPBlockStart = "# factile:codex-mcp:start"
 const MCPBlockEnd = "# factile:codex-mcp:end"
 
-const Summary = "Use local Factile OKF knowledge when a task depends on repository-specific architecture, design decisions, domain concepts, workflows, runbooks, standards, policy, legal, compliance, or documentation knowledge."
+const Summary = "Read and edit local Factile knowledge through virtual paths and revision-checked mutations."
 
-const Description = "Use local Factile OKF knowledge for architecture, design, documentation, review, runbook, standards, policy, legal, compliance, domain, or implementation-choice tasks that need repository knowledge. Discover local knowledge paths, retrieve focused context, and cite relevant concepts. Do not use for mechanical renames, formatting, syntax fixes, or obvious local edits."
+const Description = "Find and use repository knowledge through Factile. Use for architecture, design, and implementation decisions that need project context, and to create or edit Factile/OKF documents. Skip mechanical code edits that need no knowledge context."
 
 const legacyV040SkillSignature = "Factile exposes one workspace's OKF knowledge as a virtual filesystem."
 
@@ -63,6 +64,7 @@ type ListResult struct {
 type InspectResult struct {
 	Target         string   `json:"target"`
 	Name           string   `json:"name"`
+	Version        string   `json:"version"`
 	Summary        string   `json:"summary"`
 	Description    string   `json:"description"`
 	Files          []string `json:"files"`
@@ -85,6 +87,7 @@ type FileChange struct {
 
 type InstallResult struct {
 	Target  string       `json:"target"`
+	Version string       `json:"version"`
 	Scope   string       `json:"scope"`
 	Mode    string       `json:"mode,omitempty"`
 	Profile string       `json:"profile,omitempty"`
@@ -129,17 +132,22 @@ type DoctorCheck struct {
 }
 
 type DoctorResult struct {
-	Target string        `json:"target"`
-	OK     bool          `json:"ok"`
-	Checks []DoctorCheck `json:"checks"`
+	Target        string         `json:"target"`
+	Version       string         `json:"version"`
+	OK            bool           `json:"ok"`
+	Checks        []DoctorCheck  `json:"checks"`
+	Installations []Installation `json:"installations"`
 }
 
 type installedSkillState struct {
-	Exists     bool
-	Recognized bool
-	Current    bool
-	Mode       string
-	Profile    string
+	Exists          bool
+	Recognized      bool
+	Current         bool
+	Mode            string
+	Profile         string
+	Version         string
+	Modified        bool
+	MetadataInvalid bool
 }
 
 type managedBlockKind uint8
@@ -193,6 +201,7 @@ func Inspect(target string) (InspectResult, error) {
 	return InspectResult{
 		Target:      TargetCodex,
 		Name:        "factile",
+		Version:     version.Current().Version,
 		Summary:     Summary,
 		Description: Description,
 		Files: []string{
@@ -310,6 +319,9 @@ func validateManagedPath(anchor, filename, label string) error {
 
 func validateManagedSkillOwnership(filename string) error {
 	state := inspectInstalledSkill(filename)
+	if state.Modified || state.MetadataInvalid {
+		return factile.NewError(factile.ErrInvalidPath, "Factile cannot replace an edited skill or invalid version metadata at "+filename+". Preserve your edits elsewhere and restore the generated copy, or move it aside before retrying.")
+	}
 	if state.Exists && !state.Recognized {
 		return factile.NewError(factile.ErrInvalidPath, "Factile cannot replace an unrecognized skill at "+filename+". Move or remove it, then retry.")
 	}
@@ -396,7 +408,7 @@ func Doctor(ctx context.Context, target string, opts DoctorOptions) (DoctorResul
 	if opts.Probe == "" {
 		opts.Probe = "local knowledge discovery probe"
 	}
-	result := DoctorResult{Target: TargetCodex, OK: true}
+	result := DoctorResult{Target: TargetCodex, Version: version.Current().Version, OK: true, Installations: installedGuidance(workDir)}
 	add := func(name, status, message string) {
 		if status == "fail" {
 			result.OK = false
@@ -543,6 +555,9 @@ func ApplyRepoInstall(plan RepoInstallPlan) (InstallResult, error) {
 	if plan.workDir == "" {
 		return InstallResult{}, factile.NewError(factile.ErrInvalidPath, "Invalid empty repo skill plan")
 	}
+	if err := PreflightRepoInstall(plan.workDir); err != nil {
+		return InstallResult{}, err
+	}
 	files := make([]FileChange, 0, len(plan.changes))
 	for _, prepared := range plan.changes {
 		switch {
@@ -569,7 +584,7 @@ func ApplyRepoInstall(plan RepoInstallPlan) (InstallResult, error) {
 		}
 		files = append(files, displayChange(plan.workDir, FileChange{Path: prepared.path, Action: prepared.action}))
 	}
-	return InstallResult{Target: TargetCodex, Scope: "repo", Mode: plan.mode, Profile: plan.profile, Files: files, Message: "Installed repo-local Factile Codex skill, AGENTS.md guidance, and local MCP config."}, nil
+	return InstallResult{Target: TargetCodex, Version: version.Current().Version, Scope: "repo", Mode: plan.mode, Profile: plan.profile, Files: files, Message: "Installed repo-local Factile Codex skill, AGENTS.md guidance, and local MCP config."}, nil
 }
 
 func prepareRepoWrite(filename string, data []byte, mode os.FileMode) (preparedRepoChange, error) {
@@ -662,7 +677,7 @@ func installUser(opts InstallOptions) (InstallResult, error) {
 	} else if change.Action == "removed" {
 		files = append(files, change)
 	}
-	return InstallResult{Target: TargetCodex, Scope: "user", Mode: opts.Mode, Profile: opts.Profile, Files: files, Message: "Installed the user-level Factile Codex skill. Verify discovery with `factile skill doctor codex --json`."}, nil
+	return InstallResult{Target: TargetCodex, Version: version.Current().Version, Scope: "user", Mode: opts.Mode, Profile: opts.Profile, Files: files, Message: "Installed the user-level Factile Codex skill. Verify discovery with `factile skill doctor codex --json`."}, nil
 }
 
 func uninstallRepo(opts InstallOptions) (UninstallResult, error) {
@@ -783,10 +798,14 @@ func skillMarkdown(mode string, profile string) string {
 		b.WriteString("\n")
 		b.WriteString(skillProfileSection(profile))
 	}
-	return b.String()
+	return stampSkillMarkdown(b.String())
 }
 
 func skillInstallMarker(mode string, profile string) string {
+	return strings.TrimSuffix(legacySkillInstallMarker(mode, profile), " -->") + " format=1 -->"
+}
+
+func legacySkillInstallMarker(mode string, profile string) string {
 	if profile == "" {
 		profile = "none"
 	}
@@ -794,25 +813,10 @@ func skillInstallMarker(mode string, profile string) string {
 }
 
 func skillModeSection(mode string) string {
-	var b strings.Builder
-	b.WriteString("## Mode\n\n")
-	switch mode {
-	case ModeCurator:
-		b.WriteString("Curator mode is installed. Use Factile to manage local and read-only Git path mounts, views, and OKF documents when the user asks for curation work.\n\n")
-		b.WriteString("- Use `factile mount`, `factile unmount`, and `factile mounts` to manage `<name>.mount.toml` path mounts.\n")
-		b.WriteString("- Git mounts are always read-only; use `factile refresh <mount-path>` only for an immediate upstream check.\n")
-		b.WriteString("- Use `factile view list`, `factile view inspect`, `factile view set`, and `factile view delete` to manage workspace-level `factile.views.toml`.\n")
-		b.WriteString("- Use `factile list / --brief --json`, `factile stat <path> --json`, and focused `factile context` before changing knowledge.\n")
-		b.WriteString("- Use narrower paths or `--view <id>` when the task needs a smaller reader scope.\n")
-		b.WriteString("- Use write commands only with required revisions and only when the user asked to change knowledge.\n")
-		b.WriteString("- Validate the affected path after mount, view, or content changes.\n")
-	default:
-		b.WriteString("Reader mode is installed. Use Factile to discover and consume workspace knowledge without mutating workspace or bundle manifests, mount descriptors, views, or OKF documents.\n\n")
-		b.WriteString("- Inspect Git mount status with `factile mounts --json`; explicit refresh changes generated cache state, not source content.\n")
-		b.WriteString("- Do not use `factile create`, `write`, `patch`, `rename`, `delete`, `deprecate`, `mount`, `unmount`, `view set`, or `view delete` unless the user explicitly asks to curate knowledge.\n")
-		b.WriteString("- The configured MCP server must include `--read-only`; `factile skill doctor codex --json` verifies the generated mode and config agree.\n")
+	if mode == ModeCurator {
+		return "## Mode\n\nCurator mode is installed. Use the editing workflow above when the user asks to change knowledge. Manage mounts and views only when requested; source permissions still apply.\n"
 	}
-	return b.String()
+	return "## Mode\n\nReader mode is installed. Read by default; edit only when explicitly requested and allowed by project instructions. MCP stays `--read-only`; use CLI for authorized edits without changing that configuration.\n"
 }
 
 func skillProfileSection(profile string) string {
@@ -970,29 +974,43 @@ func addGuidanceLayoutCheck(repoSkill, userSkill installedSkillState, add func(s
 		return
 	}
 	var drifted []string
-	if repoSkill.Exists && (!repoSkill.Recognized || !repoSkill.Current) {
-		drifted = append(drifted, "repo skill")
-	}
-	if userSkill.Exists && (!userSkill.Recognized || !userSkill.Current) {
-		drifted = append(drifted, "user skill")
+	for _, item := range []struct {
+		scope string
+		state installedSkillState
+	}{{"repo", repoSkill}, {"user", userSkill}} {
+		if item.state.Exists && !item.state.Current {
+			drifted = append(drifted, guidanceMessage(item.scope, item.state))
+		}
 	}
 	if len(drifted) > 0 {
-		add("guidance_layout", "fail", "Generated Factile guidance is missing install metadata or differs from the current generator in "+strings.Join(drifted, ", ")+"; rerun `factile skill install codex --scope repo` or `--scope user` for the affected scope.")
+		add("guidance_layout", "fail", strings.Join(drifted, " "))
 		return
 	}
 	add("guidance_layout", "pass", "Installed Factile skill files match the current generator")
 }
 
 func inspectInstalledSkill(filename string) installedSkillState {
-	data, err := os.ReadFile(filename)
-	if err != nil {
+	info, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
 		return installedSkillState{}
 	}
+	if err != nil || !info.Mode().IsRegular() {
+		return installedSkillState{Exists: true, MetadataInvalid: true}
+	}
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return installedSkillState{Exists: true, MetadataInvalid: true}
+	}
 	state := installedSkillState{Exists: true}
+	inspectSkillMetadata(data, &state)
 	for _, mode := range []string{ModeReader, ModeCurator} {
 		for _, profile := range []string{"", "software"} {
-			if !strings.Contains(string(data), skillInstallMarker(mode, profile)) {
+			versioned := strings.Contains(string(data), skillInstallMarker(mode, profile))
+			if !versioned && !strings.Contains(string(data), legacySkillInstallMarker(mode, profile)) {
 				continue
+			}
+			if versioned && state.Version == "" {
+				state.MetadataInvalid = true
 			}
 			if state.Recognized {
 				return state

@@ -1,85 +1,71 @@
 ---
 name: factile
-description: Use local Factile OKF knowledge for architecture, design, documentation, review, runbook, standards, policy, legal, compliance, domain, or implementation-choice tasks that need repository knowledge. Discover local knowledge paths, retrieve focused context, and cite relevant concepts. Do not use for mechanical renames, formatting, syntax fixes, or obvious local edits.
+description: Find and use repository knowledge through Factile. Use for architecture, design, and implementation decisions that need project context, and to create or edit Factile/OKF documents. Skip mechanical code edits that need no knowledge context.
+metadata:
+  version: {{VERSION}}
+  factile-content-sha256: {{CONTENT_SHA256}}
 ---
 
 # Factile local knowledge workflow
 
-## Workspace model
+Use `--json` for agent results and virtual paths such as `/guides/setup`, without
+`.md`. Use `factile <command> --help` for options.
 
-- The nearest ancestor `factile.toml` with `[workspace]` is the workspace
-  boundary. Its selected root bundle has `[bundle]`, either in a separate
-  `factile.toml` or in the same manifest when the workspace root is also the
-  bundle.
-- The selected root bundle supplies the same logical `/` throughout the
-  workspace. Nearby or contained secondary bundles are invisible unless
-  mounted.
-- Mount descriptors are `<name>.mount.toml` files in the root bundle. Views
-  live in workspace-level `factile.views.toml` and narrow scope without
-  changing document paths.
-- `.factile/` is ignored workspace-local state and cache only. Never put
-  authored knowledge, configuration, views, mount descriptors, or credentials
-  there.
-- Sources may be local directories or read-only Git repositories. Git
-  authentication belongs in normal credential helpers, OS keychains, SSH
-  agents, or the process environment.
-- Use `--workspace <directory>` for explicit selection. `factile init` may
-  establish a workspace in that existing directory; every other workspace-aware
-  command requires the named directory itself to contain `[workspace]`.
-- Repository setup and repair use `factile init`. It writes tracked manifests,
-  starter knowledge, and generated repo integration, so run it only when the
-  user explicitly asks for initialization or repair. Use `--yes --json` for a
-  requested non-interactive run. Repeated init is the normal repair and upgrade
-  path; it refuses unrecognized generated ownership and malformed managed
-  markers instead of overwriting them.
+## Read what you need
 
-## Workflow
+- If the workspace is unknown, run `factile status --json`. Use
+  `--workspace <directory>` to select one explicitly.
+- For a known path, call `factile read <path> --json` directly.
+- Otherwise, use `factile list <scope> --brief --json` or
+  `factile search <scope> '<query>' --json` to find it. Use
+  `factile context <scope> '<task>' --json` when the task needs several documents;
+  narrow with `--view <id>` when useful. These are alternatives, not a checklist.
+- Apply relevant knowledge with current project facts and cite the paths used.
 
-1. Confirm the workspace and selected root bundle:
+## Edit when requested
 
-   ```bash
-   factile status --json
-   ```
+Prefer Factile CLI or MCP mutation commands for authorized document changes.
+They preserve unrelated content and enforce source permissions and revisions.
 
-2. Choose the smallest useful discovery step:
+Read the target once, then use its `concept.revision`:
 
-   ```bash
-   factile list / --brief --json
-   factile stat <known-path> --json
-   factile view inspect <relevant-view> --json
-   ```
+```bash
+factile read /guide --json
+factile patch /guide --rev <observed-revision> --replace-text 'old' 'new' --brief --json
+```
 
-   If the task or closer guidance names an exact concept path, read or inspect
-   it directly after `status`. Use `factile list / --json` only when the full
-   tree matters; do not run both full and brief root listings by default.
+Batch related edits to that document in one ordered, atomic patch:
 
-3. Get focused context at the narrowest sensible path. Use `/` only for a
-   genuinely cross-cutting task:
+```bash
+factile patch /guide --rev <observed-revision> --input - --brief --json <<'JSON'
+{"operations":[{"op":"replace_text","old":"old","new":"new"},{"op":"set","key":"status","value":"active"}]}
+JSON
+```
 
-   ```bash
-   factile context <path> '<one sentence task summary>' --json
-   factile context <path> '<one sentence task summary>' --view <view-id> --json
-   ```
+- Exact text must match once. Include more context for duplicate matches.
+  Use `--set key=value` / `--delete-key key` for metadata; use section operations
+  when changing a whole section. `--diff` returns the saved diff when needed.
+- Use `factile create <path> --type <type> --title <title> --body -` for new documents and
+  `factile write <path> --rev <rev> --body -` for whole-body replacement. Use `rename`,
+  `deprecate`, or `delete` for those lifecycle changes.
+- Reuse the successful mutation's revision. On a conflict, read and reconcile;
+  do not bypass a rejected edit with a direct file write or a blindly refreshed revision.
+- `/index` and `/log` support the same workflow, with or without frontmatter.
+  Batches cover one document; each document needs its own observed revision.
+- Brief receipts validate document frontmatter only. Run `factile validate <scope>`
+  for broader bundle/link checks when relevant.
+- MCP `factile_patch` accepts the same `operations`, `expected_revision`, `brief`,
+  and `diff` fields. Use the available authorized transport.
 
-   Use `factile search <path> '<query>' --json` when the brief cards do not
-   reveal the relevant path.
+## Workspace boundaries
 
-4. Read only the specific concepts needed for the decision:
+The nearest `factile.toml` with `[workspace]` selects the root bundle and the
+same logical `/` throughout the workspace. Other bundles are visible only when
+mounted. `<name>.mount.toml` descriptors live in the root bundle; views live in
+`factile.views.toml`. `.factile/` holds generated state, not authored knowledge.
 
-   ```bash
-   factile read <document-path> --json
-   ```
-
-5. Apply the retrieved knowledge with current repository facts. Mention the
-   specific Factile concept paths used when relevant.
-
-## Rules
-
-- Prefer JSON output for stable agent-facing results.
-- Do not classify a path as local or mounted before navigating it.
-- Do not invent Factile paths. Discover them or use an exact path supplied by
-  closer guidance.
-- Do not edit Factile configuration, views, mount descriptors, or OKF files
-  unless the user explicitly asks to curate knowledge.
-- If Factile commands fail, continue normally and briefly note the issue.
-- Keep Factile use proportional to the task.
+The root bundle is writable; explicit local mounts are read-only unless opted
+into writes, and Git sources are always read-only. Respect the installed mode
+and project instructions. Change mounts, views, or setup only when requested;
+`factile init` creates or repairs setup. If retrieval is unavailable, continue
+with repository inspection and report the limitation.
