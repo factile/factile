@@ -1,0 +1,47 @@
+{
+  "path": "/",
+  "valid": false,
+  "issues": [
+    {
+      "severity": "error",
+      "code": "missing_type",
+      "message": "Concept frontmatter must include non-empty type",
+      "path": "/bad",
+      "concept_id": "bad"
+    }
+  ],
+  "okf": {
+    "valid": false,
+    "issues": [
+      {
+        "severity": "error",
+        "code": "missing_type",
+        "message": "Concept frontmatter must include non-empty type",
+        "path": "/bad",
+        "concept_id": "bad"
+      }
+    ]
+  },
+  "concept_schemas": [
+    {
+      "bundle_path": "/",
+      "scope_paths": [
+        "/"
+      ],
+      "complete_bundle": true,
+      "result": {
+        "conformant": true,
+        "schemas": [
+          {
+            "path": "/concept-schemas/note.schema.json",
+            "id": "example.note",
+            "concept_type": "Note"
+          }
+        ],
+        "evaluated_concepts": 1,
+        "issues": []
+      },
+      "skipped_concepts": 1
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "path": "/",
+  "valid": true,
+  "issues": [],
+  "okf": {
+    "valid": true,
+    "issues": []
+  },
+  "concept_schemas": [
+    {
+      "bundle_path": "/",
+      "scope_paths": [
+        "/"
+      ],
+      "complete_bundle": true,
+      "result": {
+        "contract": "concept-schema/v1",
+        "conformant": true,
+        "schemas": [],
+        "evaluated_concepts": 0,
+        "issues": []
+      }
+    }
+  ]
+}

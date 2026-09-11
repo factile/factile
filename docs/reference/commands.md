@@ -119,6 +119,13 @@ factile validate <path> [--view <id>]
 factile ui       [--port <port>] [--no-open] [--dev-assets <url>] [--curator]
 ```
 
+`validate` automatically checks base OKF and optional schemas owned by each
+physical bundle. JSON separates `okf` and `concept_schemas` and adds
+`schema_diagnostics` for fields that need attention. A base or profile failure
+returns exit status `3`; an operational resource limit aborts without a report.
+Unknown types remain unprofiled, and writes do not enforce profiles. See
+[Validate concept schemas](/guides/concept-schemas) for a complete example.
+
 `ui` serves the embedded browser on loopback. Reader mode is the default;
 `--curator` enables local write routes. `--dev-assets` loads browser assets from
 the given development server while keeping the local workspace API.

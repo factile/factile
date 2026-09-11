@@ -3,6 +3,7 @@ package factile
 import (
 	"context"
 
+	"github.com/factile/factile/pkg/conceptschema"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -149,9 +150,26 @@ type GraphResult struct {
 }
 
 type ValidationResult struct {
-	Path   string            `json:"path"`
+	Path              string                     `json:"path"`
+	Valid             bool                       `json:"valid"`
+	Issues            []ValidationIssue          `json:"issues"`
+	OKF               *OKFValidationResult       `json:"okf,omitempty"`
+	ConceptSchemas    []BundleSchemaValidation   `json:"concept_schemas"`
+	SchemaDiagnostics []conceptschema.Diagnostic `json:"schema_diagnostics,omitempty"`
+}
+
+type OKFValidationResult struct {
 	Valid  bool              `json:"valid"`
 	Issues []ValidationIssue `json:"issues"`
+}
+
+type BundleSchemaValidation struct {
+	BundlePath      string                `json:"bundle_path"`
+	ScopePaths      []string              `json:"scope_paths"`
+	CompleteBundle  bool                  `json:"complete_bundle"`
+	Result          *conceptschema.Report `json:"result,omitempty"`
+	SkippedConcepts int                   `json:"skipped_concepts,omitempty"`
+	SkippedReason   string                `json:"skipped_reason,omitempty"`
 }
 
 type RenameResult struct {

@@ -1,0 +1,30 @@
+{
+  "path": "/good",
+  "valid": true,
+  "issues": [],
+  "okf": {
+    "valid": true,
+    "issues": []
+  },
+  "concept_schemas": [
+    {
+      "bundle_path": "/",
+      "scope_paths": [
+        "/good"
+      ],
+      "complete_bundle": false,
+      "result": {
+        "conformant": true,
+        "schemas": [
+          {
+            "path": "/concept-schemas/note.schema.json",
+            "id": "example.note",
+            "concept_type": "Note"
+          }
+        ],
+        "evaluated_concepts": 1,
+        "issues": []
+      }
+    }
+  ]
+}

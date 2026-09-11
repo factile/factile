@@ -1,0 +1,73 @@
+{
+  "path": "/",
+  "valid": false,
+  "issues": [
+    {
+      "severity": "error",
+      "code": "concept_schema_violation",
+      "message": "Concept frontmatter does not satisfy its schema",
+      "path": "/bad",
+      "concept_id": "bad",
+      "details": {
+        "bundle_path": "/",
+        "concept_type": "Note",
+        "schema_id": "example.note"
+      }
+    }
+  ],
+  "okf": {
+    "valid": true,
+    "issues": []
+  },
+  "concept_schemas": [
+    {
+      "bundle_path": "/",
+      "scope_paths": [
+        "/"
+      ],
+      "complete_bundle": true,
+      "result": {
+        "contract": "concept-schema/v1",
+        "conformant": false,
+        "schemas": [
+          {
+            "path": "/concept-schemas/note.schema.json",
+            "id": "example.note",
+            "concept_type": "Note"
+          }
+        ],
+        "evaluated_concepts": 2,
+        "issues": [
+          {
+            "severity": "error",
+            "code": "concept_schema_violation",
+            "path": "/bad",
+            "concept_id": "bad",
+            "schema_id": "example.note",
+            "concept_type": "Note"
+          }
+        ]
+      }
+    }
+  ],
+  "schema_diagnostics": [
+    {
+      "bundle_path": "/",
+      "path": "/bad",
+      "schema_id": "example.note",
+      "concept_type": "Note",
+      "field": "/owner",
+      "keyword": "required",
+      "message": "Required field is missing"
+    },
+    {
+      "bundle_path": "/",
+      "path": "/bad",
+      "schema_id": "example.note",
+      "concept_type": "Note",
+      "field": "/state",
+      "keyword": "enum",
+      "message": "Value must be one of the allowed values"
+    }
+  ]
+}

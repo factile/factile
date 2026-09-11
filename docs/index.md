@@ -8,12 +8,13 @@ tags: [factile, cli, documentation]
 # Factile Documentation
 
 - [Overview](overview.md)
-- [CLI architecture](architecture/overview.md)
+- [CLI architecture, frontmatter and schema validation](architecture/overview.md)
 - [Human text and JSON interfaces](architecture/text-mode.md)
 - [Init reconciliation contract](architecture/init-reconciliation.md)
 - [Workspaces, bundles, paths, sources, and views](concepts/roots-paths-and-sources.md)
 - [Getting started](guides/getting-started.md)
 - [Reading knowledge](guides/reading-knowledge.md)
+- [Validate concept schemas](/guides/concept-schemas) - Portable frontmatter and bundle-local validation.
 - [Curating workspaces, mounts, and views](guides/curating-knowledge.md)
 - [Editing documents safely](guides/editing-documents.md)
 - [Agents and local MCP](guides/agents-and-mcp.md)

@@ -122,10 +122,63 @@ func (r *Renderer) RenderValidation(w io.Writer, result factile.ValidationResult
 	if _, err := fmt.Fprintln(w, status+" "+result.Path); err != nil {
 		return err
 	}
-	if len(result.Issues) == 0 {
-		return nil
+	if result.OKF != nil {
+		base := "valid"
+		if !result.OKF.Valid {
+			base = "invalid"
+		}
+		if _, err := fmt.Fprintln(w, "OKF: "+base); err != nil {
+			return err
+		}
 	}
-	return r.renderIssues(w, result.Issues)
+	if len(result.ConceptSchemas) == 0 {
+		if _, err := fmt.Fprintln(w, "Schemas: not evaluated or not reported by this source"); err != nil {
+			return err
+		}
+	}
+	for _, entry := range result.ConceptSchemas {
+		scope := "complete bundle"
+		if !entry.CompleteBundle {
+			scope = "scoped"
+		}
+		message := "not evaluated"
+		if entry.Result != nil {
+			report := entry.Result
+			switch {
+			case !report.Conformant:
+				message = fmt.Sprintf("invalid; schemas: %d, evaluated concepts: %d", len(report.Schemas), report.EvaluatedConcepts)
+			case len(report.Schemas) == 0:
+				message = "no schemas"
+			case report.EvaluatedConcepts == 0:
+				message = fmt.Sprintf("schemas: %d; no matching concepts", len(report.Schemas))
+			default:
+				message = fmt.Sprintf("valid; schemas: %d, evaluated concepts: %d", len(report.Schemas), report.EvaluatedConcepts)
+			}
+		}
+		if entry.SkippedReason != "" {
+			message += "; " + entry.SkippedReason
+		}
+		if entry.SkippedConcepts > 0 {
+			message += fmt.Sprintf("; %d base-invalid concepts skipped", entry.SkippedConcepts)
+		}
+		if _, err := fmt.Fprintf(w, "Schemas %s (%s): %s\n", entry.BundlePath, scope, message); err != nil {
+			return err
+		}
+	}
+	if err := r.renderIssues(w, result.Issues); err != nil {
+		return err
+	}
+	if len(result.SchemaDiagnostics) > 0 {
+		if _, err := fmt.Fprintln(w, "\nSchema fields:"); err != nil {
+			return err
+		}
+		for _, diagnostic := range result.SchemaDiagnostics {
+			if _, err := fmt.Fprintf(w, "  %s %s: %s (schema %s, %s)\n", diagnostic.Path, diagnostic.Field, diagnostic.Message, diagnostic.SchemaID, diagnostic.Keyword); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *Renderer) renderIssues(w io.Writer, issues []factile.ValidationIssue) error {

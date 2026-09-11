@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 var (
@@ -67,8 +66,11 @@ func NormalizeConceptID(id string) string {
 }
 
 func ParseConcept(conceptID string, data []byte) (Document, error) {
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	text := string(data)
 	frontmatter, body, err := splitFrontmatter(text)
+	if err != nil && IsReservedFile(NormalizeConceptID(conceptID)+".md") && strings.TrimRight(strings.SplitN(text, "\n", 2)[0], "\r") != "---" {
+		return Document{ConceptID: NormalizeConceptID(conceptID), Frontmatter: map[string]any{}, Markdown: text}, nil
+	}
 	if err != nil {
 		return Document{}, err
 	}
@@ -102,115 +104,6 @@ func splitFrontmatter(text string) (string, string, error) {
 	return "", "", ErrMissingFrontmatter
 }
 
-func ParseFrontmatter(text string) (map[string]any, []string, error) {
-	values := map[string]any{}
-	var order []string
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	for i := 0; i < len(lines); i++ {
-		raw := lines[i]
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if indentation(raw) > 0 {
-			return nil, nil, fmt.Errorf("%w: unexpected indentation on line %d", ErrInvalidFrontmatter, i+1)
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			return nil, nil, fmt.Errorf("%w: expected key-value pair on line %d", ErrInvalidFrontmatter, i+1)
-		}
-		key := strings.TrimSpace(parts[0])
-		if key == "" {
-			return nil, nil, fmt.Errorf("%w: empty key on line %d", ErrInvalidFrontmatter, i+1)
-		}
-		if _, exists := values[key]; !exists {
-			order = append(order, key)
-		}
-		rawValue := strings.TrimSpace(parts[1])
-		var value any
-		var err error
-		if rawValue == "|" || rawValue == ">" {
-			var block []string
-			block, i = collectIndentedBlock(lines, i+1)
-			value = parseBlockScalar(block, rawValue == ">")
-		} else if rawValue == "" && hasIndentedContent(lines, i+1) {
-			var block []string
-			block, i = collectIndentedBlock(lines, i+1)
-			value, err = parseIndentedValue(block, i+1-len(block))
-		} else {
-			value, err = ParseValue(rawValue)
-		}
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %v on line %d", ErrInvalidFrontmatter, err, i+1)
-		}
-		values[key] = value
-	}
-	return values, order, nil
-}
-
-func ParseValue(text string) (any, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", nil
-	}
-	if text == "null" || text == "~" {
-		return nil, nil
-	}
-	if strings.HasPrefix(text, "[") || strings.HasSuffix(text, "]") {
-		if !strings.HasPrefix(text, "[") || !strings.HasSuffix(text, "]") {
-			return nil, fmt.Errorf("malformed list")
-		}
-		inside := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "["), "]"))
-		if inside == "" {
-			return []string{}, nil
-		}
-		parts := strings.Split(inside, ",")
-		values := make([]any, 0, len(parts))
-		allStrings := true
-		for _, part := range parts {
-			item := strings.TrimSpace(part)
-			if item != "" {
-				parsed, err := ParseValue(item)
-				if err != nil {
-					return nil, err
-				}
-				if _, ok := parsed.(string); !ok {
-					allStrings = false
-				}
-				values = append(values, parsed)
-			}
-		}
-		if allStrings {
-			stringsOnly := make([]string, 0, len(values))
-			for _, value := range values {
-				stringsOnly = append(stringsOnly, value.(string))
-			}
-			return stringsOnly, nil
-		}
-		return values, nil
-	}
-	if (strings.HasPrefix(text, `"`) && strings.HasSuffix(text, `"`)) || (strings.HasPrefix(text, `'`) && strings.HasSuffix(text, `'`)) {
-		unquoted, err := strconv.Unquote(text)
-		if err == nil {
-			return unquoted, nil
-		}
-		return strings.Trim(text, `"'`), nil
-	}
-	if text == "true" {
-		return true, nil
-	}
-	if text == "false" {
-		return false, nil
-	}
-	if i, err := strconv.ParseInt(text, 10, 64); err == nil {
-		return i, nil
-	}
-	if f, err := strconv.ParseFloat(text, 64); err == nil {
-		return f, nil
-	}
-	return text, nil
-}
-
 func Serialize(doc Document) []byte {
 	body := strings.ReplaceAll(doc.Markdown, "\r\n", "\n")
 	var b strings.Builder
@@ -228,12 +121,18 @@ func Serialize(doc Document) []byte {
 
 func FormatValue(value any) string {
 	switch v := value.(type) {
+	case nil:
+		return "null"
 	case []string:
-		return "[" + strings.Join(v, ", ") + "]"
+		items := make([]string, len(v))
+		for i, item := range v {
+			items[i] = FormatValue(item)
+		}
+		return "[" + strings.Join(items, ", ") + "]"
 	case []any:
 		items := make([]string, 0, len(v))
 		for _, item := range v {
-			items = append(items, strings.Trim(FormatValue(item), `"`))
+			items = append(items, FormatValue(item))
 		}
 		return "[" + strings.Join(items, ", ") + "]"
 	case bool:
@@ -245,7 +144,8 @@ func FormatValue(value any) string {
 		if v == "" {
 			return `""`
 		}
-		if isPlainScalar(v) {
+		scalar, err := coreScalar(v)
+		if _, isString := scalar.(string); err == nil && isString && isPlainScalar(v) {
 			return v
 		}
 		return strconv.Quote(v)
@@ -270,208 +170,27 @@ func indentation(line string) int {
 	return count
 }
 
-func hasIndentedContent(lines []string, start int) bool {
-	for i := start; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
-		}
-		return indentation(line) > 0
-	}
-	return false
-}
-
-func collectIndentedBlock(lines []string, start int) ([]string, int) {
-	var block []string
-	i := start
-	for ; i < len(lines); i++ {
-		line := lines[i]
-		if strings.TrimSpace(line) != "" && indentation(line) == 0 {
-			break
-		}
-		block = append(block, line)
-	}
-	return block, i - 1
-}
-
-func parseIndentedValue(lines []string, startLine int) (any, error) {
-	trimmed := trimEmptyLines(lines)
-	if len(trimmed) == 0 {
-		return "", nil
-	}
-	minIndent := minNonEmptyIndent(trimmed)
-	for i := range trimmed {
-		if len(trimmed[i]) >= minIndent {
-			trimmed[i] = trimmed[i][minIndent:]
-		}
-	}
-	first := strings.TrimSpace(trimmed[0])
-	if strings.HasPrefix(first, "- ") {
-		return parseBlockList(trimmed, startLine)
-	}
-	return parseBlockMap(trimmed, startLine)
-}
-
-func trimEmptyLines(lines []string) []string {
-	start := 0
-	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
-		start++
-	}
-	end := len(lines)
-	for end > start && strings.TrimSpace(lines[end-1]) == "" {
-		end--
-	}
-	return append([]string(nil), lines[start:end]...)
-}
-
-func minNonEmptyIndent(lines []string) int {
-	min := -1
-	for _, line := range lines {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		indent := indentation(line)
-		if min == -1 || indent < min {
-			min = indent
-		}
-	}
-	if min < 0 {
-		return 0
-	}
-	return min
-}
-
-func parseBlockMap(lines []string, startLine int) (map[string]any, error) {
-	values := map[string]any{}
-	for i := 0; i < len(lines); i++ {
-		raw := lines[i]
-		if strings.TrimSpace(raw) == "" || strings.HasPrefix(strings.TrimSpace(raw), "#") {
-			continue
-		}
-		if indentation(raw) > 0 {
-			return nil, fmt.Errorf("unexpected indentation on line %d", startLine+i)
-		}
-		key, rawValue, err := splitYAMLPair(strings.TrimSpace(raw), startLine+i)
-		if err != nil {
-			return nil, err
-		}
-		if rawValue == "|" || rawValue == ">" {
-			var block []string
-			block, i = collectIndentedBlock(lines, i+1)
-			values[key] = parseBlockScalar(block, rawValue == ">")
-			continue
-		}
-		if rawValue == "" && hasIndentedContent(lines, i+1) {
-			var block []string
-			block, i = collectIndentedBlock(lines, i+1)
-			value, err := parseIndentedValue(block, startLine+i+1)
-			if err != nil {
-				return nil, err
-			}
-			values[key] = value
-			continue
-		}
-		value, err := ParseValue(rawValue)
-		if err != nil {
-			return nil, err
-		}
-		values[key] = value
-	}
-	return values, nil
-}
-
-func parseBlockList(lines []string, startLine int) ([]any, error) {
-	var values []any
-	for i := 0; i < len(lines); i++ {
-		raw := lines[i]
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		if indentation(raw) > 0 || !strings.HasPrefix(trimmed, "- ") {
-			return nil, fmt.Errorf("expected list item on line %d", startLine+i)
-		}
-		item := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
-		if item == "" {
-			var block []string
-			block, i = collectIndentedBlock(lines, i+1)
-			value, err := parseIndentedValue(block, startLine+i+1)
-			if err != nil {
-				return nil, err
-			}
-			values = append(values, value)
-			continue
-		}
-		if strings.Contains(item, ":") && !strings.HasPrefix(item, `"`) && !strings.HasPrefix(item, `'`) {
-			key, rawValue, err := splitYAMLPair(item, startLine+i)
-			if err == nil {
-				m := map[string]any{}
-				parsed, err := ParseValue(rawValue)
-				if err != nil {
-					return nil, err
-				}
-				m[key] = parsed
-				values = append(values, m)
-				continue
-			}
-		}
-		parsed, err := ParseValue(item)
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, parsed)
-	}
-	return values, nil
-}
-
-func splitYAMLPair(line string, lineNumber int) (string, string, error) {
-	parts := strings.SplitN(line, ":", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("expected key-value pair on line %d", lineNumber)
-	}
-	key := strings.TrimSpace(parts[0])
-	if key == "" {
-		return "", "", fmt.Errorf("empty key on line %d", lineNumber)
-	}
-	return key, strings.TrimSpace(parts[1]), nil
-}
-
-func parseBlockScalar(lines []string, folded bool) string {
-	trimmed := trimEmptyLines(lines)
-	if len(trimmed) == 0 {
-		return ""
-	}
-	minIndent := minNonEmptyIndent(trimmed)
-	values := make([]string, 0, len(trimmed))
-	for _, line := range trimmed {
-		if len(line) >= minIndent {
-			line = line[minIndent:]
-		}
-		values = append(values, strings.TrimRightFunc(line, unicode.IsSpace))
-	}
-	if folded {
-		return strings.Join(values, " ")
-	}
-	return strings.Join(values, "\n") + "\n"
-}
-
 func writeFrontmatterEntry(b *strings.Builder, key string, value any, indent int) {
 	prefix := strings.Repeat(" ", indent)
 	switch v := value.(type) {
 	case map[string]any:
-		b.WriteString(prefix + key + ":\n")
+		if len(v) == 0 {
+			b.WriteString(prefix + key + ": {}\n")
+			return
+		}
+		b.WriteString(prefix + FormatValue(key) + ":\n")
 		for _, child := range orderedKeys(v, nil) {
 			writeFrontmatterEntry(b, child, v[child], indent+2)
 		}
 	case []any:
 		if scalarList(v) {
-			b.WriteString(prefix + key + ": " + FormatValue(v) + "\n")
+			b.WriteString(prefix + FormatValue(key) + ": " + FormatValue(v) + "\n")
 			return
 		}
-		b.WriteString(prefix + key + ":\n")
+		b.WriteString(prefix + FormatValue(key) + ":\n")
 		writeList(b, v, indent+2)
 	default:
-		b.WriteString(prefix + key + ": " + FormatValue(value) + "\n")
+		b.WriteString(prefix + FormatValue(key) + ": " + FormatValue(value) + "\n")
 	}
 }
 
@@ -480,11 +199,19 @@ func writeList(b *strings.Builder, values []any, indent int) {
 	for _, value := range values {
 		switch v := value.(type) {
 		case map[string]any:
+			if len(v) == 0 {
+				b.WriteString(prefix + "- {}\n")
+				continue
+			}
 			b.WriteString(prefix + "-\n")
 			for _, key := range orderedKeys(v, nil) {
 				writeFrontmatterEntry(b, key, v[key], indent+2)
 			}
 		case []any:
+			if len(v) == 0 {
+				b.WriteString(prefix + "- []\n")
+				continue
+			}
 			b.WriteString(prefix + "-\n")
 			writeList(b, v, indent+2)
 		default:
@@ -526,10 +253,10 @@ func isPlainScalar(value string) bool {
 	if strings.TrimSpace(value) != value {
 		return false
 	}
-	if strings.ContainsAny(value, "\n#{}[],&*?|-<>=!%@`") {
+	if strings.ContainsAny(value, "\n#{}[],&*?|-<>=!%@`\"'") {
 		return false
 	}
-	if strings.Contains(value, ": ") {
+	if strings.Contains(value, ": ") || strings.HasSuffix(value, ":") {
 		return false
 	}
 	return true

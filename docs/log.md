@@ -1,5 +1,11 @@
 # Documentation Log
 
+## 2026-09-11
+
+- Fixed frontmatter key-order collection at the projection budget boundary and
+  explicit Core tag validation (ft-0zn). Added parser and CLI JSON regressions;
+  verified the shared EOF/tag and schema-definition cases against Server.
+
 ## 2026-07-27
 
 - Clarified that public Factile paths use single forward-slash separators;
@@ -136,3 +142,17 @@
 - Added the v0.2.0 release-candidate gate, including embedded UI smoke coverage,
   version consistency, npm packaging, cross-platform builds, and public docs
   validation. The private `factile-ui` source remains unpublished.
+
+## 2026-09-11
+
+- Embed the schema-aware shared reader and curator. Verify field diagnostics, honest scope and coverage, legacy responses, and operational failures through real no-Node loopback runtimes on desktop and mobile. Record UI source identity in the embedded asset manifest.
+
+- Clarify that the Concept Schema Go integration and dependencies remain planned until their implementation tasks pass local verification. Hosted CI is deferred separately.
+
+- Replace handwritten frontmatter parsing with explicit YAML 1.2 Core node projection and exact finite JSON numbers. Reject duplicate/non-string keys, cycles and unsupported tags; bound parsing and alias expansion. Preserve string types through serialization and unrelated metadata bytes through patches. Require a non-empty string type for concepts.
+
+- Add the isolated Concept Schema v1 engine with strict definition stages, in-document references, collision handling, exact reports and safe field diagnostics. Bound candidate/input sizes, numeric arithmetic, reference depth, possible evaluation work and regex matching. Qualify the configured Go evaluator against 1,284 applicable official tests and exactly replay all 22 private contract cases. Workspace integration remains the next step.
+
+- Apply concept schemas automatically in workspace validation, isolated by physical root and mount source including cached Git. Report base OKF separately, distinguish complete/scoped/skipped coverage, exclude base-invalid concepts, and deduplicate overlapping views. Preserve existing write and bootstrap health-check policy.
+
+- Expose base/schema coverage and actionable field diagnostics in CLI text and JSON, with matching local MCP and reader/curator bridge results. Add seven JSON/text golden scenarios, operational-error checks and a public schema authoring example. Older base-only results remain explicitly unevaluated.

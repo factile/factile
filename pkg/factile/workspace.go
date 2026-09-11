@@ -440,15 +440,15 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 		return ValidationResult{}, err
 	}
 	if metadataBlocking {
-		return ValidationResult{Path: normalized, Valid: false, Issues: metadataIssues}, nil
+		return baseValidation(normalized, metadataIssues), nil
 	}
-	resultPath, concepts, issues, err := w.validatePathScope(ctx, normalized)
+	scan, err := w.validatePathScope(ctx, normalized)
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	issues = append(metadataIssues, issues...)
-	issues = append(issues, linkIssues(concepts)...)
-	return ValidationResult{Path: resultPath, Valid: !hasErrors(issues), Issues: issues}, nil
+	issues := append(metadataIssues, scan.Issues...)
+	issues = append(issues, linkIssues(scan.Concepts)...)
+	return w.applyConceptSchemas(ctx, baseValidation(scan.Path, issues), scan.Scopes)
 }
 
 // ValidateRootBundle validates only the selected local root bundle. It does
@@ -551,103 +551,23 @@ func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error)
 	return issues, blocking, nil
 }
 
-func (w *LocalWorkspace) validatePathScope(ctx context.Context, normalized string) (string, []scopedConcept, []ValidationIssue, error) {
-	mounts, issues, invalidMounts, err := w.mountsForValidationScope(ctx, normalized)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	var concepts []scopedConcept
-	if normalized == "/" {
-		for _, mount := range mounts {
-			if invalidMounts[mount.MountPath] {
-				continue
-			}
-			if err := ensureReadable(mount); err != nil {
-				return "", nil, nil, err
-			}
-			items, mountIssues, err := w.validateMountScope(mount, "")
-			if err != nil {
-				return "", nil, nil, err
-			}
-			concepts = append(concepts, items...)
-			issues = append(issues, mountIssues...)
-		}
-		return "/", concepts, issues, nil
-	}
-	target, err := vfs.Resolve(mounts, normalized)
-	if err != nil {
-		selected := mountsForVirtualPath(mounts, normalized)
-		if len(selected) == 0 {
-			return "", nil, nil, NormalizeError(err)
-		}
-		for _, mount := range selected {
-			if invalidMounts[mount.MountPath] {
-				continue
-			}
-			if err := ensureReadable(mount); err != nil {
-				return "", nil, nil, err
-			}
-			items, mountIssues, err := w.validateMountScope(mount, "")
-			if err != nil {
-				return "", nil, nil, err
-			}
-			concepts = append(concepts, items...)
-			issues = append(issues, mountIssues...)
-		}
-		return normalized, concepts, issues, nil
-	}
-	if invalidMounts[target.Mount.MountPath] {
-		return target.Path, concepts, issues, nil
-	}
-	if err := ensureReadable(target.Mount); err != nil {
-		return "", nil, nil, err
-	}
-	if target.Kind == TargetConcept {
-		item, conceptIssues, err := w.validateConcept(target.Mount, target.ConceptID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		if item != nil {
-			concepts = append(concepts, *item)
-		}
-		issues = append(issues, conceptIssues...)
-	} else {
-		if target.Kind == TargetPath && !target.Exists {
-			return "", nil, nil, errorf(ErrMountNotFound, "Path not found: %s", target.Path)
-		}
-		items, scopeIssues, err := w.validateMountScope(target.Mount, target.ConceptID)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		concepts = append(concepts, items...)
-		issues = append(issues, scopeIssues...)
-		for _, mount := range mountsForVirtualPath(mounts, normalized) {
-			if invalidMounts[mount.MountPath] {
-				continue
-			}
-			if err := ensureReadable(mount); err != nil {
-				return "", nil, nil, err
-			}
-			items, mountIssues, err := w.validateMountScope(mount, "")
-			if err != nil {
-				return "", nil, nil, err
-			}
-			concepts = append(concepts, items...)
-			issues = append(issues, mountIssues...)
-		}
-	}
-	return target.Path, concepts, issues, nil
-}
-
 func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string, viewID string) (ValidationResult, error) {
 	normalized, selectedPaths, err := w.selectedViewPaths(inputPath, viewID)
 	if err != nil {
 		return ValidationResult{}, err
 	}
+	metadataIssues, blocking, err := w.validateRootMetadata()
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	if blocking {
+		return baseValidation(normalized, metadataIssues), nil
+	}
+	var scopes []schemaScope
 	seenConcepts := map[string]bool{}
 	seenIssues := map[string]bool{}
 	var concepts []scopedConcept
-	issues := []ValidationIssue{}
+	issues := append([]ValidationIssue{}, metadataIssues...)
 	addIssue := func(issue ValidationIssue) {
 		key := issue.Severity + "\x00" + issue.Code + "\x00" + issue.Path + "\x00" + issue.ConceptID + "\x00" + issue.Message
 		if seenIssues[key] {
@@ -657,25 +577,26 @@ func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string
 		issues = append(issues, issue)
 	}
 	for _, selectedPath := range selectedPaths {
-		_, items, itemIssues, err := w.validatePathScope(ctx, selectedPath)
+		scan, err := w.validatePathScope(ctx, selectedPath)
 		if err != nil {
 			return ValidationResult{}, err
 		}
-		for _, item := range items {
+		scopes = append(scopes, scan.Scopes...)
+		for _, item := range scan.Concepts {
 			if seenConcepts[item.Concept.Path] {
 				continue
 			}
 			seenConcepts[item.Concept.Path] = true
 			concepts = append(concepts, item)
 		}
-		for _, issue := range itemIssues {
+		for _, issue := range scan.Issues {
 			addIssue(issue)
 		}
 	}
 	for _, issue := range linkIssuesWithinScopes(concepts, selectedPaths) {
 		addIssue(issue)
 	}
-	return ValidationResult{Path: normalized, Valid: !hasErrors(issues), Issues: issues}, nil
+	return w.applyConceptSchemas(ctx, baseValidation(normalized, issues), scopes)
 }
 
 func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input CreateConceptInput) (ConceptResult, error) {
@@ -1725,7 +1646,8 @@ func pathInAnyScope(candidate string, scopes []string) bool {
 
 func validateDocument(path string, doc okf.Document) []ValidationIssue {
 	var issues []ValidationIssue
-	if strings.TrimSpace(okf.StringField(doc.Frontmatter, "type")) == "" {
+	conceptType, _ := doc.Frontmatter["type"].(string)
+	if !okf.IsReservedFile(doc.ConceptID+".md") && strings.TrimSpace(conceptType) == "" {
 		issues = append(issues, ValidationIssue{
 			Severity:  "error",
 			Code:      "missing_type",

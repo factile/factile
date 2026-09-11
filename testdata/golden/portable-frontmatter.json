@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "hex": 42,
+  "large": 18446744073709551617,
+  "octal": 15,
+  "precise": 1.00000000000000000000000000001,
+  "strings": ["TRUE", "15", "null", "comma, text"],
+  "type": "Probe",
+  "unset": null
+}

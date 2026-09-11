@@ -1,0 +1,10 @@
+invalid /
+OKF: valid
+Schemas / (complete bundle): invalid; schemas: 1, evaluated concepts: 2
+
+Errors:
+  /bad bad [concept_schema_violation] Concept frontmatter does not satisfy its schema
+
+Schema fields:
+  /bad /owner: Required field is missing (schema example.note, required)
+  /bad /state: Value must be one of the allowed values (schema example.note, enum)

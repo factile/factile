@@ -1,0 +1,6 @@
+invalid /
+OKF: valid
+Schemas / (complete bundle): invalid; schemas: 0, evaluated concepts: 0
+
+Errors:
+  /concept-schemas/note.schema.json [invalid_concept_schema] Invalid concept schema: malformed_json

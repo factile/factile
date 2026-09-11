@@ -1,0 +1,8 @@
+version = 2
+
+[workspace]
+root = "."
+
+[bundle]
+name = "schema-profiles"
+title = "Schema validation example"

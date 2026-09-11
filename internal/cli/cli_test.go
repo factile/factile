@@ -246,7 +246,7 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "patch", args: []string{"patch", "--help"}, want: patchUsage},
 		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]"},
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
-		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]"},
+		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]\nValidate base OKF and optional bundle-local Concept Schema v1 profiles.\nChecks frontmatter only; unknown types remain unprofiled. Writes do not enforce profiles.\nJSON separates okf and concept_schemas, with scope and field diagnostics.\nExit 3 reports validation failures; resource limits abort the operation."},
 		{name: "ui", args: []string{"ui", "--help"}, want: "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]"},
 		{name: "mount", args: []string{"mount", "--help"}, want: "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]"},
 		{name: "unmount", args: []string{"unmount", "--help"}, want: "factile unmount <mount-path>"},

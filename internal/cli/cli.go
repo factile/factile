@@ -223,7 +223,7 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runGraph(ctx, ws, args, global, stdout)
 	case "validate":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile validate <path> [--view <id>]")
+			return showUsage(stdout, "factile validate <path> [--view <id>]\nValidate base OKF and optional bundle-local Concept Schema v1 profiles.\nChecks frontmatter only; unknown types remain unprofiled. Writes do not enforce profiles.\nJSON separates okf and concept_schemas, with scope and field diagnostics.\nExit 3 reports validation failures; resource limits abort the operation.")
 		}
 		fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)

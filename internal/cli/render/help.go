@@ -64,7 +64,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "search <path> <query> [--view <id>]", description: "Search OKF documents"},
 			{command: "context <path> <query> [--depth 0|1] [--view <id>]", description: "Assemble relevant context"},
 			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect Markdown links"},
-			{command: "validate <path> [--view <id>]", description: "Validate an OKF scope"},
+			{command: "validate <path> [--view <id>]", description: "Validate base OKF and optional bundle-local concept schemas"},
 			{command: "ui [--port <port>] [--no-open] [--dev-assets <url>]", description: "Serve the local browser reader"},
 		}},
 		{title: "Curator commands", items: []helpItem{

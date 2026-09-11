@@ -1,0 +1,45 @@
+{
+  "path": "/",
+  "valid": false,
+  "issues": [
+    {
+      "severity": "error",
+      "code": "invalid_concept_schema",
+      "message": "Invalid concept schema: malformed_json",
+      "path": "/concept-schemas/note.schema.json",
+      "details": {
+        "bundle_path": "/",
+        "reason": "malformed_json"
+      }
+    }
+  ],
+  "okf": {
+    "valid": true,
+    "issues": []
+  },
+  "concept_schemas": [
+    {
+      "bundle_path": "/",
+      "scope_paths": [
+        "/"
+      ],
+      "complete_bundle": true,
+      "result": {
+        "contract": "concept-schema/v1",
+        "conformant": false,
+        "schemas": [],
+        "evaluated_concepts": 0,
+        "issues": [
+          {
+            "severity": "error",
+            "code": "invalid_concept_schema",
+            "path": "/concept-schemas/note.schema.json",
+            "details": {
+              "reason": "malformed_json"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
