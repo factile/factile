@@ -3,7 +3,8 @@ type: Guide
 title: Getting Started
 description: Install Factile, create a workspace and root bundle, read local knowledge, and validate the result.
 tags: [factile, cli, getting-started]
-timestamp: 2026-07-21T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-21T00:00:00+02:00"
 ---
 
 # Getting Started

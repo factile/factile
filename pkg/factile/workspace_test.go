@@ -1007,7 +1007,7 @@ func TestWorkspaceV2RootWritePatchRenameDeleteDeprecate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deprecated.Concept.Frontmatter["deprecated"] != true {
+	if deprecated.Concept.Frontmatter["status"] != "deprecated" {
 		t.Fatalf("deprecate did not apply to root-local file: %#v", deprecated.Concept.Frontmatter)
 	}
 	renamed, err := ws.Rename(ctx, deprecated.Concept.Path, "/guides/root-note-v2", factile.RenameOptions{ExpectedRevision: deprecated.Concept.Revision})
@@ -1072,8 +1072,8 @@ func TestWorkspaceMkdirCreatesDirectoryScaffolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(index), `okf_version: "0.1"`) {
-		t.Fatalf("bundle index missing okf_version:\n%s", index)
+	if string(index) != "# Coding\n" {
+		t.Fatalf("directory index must be plain:\n%s", index)
 	}
 }
 
@@ -1505,7 +1505,7 @@ func TestWorkspaceWritePatchRenameDeleteDeprecate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deprecated.Concept.Frontmatter["deprecated"] != true {
+	if deprecated.Concept.Frontmatter["status"] != "deprecated" {
 		t.Fatalf("deprecate did not set frontmatter: %#v", deprecated.Concept.Frontmatter)
 	}
 	renamed, err := ws.Rename(ctx, deprecated.Concept.Path, "/product-docs/workflows/payment-import-v2", factile.RenameOptions{ExpectedRevision: deprecated.Concept.Revision})
@@ -1725,7 +1725,7 @@ title = "Outside Scope"
 	if err != nil || len(search.Results) == 0 || !strings.HasPrefix(search.Results[0].Concept.Path, "/git/") {
 		t.Fatalf("unexpected Git search: %#v %v", search, err)
 	}
-	contextPack, err := ws.Context(ctx, "/git", "setup", factile.ContextOptions{Depth: 1})
+	contextPack, err := ws.Context(ctx, "/git", "setup", factile.ContextOptions{Depth: 1, EvaluatedAt: "2026-09-11T08:00:00Z"})
 	if err != nil || len(contextPack.Concepts) == 0 {
 		t.Fatalf("unexpected Git context: %#v %v", contextPack, err)
 	}
@@ -1749,7 +1749,7 @@ title = "Outside Scope"
 	if err != nil {
 		t.Fatal(err)
 	}
-	localContext, err := ws.Context(ctx, "/local", "setup", factile.ContextOptions{Depth: 1})
+	localContext, err := ws.Context(ctx, "/local", "setup", factile.ContextOptions{Depth: 1, EvaluatedAt: "2026-09-11T08:00:00Z"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1761,6 +1761,18 @@ title = "Outside Scope"
 	if err != nil {
 		t.Fatal(err)
 	}
+	if contextPack.Concepts[0].Origin["kind"] != "git" || contextPack.Concepts[0].Origin["revision"] == "" || localContext.Concepts[0].Origin["kind"] != "local" {
+		t.Fatal("context lost source identity")
+	}
+	for i := range contextPack.Concepts {
+		contextPack.Concepts[i].Origin = nil
+	}
+	for i := range localContext.Concepts {
+		localContext.Concepts[i].Origin = nil
+	}
+	// Different source identities have different serialized budget costs.
+	contextPack.Budget.UsedTokens = 0
+	localContext.Budget.UsedTokens = 0
 	for name, pair := range map[string][2]any{
 		"list":       {listed, localListed},
 		"read":       {read, localRead},

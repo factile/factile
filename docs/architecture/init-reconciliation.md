@@ -3,7 +3,8 @@ type: Design
 title: Init Reconciliation Contract
 description: Implemented human-first and repeatable contract for creating, repairing, and upgrading a Factile workspace.
 tags: [factile, cli, init, workspace, reconciliation]
-timestamp: 2026-07-21T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-21T00:00:00+02:00"
 ---
 
 # Init Reconciliation Contract
@@ -233,3 +234,7 @@ matrix. Current user guidance lives in
 [Getting Started](../guides/getting-started.md),
 [Agents and Local MCP](../guides/agents-and-mcp.md), and the
 [command reference](../reference/commands.md).
+
+## OKF 0.2 indexes
+
+Root health checks retain the reserved index identity. Plain root indexes and root indexes declaring only `okf_version: "0.2"` are readable and preserved on reuse. New root indexes declare only that version; their title stays in Markdown. Index frontmatter outside a physical bundle root, or extra root index keys, produces `invalid_reserved_file`. Concepts still require a non-empty `type`.

@@ -243,7 +243,7 @@ func TestCLISubcommandHelp(t *testing.T) {
 	}{
 		{name: "list", args: []string{"list", "--help"}, want: "factile list [path] [--brief] [--view <id>]"},
 		{name: "status", args: []string{"status", "--help"}, want: "factile status"},
-		{name: "search", args: []string{"search", "--help"}, want: "factile search <path> <query> [--view <id>]"},
+		{name: "search", args: []string{"search", "--help"}, want: "factile search <path> <query> [--view <id>] [--include-review] [--evaluated-at <datetime>] [--status <draft|stable|deprecated>] [--review-tier <tier>] [--stale <true|false>] [--changed-since-review <true|false>]"},
 		{name: "mkdir", args: []string{"mkdir", "--help"}, want: "factile mkdir <path> [--title <title>] [--log] [--overview] [--bundle]"},
 		{name: "create", args: []string{"create", "--help"}, want: createUsage},
 		{name: "write", args: []string{"write", "--help"}, want: writeUsage},
@@ -251,7 +251,7 @@ func TestCLISubcommandHelp(t *testing.T) {
 		{name: "rename", args: []string{"rename", "--help"}, want: renameUsage},
 		{name: "delete", args: []string{"delete", "--help"}, want: deleteUsage},
 		{name: "deprecate", args: []string{"deprecate", "--help"}, want: deprecateUsage},
-		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]"},
+		{name: "context", args: []string{"context", "--help"}, want: "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>]"},
 		{name: "graph", args: []string{"graph", "--help"}, want: "factile graph <path> [--depth 0|1] [--view <id>]"},
 		{name: "validate", args: []string{"validate", "--help"}, want: "factile validate <path> [--view <id>]\nValidate base OKF and optional bundle-local Concept Schema v1 profiles.\nChecks frontmatter only; unknown types remain unprofiled. Writes do not enforce profiles.\nJSON separates okf and concept_schemas, with scope and field diagnostics.\nExit 3 reports validation failures; resource limits abort the operation."},
 		{name: "ui", args: []string{"ui", "--help"}, want: "factile ui [--port <port>] [--no-open] [--dev-assets <url>] [--curator]"},
@@ -2222,7 +2222,7 @@ func TestCLIInitMetadataFlagsReconcileManifestAndSeedDocuments(t *testing.T) {
 		t.Fatalf("metadata flags were not reconciled: %#v", manifest.Bundle)
 	}
 	index, err := os.ReadFile(filepath.Join(workspace, "docs", "index.md"))
-	if err != nil || !strings.Contains(string(index), "# Service Handbook Knowledge") || !strings.Contains(string(index), "Operational knowledge for the service.") {
+	if err != nil || !strings.Contains(string(index), "# Service Handbook Knowledge") || !strings.Contains(string(index), `okf_version: "0.2"`) {
 		t.Fatalf("metadata did not seed index: %q, %v", index, err)
 	}
 }
@@ -4025,7 +4025,7 @@ func appendOutputArgs(args []string, outputArgs ...string) []string {
 func assertNotJSONText(t *testing.T, output string) {
 	t.Helper()
 	trimmed := strings.TrimSpace(output)
-	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || strings.Contains(output, `"path":`) {
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || (strings.Contains(output, `"path":`) && !strings.Contains(output, "```json")) {
 		t.Fatalf("text output looked like JSON:\n%s", output)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/mcpserver"
+	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/revision"
 )
 
@@ -36,6 +37,7 @@ func patchWorkspace(t *testing.T) string {
 
 func TestCLIAndMCPPatchParity(t *testing.T) {
 	for _, tc := range []struct{ name, path, extra, input, code string }{
+		{"exact portable numbers", "/guide", "", `{"set":{"extension":{"count":9007199254740993,"ratio":0.12345678901234567890123456789}},"operations":[{"op":"set","key":"observation","value":9007199254740993123456789}]}`, ""},
 		{"ordered exact metadata", "/guide", "", `{"operations":[{"op":"replace_text","old":"An old sentence.","new":"New sentence."},{"op":"replace_text","old":"New sentence.","new":"Final sentence."},{"op":"set","key":"status","value":"active"}]}`, ""},
 		{"repeated section", "/guide", "", `{"operations":[{"op":"append_section","heading":"Notes","markdown":"First"},{"op":"append_section","heading":"Notes","markdown":"Second"}]}`, ""},
 		{"fence", "/guide", "", `{"replace_sections":{"Steps":"Changed"}}`, ""},
@@ -65,7 +67,9 @@ func TestCLIAndMCPPatchParity(t *testing.T) {
 				}
 			}
 			var args map[string]any
-			if err = json.Unmarshal([]byte(tc.input), &args); err != nil {
+			decoder := json.NewDecoder(strings.NewReader(tc.input))
+			decoder.UseNumber()
+			if err = decoder.Decode(&args); err != nil {
 				t.Fatal(err)
 			}
 			if tc.name != "missing revision" && tc.name != "stale" {
@@ -97,13 +101,39 @@ func TestCLIAndMCPPatchParity(t *testing.T) {
 					} `json:"data"`
 				} `json:"error"`
 			}
-			if err = json.Unmarshal(mcpOut.Bytes(), &envelope); err != nil {
-				t.Fatal(err)
-			}
 			cliBytes, _ := os.ReadFile(filepath.Join(cliDir, filename))
 			mcpBytes, _ := os.ReadFile(filepath.Join(mcpDir, filename))
-			if !bytes.Equal(cliBytes, mcpBytes) {
-				t.Fatalf("saved bytes differ\nCLI:%q\nMCP:%q", cliBytes, mcpBytes)
+			comparableMCP := string(mcpBytes)
+			responseMCP := mcpOut.String()
+			cliDoc, _ := okf.ParseConcept(strings.TrimSuffix(filename, ".md"), cliBytes)
+			mcpDoc, _ := okf.ParseConcept(strings.TrimSuffix(filename, ".md"), mcpBytes)
+			if generated, ok := cliDoc.Frontmatter["generated"].(map[string]any); ok {
+				other, ok := mcpDoc.Frontmatter["generated"].(map[string]any)
+				if !ok || generated["by"] != other["by"] {
+					t.Fatal("producer differs")
+				}
+				if _, ok := okf.Datetime(generated["at"]); !ok {
+					t.Fatal("invalid CLI change time")
+				}
+				if _, ok := okf.Datetime(other["at"]); !ok {
+					t.Fatal("invalid MCP change time")
+				}
+				comparableMCP = strings.ReplaceAll(comparableMCP, other["at"].(string), generated["at"].(string))
+				responseMCP = strings.ReplaceAll(responseMCP, other["at"].(string), generated["at"].(string))
+				responseMCP = strings.ReplaceAll(responseMCP, revision.DigestBytes(mcpBytes), revision.DigestBytes(cliBytes))
+			}
+			if err = json.Unmarshal([]byte(responseMCP), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if string(cliBytes) != comparableMCP {
+				t.Fatalf("saved bytes differ: CLI %q MCP %q", cliBytes, mcpBytes)
+			}
+			if tc.name == "exact portable numbers" {
+				for _, number := range []string{"9007199254740993", "0.12345678901234567890123456789", "9007199254740993123456789"} {
+					if !bytes.Contains(cliBytes, []byte(number)) || !bytes.Contains(mcpBytes, []byte(number)) {
+						t.Fatalf("portable number lost: %s: CLI %s MCP %s", number, cliBytes, mcpBytes)
+					}
+				}
 			}
 			if tc.code != "" {
 				var cliError struct {

@@ -3,7 +3,8 @@ type: Guide
 title: Curating Workspaces, Mounts, and Views
 description: Safely compose bundle and Git sources, refresh workspace snapshots, manage views, and scaffold directories.
 tags: [factile, cli, curator, mounts, views]
-timestamp: 2026-07-15T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-15T00:00:00+02:00"
 ---
 
 # Curating Workspaces, Mounts, and Views

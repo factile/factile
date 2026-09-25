@@ -3,7 +3,8 @@ type: Guide
 title: Reading Knowledge
 description: Navigate, read, search, assemble context, inspect links, and validate a Factile workspace.
 tags: [factile, cli, reader, context]
-timestamp: 2026-07-27T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-27T00:00:00+02:00"
 ---
 
 # Reading Knowledge

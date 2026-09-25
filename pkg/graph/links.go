@@ -11,6 +11,7 @@ var markdownLinkRE = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 type Link struct {
 	Raw    string
 	Target string
+	Kind   string
 }
 
 func ExtractMarkdownLinks(markdown string) []Link {

@@ -92,6 +92,9 @@ func (r *Renderer) RenderRead(w io.Writer, result factile.ConceptResult) error {
 			return err
 		}
 	}
+	if err := renderReview(w, concept.ReviewState); err != nil {
+		return err
+	}
 	body := strings.TrimSpace(concept.Markdown)
 	if body == "" {
 		return nil

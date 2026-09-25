@@ -3,7 +3,11 @@ type: Reference
 title: Root Layout v2 Command Reference
 description: Accepted command syntax for the explicit Factile workspace and bundle model.
 tags: [factile, cli, commands, reference]
-timestamp: 2026-07-27T00:00:00+02:00
+generated:
+  at: "2026-09-11T09:43:38.462944424Z"
+  by: factile/v0.6.0
+legacy_metadata:
+  timestamp: "2026-07-27T00:00:00+02:00"
 ---
 
 # Root Layout v2 Command Reference
@@ -125,7 +129,7 @@ physical bundle. JSON separates `okf` and `concept_schemas` and adds
 `schema_diagnostics` for fields that need attention. A base or profile failure
 returns exit status `3`; an operational resource limit aborts without a report.
 Unknown types remain unprofiled, and writes do not enforce profiles. See
-[Validate concept schemas](/guides/concept-schemas) for a complete example.
+[Validate concept schemas](../guides/concept-schemas.md) for a complete example.
 
 `ui` serves the embedded browser on loopback. Reader mode is the default;
 `--curator` enables local write routes. `--dev-assets` loads browser assets from
@@ -210,7 +214,7 @@ No-op edits retain their revision. Conflicts include expected/current revisions;
 read and reconcile before retrying. Plain or typed `/index` and `/log` support
 read/write/patch with the same source and revision checks.
 
-See [Editing documents](/guides/editing-documents.md) for inline JSON examples.
+See [Editing documents](../guides/editing-documents.md) for inline JSON examples.
 
 
 ## Bundle inspection
@@ -274,3 +278,40 @@ Use JSON error codes rather than parsing human messages.
 Outside `init`, the retired global root option and `--mount-file` may produce
 targeted migration diagnostics, but they do not activate compatibility
 behavior in v2.
+
+## OKF v0.2 Authoring
+
+`create` and meaningful concept edits record the actual Factile producer and UTC change time in `generated.by` and `generated.at`. Existing verification history and unrelated metadata are preserved. No-op edits retain the revision; review, lifecycle, or freshness-only changes do not restamp generation. `deprecate` sets `status: deprecated`. Valid lifecycle values are `draft`, `stable`, and `deprecated`; omission means stable.
+
+`mkdir` creates plain directory indexes and date-headed logs. `--bundle` is the `--log --overview` shortcut inside the owning bundle. `init` creates a true bundle-root index containing only `okf_version: "0.2"`, and preserves valid existing root indexes. `overview.md` remains a concept with producer metadata.
+
+## Explicit Bundle Migration
+
+`factile migrate <physical-bundle-directory> [--apply] [--json]` previews the local OKF v0.2 conversion by default. Apply only after reviewing its revisions, diffs, findings, and native validation. Ambiguities and errors block writes; historical producers and review events are never invented. See [Migrating a Local Bundle](../guides/migrating-okf.md) for conversion rules and file atomicity.
+
+## Sources and Claim References
+
+`read` and `context` preserve authored `sources` and expose `source_references`, `claim_references`, and advisory `metadata_diagnostics`. Source entries retain unknown fields, author, modification time, usage count, and the declared source or document usage window. These observations are separate from billing and review.
+
+Internal source paths resolve inside the owning physical bundle. Mounted targets use the corresponding logical mount prefix; views omit derived targets outside their selection. Graphs and rename backlink warnings include `source_reference` relationships. External resources are identified without fetching them, and scope descriptors remain non-dereferenceable evidence. Exact footnote labels join to unique source IDs; code, escapes, and definitions do not invent claims.
+
+## Review and Freshness
+
+Read optional derived state with `factile read /path --include-review --evaluated-at 2026-09-11T08:00:00Z`. The evaluation time defaults to the current UTC instant. `review_state` reports authored review claims, lifecycle, the latest review time, changed-since-review, and whether the freshness deadline is due. It preserves authored timezone and fractional precision. A missing deadline or unavailable change/review time remains unknown.
+
+`factile review /path --rev <observed-revision>` appends an explicit `process:factile/<version>` event at the current time with the observed revision. It keeps earlier history, content and generation metadata unchanged. Local review does not assert an authenticated human identity; arbitrary actor strings can still be imported as portable metadata claims. MCP exposes the same revision-checked `factile_review` operation only in writable mode.
+
+Search accepts `--include-review`, `--evaluated-at`, `--status draft|stable|deprecated`, `--review-tier unverified|machine-confirmed|human-reviewed`, `--stale true|false`, and `--changed-since-review true|false`. Filters apply to query matches and are opt-in. Unknown values match neither boolean choice. `selection` records the evaluation time, applied filters, and excluded matching paths with reasons. Direct reads and unfiltered searches retain historical material. Domain fields such as `workflow_status` remain separate from OKF lifecycle.
+
+## Complete Context Evidence
+
+Context includes the complete selected concept metadata, sources and claim references, revision, source origin, and review/lifecycle/freshness state beside its Markdown. One `evaluated_at` applies to the whole pack; callers may supply an explicit timezone-aware datetime. Local mounted concepts identify their owning bundle and selected remote ref/revision where available. Hosted concepts identify the selected source URI, ref and immutable artifact revision, and include matching authenticated review actions.
+
+The `utf8_json_bytes/4` estimator counts the UTF-8 bytes of compact JSON `[concept, summary]`, rounded up to one token per four bytes, for every included concept. It includes body, complete metadata, source evidence and derived qualifications. Request/selection bookkeeping and omission records are outside this content budget. A concept that cannot fit is omitted whole with `reason: token_budget` and `estimated_tokens`; evidence is never silently truncated. The budget reports requested maximum and used estimate. Related inclusion is limited to one hop from original query matches, within the selected path, physical source and available view/access scope; external resources are not fetched.
+Text and browser Copy context exports put each concept's metadata in a JSON block followed by its original body in a separate fenced Markdown block. Fences exceed authored backtick runs. This keeps identical footnote labels local to their original document and preserves source IDs without rewriting claims. Selection, source identity, evaluation time, budget and omissions accompany the selected documents. Browser JSON export retains the original context result, request, source binding and explicit selected paths.
+
+`factile context / query --evaluated-at 2026-09-11T08:00:00Z --max-tokens 4000` exposes the same selection and evidence through text, JSON, local MCP and the local browser bridge.
+
+## Browser Evidence Curation
+
+`factile ui --curator` enables the reusable Sources and review editor and `/writer/review` route. It patches only changed evidence fields under the observed document revision. Source extensions, body and unrelated metadata survive evidence edits. Review appends the actual local process and time; read-only mode rejects the route and arbitrary actor/time input is not accepted. Read/search bridge calls forward optional native review state and filters. The browser retains rejected drafts and requires an explicit reload to discard them.

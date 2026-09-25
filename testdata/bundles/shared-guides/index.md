@@ -1,7 +1,3 @@
----
-type: Index
-title: Shared Guides
----
 
 # Shared Guides
 

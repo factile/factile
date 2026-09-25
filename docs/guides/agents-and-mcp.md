@@ -3,7 +3,11 @@ type: Guide
 title: Agents and Local MCP
 description: Install Factile agent guidance and use the local stdio MCP server in reader or curator mode.
 tags: [factile, agents, codex, mcp, skills]
-timestamp: 2026-07-21T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-21T00:00:00+02:00"
+generated:
+  at: "2026-09-11T09:01:41.929396139Z"
+  by: factile/v0.6.0
 ---
 
 # Agents and Local MCP
@@ -159,7 +163,7 @@ Each document has its own revision. The same concise editing recipe is included
 in both skill modes; reader MCP remains read-only, while explicitly authorized
 CLI edits still respect project instructions and source permissions.
 
-See [Editing documents](/guides/editing-documents.md) for the examples, failure
+See [Editing documents](editing-documents.md) for the examples, failure
 handling, and validation scope. `factile help patch` describes every patch flag.
 
 The optional software profile supplies templates and recipe data to generated
@@ -190,7 +194,7 @@ index/log documents, revision errors, and receipts have identical semantics.
 The bridge accepts the same request fields. MCP retains its text content and
 `structuredContent` envelope; `brief` makes their value the compact receipt.
 Reuse its revision for the next edit. Read-only MCP and UI modes still reject
-writes. See [Editing documents](/guides/editing-documents.md) for operation fields
+writes. See [Editing documents](editing-documents.md) for operation fields
 and the precise validation scope.
 
 ## Local diagnostics

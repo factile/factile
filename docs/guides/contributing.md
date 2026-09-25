@@ -3,7 +3,8 @@ type: Guide
 title: Contributing
 description: Build, test, document, and review changes to the public Factile CLI repository.
 tags: [factile, cli, contributing, verification]
-timestamp: 2026-07-15T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-15T00:00:00+02:00"
 ---
 
 # Contributing

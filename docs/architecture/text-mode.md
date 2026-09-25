@@ -3,7 +3,8 @@ type: Architecture
 title: Human Text and JSON Interfaces
 description: Current behavior of Factile human output, JSON output, path shorthand, color, errors, and quiet mode.
 tags: [factile, cli, text, json, ux]
-timestamp: 2026-07-15T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-15T00:00:00+02:00"
 ---
 
 # Human Text and JSON Interfaces

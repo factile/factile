@@ -15,10 +15,11 @@ var (
 )
 
 type Document struct {
-	ConceptID   string
-	Frontmatter map[string]any
-	Order       []string
-	Markdown    string
+	HasFrontmatter bool
+	ConceptID      string
+	Frontmatter    map[string]any
+	Order          []string
+	Markdown       string
 }
 
 func IsReservedFile(name string) bool {
@@ -79,10 +80,11 @@ func ParseConcept(conceptID string, data []byte) (Document, error) {
 		return Document{}, err
 	}
 	return Document{
-		ConceptID:   NormalizeConceptID(conceptID),
-		Frontmatter: values,
-		Order:       order,
-		Markdown:    body,
+		HasFrontmatter: true,
+		ConceptID:      NormalizeConceptID(conceptID),
+		Frontmatter:    values,
+		Order:          order,
+		Markdown:       body,
 	}, nil
 }
 

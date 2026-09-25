@@ -3,7 +3,8 @@ type: Guide
 title: Troubleshooting
 description: Diagnose workspace, bundle, path, revision, writability, Git, validation, skill, and MCP failures.
 tags: [factile, cli, troubleshooting, errors]
-timestamp: 2026-07-21T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-21T00:00:00+02:00"
 ---
 
 # Troubleshooting

@@ -14,7 +14,7 @@ var knownMetadataKeys = []string{
 	"description",
 	"tags",
 	"resource",
-	"timestamp",
+	"generated",
 	"revision",
 	"writable",
 }
@@ -25,7 +25,7 @@ var metadataLabels = map[string]string{
 	"description":   "Description",
 	"tags":          "Tags",
 	"resource":      "Resource",
-	"timestamp":     "Timestamp",
+	"generated":     "Generated",
 	"revision":      "Rev",
 	"writable":      "Writable",
 	"plausible_okf": "Plausible OKF",

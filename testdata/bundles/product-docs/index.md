@@ -1,7 +1,3 @@
----
-type: Index
-title: Product Docs
----
 
 # Product Docs
 

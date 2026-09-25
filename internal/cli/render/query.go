@@ -1,6 +1,7 @@
 package render
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -14,6 +15,16 @@ func (r *Renderer) RenderSearch(w io.Writer, result factile.SearchResults) error
 	}
 	if _, err := fmt.Fprintln(w, "Query: "+result.Query); err != nil {
 		return err
+	}
+	if result.Selection != nil {
+		if _, err := fmt.Fprintf(w, "Selection evaluated at %s; %d matching documents excluded by review filters. Direct reads remain available.\n", result.Selection.EvaluatedAt, len(result.Selection.Excluded)); err != nil {
+			return err
+		}
+		for _, excluded := range result.Selection.Excluded {
+			if _, err := fmt.Fprintf(w, "  %s: %s\n", excluded.Path, excluded.Reason); err != nil {
+				return err
+			}
+		}
 	}
 	if len(result.Results) == 0 {
 		_, err := fmt.Fprintln(w, "\nNo results.")
@@ -30,6 +41,9 @@ func (r *Renderer) RenderSearch(w io.Writer, result factile.SearchResults) error
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
+		if err := renderReview(w, item.Concept.ReviewState); err != nil {
+			return err
+		}
 		if item.Snippet != "" {
 			if _, err := fmt.Fprintln(w, "   "+oneLine(item.Snippet)); err != nil {
 				return err
@@ -40,28 +54,19 @@ func (r *Renderer) RenderSearch(w io.Writer, result factile.SearchResults) error
 }
 
 func (r *Renderer) RenderContext(w io.Writer, result factile.ContextPack) error {
-	if _, err := fmt.Fprintln(w, r.path("Context "+result.Path)); err != nil {
+	if _, err := fmt.Fprintf(w, "# Factile context\n\nContext %s\nQuery: %s\n", result.Path, result.Query); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "Query: "+result.Query); err != nil {
+	selection := map[string]any{"path": result.Path, "query": result.Query, "view": result.View, "evaluated_at": result.EvaluatedAt, "budget": result.Budget, "omitted": result.Omitted}
+	metadata, err := json.MarshalIndent(selection, "", "  ")
+	if err != nil {
 		return err
 	}
-	if len(result.Concepts) == 0 {
-		if _, err := fmt.Fprintln(w, "\nNo context documents selected."); err != nil {
-			return err
-		}
-	} else {
-		for _, concept := range result.Concepts {
-			if _, err := fmt.Fprintln(w, "\n---"); err != nil {
-				return err
-			}
-			if err := r.RenderRead(w, factile.ConceptResult{Concept: concept}); err != nil {
-				return err
-			}
-		}
+	if err := fencedContext(w, string(metadata), "json"); err != nil {
+		return err
 	}
-	if len(result.Omitted) > 0 {
-		if err := r.renderOmitted(w, result.Omitted); err != nil {
+	for index, concept := range result.Concepts {
+		if err := renderContextEvidence(w, concept, index); err != nil {
 			return err
 		}
 	}

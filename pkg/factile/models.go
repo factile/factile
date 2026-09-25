@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/factile/factile/pkg/conceptschema"
+	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/patch"
 	"github.com/factile/factile/pkg/vfs"
 )
@@ -27,22 +28,29 @@ type ValidationIssue struct {
 }
 
 type ConceptSummary struct {
-	Path        string   `json:"path"`
-	ConceptID   string   `json:"concept_id"`
-	Type        string   `json:"type"`
-	Title       string   `json:"title,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Resource    string   `json:"resource,omitempty"`
-	Revision    string   `json:"revision,omitempty"`
+	ReviewState *okf.ReviewState `json:"review_state,omitempty"`
+	Path        string           `json:"path"`
+	ConceptID   string           `json:"concept_id"`
+	Type        string           `json:"type"`
+	Title       string           `json:"title,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Tags        []string         `json:"tags,omitempty"`
+	Resource    string           `json:"resource,omitempty"`
+	Revision    string           `json:"revision,omitempty"`
 }
 
 type Concept struct {
-	Path        string         `json:"path"`
-	ConceptID   string         `json:"concept_id"`
-	Revision    string         `json:"revision"`
-	Frontmatter map[string]any `json:"frontmatter"`
-	Markdown    string         `json:"markdown"`
+	origin              map[string]string
+	Origin              map[string]string     `json:"origin,omitempty"`
+	ReviewState         *okf.ReviewState      `json:"review_state,omitempty"`
+	Path                string                `json:"path"`
+	ConceptID           string                `json:"concept_id"`
+	Revision            string                `json:"revision"`
+	Frontmatter         map[string]any        `json:"frontmatter"`
+	Markdown            string                `json:"markdown"`
+	SourceReferences    []okf.SourceReference `json:"source_references,omitempty"`
+	ClaimReferences     []okf.ClaimReference  `json:"claim_references,omitempty"`
+	MetadataDiagnostics []okf.Diagnostic      `json:"metadata_diagnostics,omitempty"`
 }
 
 type Mount = vfs.Mount
@@ -62,8 +70,9 @@ type SearchResult struct {
 }
 
 type OmittedItem struct {
-	Path   string `json:"path,omitempty"`
-	Reason string `json:"reason"`
+	EstimatedTokens int    `json:"estimated_tokens,omitempty"`
+	Path            string `json:"path,omitempty"`
+	Reason          string `json:"reason"`
 }
 
 type FolderSummary struct {
@@ -120,17 +129,27 @@ type DirectoryResult struct {
 }
 
 type SearchResults struct {
-	Path    string         `json:"path"`
-	Query   string         `json:"query"`
-	Results []SearchResult `json:"results"`
+	Selection *ReviewSelection `json:"selection,omitempty"`
+	Path      string           `json:"path"`
+	Query     string           `json:"query"`
+	Results   []SearchResult   `json:"results"`
 }
 
 type ContextPack struct {
-	Path      string           `json:"path"`
-	Query     string           `json:"query"`
-	Concepts  []Concept        `json:"concepts"`
-	Summaries []ConceptSummary `json:"summaries,omitempty"`
-	Omitted   []OmittedItem    `json:"omitted,omitempty"`
+	EvaluatedAt string           `json:"evaluated_at"`
+	View        string           `json:"view,omitempty"`
+	Budget      ContextBudget    `json:"budget"`
+	Path        string           `json:"path"`
+	Query       string           `json:"query"`
+	Concepts    []Concept        `json:"concepts"`
+	Summaries   []ConceptSummary `json:"summaries,omitempty"`
+	Omitted     []OmittedItem    `json:"omitted,omitempty"`
+}
+
+type ContextBudget struct {
+	MaxTokens  int    `json:"max_tokens"`
+	UsedTokens int    `json:"used_tokens"`
+	Estimator  string `json:"estimator"`
 }
 
 type GraphNode struct {
@@ -263,9 +282,18 @@ type ListOptions struct {
 	Brief bool
 	View  string
 }
-type ReadOptions struct{}
+type ReadOptions struct {
+	IncludeReview bool
+	EvaluatedAt   string
+}
 type SearchOptions struct {
-	View string
+	View               string
+	IncludeReview      bool
+	EvaluatedAt        string
+	Status             string
+	ReviewTier         string
+	Stale              *bool
+	ChangedSinceReview *bool
 }
 type GraphOptions struct {
 	Depth int
@@ -314,10 +342,13 @@ type DeprecateOptions struct {
 	Reason           string
 }
 
+type ReviewOptions struct{ ExpectedRevision string }
+
 type ContextOptions struct {
-	MaxTokens int
-	Depth     int
-	View      string
+	EvaluatedAt string
+	MaxTokens   int
+	Depth       int
+	View        string
 }
 
 type CreateConceptInput struct {
@@ -380,6 +411,7 @@ type Workspace interface {
 	Rename(ctx context.Context, oldPath string, newPath string, opts RenameOptions) (RenameResult, error)
 	Delete(ctx context.Context, path string, opts DeleteOptions) (DeleteResult, error)
 	Deprecate(ctx context.Context, path string, opts DeprecateOptions) (ConceptResult, error)
+	Review(ctx context.Context, path string, opts ReviewOptions) (ConceptResult, error)
 	Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error)
 	Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error)
 	ListMounts(ctx context.Context) (MountListResult, error)

@@ -38,7 +38,7 @@ Batch related edits to that document in one ordered, atomic patch:
 
 ```bash
 factile patch /guide --rev <observed-revision> --input - --brief --json <<'JSON'
-{"operations":[{"op":"replace_text","old":"old","new":"new"},{"op":"set","key":"status","value":"active"}]}
+{"operations":[{"op":"replace_text","old":"old","new":"new"},{"op":"set","key":"status","value":"stable"}]}
 JSON
 ```
 
@@ -50,7 +50,11 @@ JSON
   `deprecate`, or `delete` for those lifecycle changes.
 - Reuse the successful mutation's revision. On a conflict, read and reconcile;
   do not bypass a rejected edit with a direct file write or a blindly refreshed revision.
-- `/index` and `/log` support the same workflow, with or without frontmatter.
+- Content edits record the Factile tool in `generated` and preserve `verified`;
+  reviewing content is a separate explicit action. Lifecycle is `draft`, `stable`,
+  or `deprecated`. Store evidence in `sources` and cite stable source IDs with footnotes.
+- `/index` and `/log` support the same revision-fenced workflow. Only a physical
+  bundle-root index may have frontmatter, containing `okf_version: "0.2"` alone.
   Batches cover one document; each document needs its own observed revision.
 - Brief receipts validate document frontmatter only. Run `factile validate <scope>`
   for broader bundle/link checks when relevant.

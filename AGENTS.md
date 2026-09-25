@@ -1,13 +1,13 @@
 # Documentation rules
 
-All files under `docs` must follow Open Knowledge Format v0.1.
+All files under `docs` must follow Open Knowledge Format v0.2.
 
 When creating or editing `docs/**/*.md`:
 
 - Treat `docs` as one OKF bundle.
 - Every non-reserved `.md` file must start with YAML frontmatter.
 - Frontmatter must include a non-empty `type`.
-- Prefer these fields: `title`, `description`, `tags`, `timestamp`.
+- Prefer these fields: `title`, `description`, `tags`, `sources`, `generated`.
 - Use `docs/index.md` for navigation.
 - Use `docs/log.md` for chronological documentation changes.
 - Use bundle-relative links, for example `/architecture/auth.md`.

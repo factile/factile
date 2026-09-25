@@ -3,7 +3,8 @@ type: Architecture
 title: Factile CLI Architecture
 description: Current package boundaries and data flow for the local Factile CLI, MCP server, and embedded reader.
 tags: [factile, cli, architecture, workspace]
-timestamp: 2026-08-08T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-08-08T00:00:00+02:00"
 ---
 
 # Factile CLI Architecture

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/revision"
 )
 
@@ -39,7 +40,7 @@ func TestOrderedPatchAtomicityAndReceipt(t *testing.T) {
 	operations := []factile.PatchOperation{
 		{Op: "replace_text", Old: "An old sentence.", New: "A new sentence."},
 		{Op: "replace_text", Old: "A new sentence.", New: "A final sentence."},
-		{Op: "set", Key: "status", Value: "active"},
+		{Op: "set", Key: "status", Value: "stable"},
 	}
 	failures := []struct {
 		name, code string
@@ -75,16 +76,20 @@ func TestOrderedPatchAtomicityAndReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Replace(strings.Replace(string(original), "An old sentence.", "A final sentence.", 1), "status: draft", "status: active", 1)
+	want := strings.Replace(strings.Replace(string(original), "An old sentence.", "A final sentence.", 1), "status: draft", "status: stable", 1)
 	data, _ := os.ReadFile(filepath.Join(dir, "guide.md"))
-	if string(data) != want || result.Concept.Revision != revision.DigestBytes(data) {
+	comparable, err := okf.PatchFrontmatter("guide", data, nil, []string{"generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(comparable) != want || result.Concept.Revision != revision.DigestBytes(data) {
 		t.Fatalf("unexpected bytes: %s", data)
 	}
 	r := result.Receipt
 	if r == nil || !r.Changed || r.Revision != result.Concept.Revision || r.Validation.Scope != "document_frontmatter" || !r.Validation.Valid || len(r.Validation.Issues) != 0 || r.Diff == nil || !strings.Contains(*r.Diff, "+A final sentence.") {
 		t.Fatalf("receipt: %#v", r)
 	}
-	result, err = ws.Patch(ctx, "/guide", factile.PatchConceptInput{ExpectedRevision: r.Revision, Set: map[string]any{"status": "active"}, Brief: true, Diff: true})
+	result, err = ws.Patch(ctx, "/guide", factile.PatchConceptInput{ExpectedRevision: r.Revision, Set: map[string]any{"status": "stable"}, Brief: true, Diff: true})
 	if err != nil || result.Receipt.Changed || result.Receipt.Revision != r.Revision || *result.Receipt.Diff != "" {
 		t.Fatalf("no-op: %#v %v", result, err)
 	}
@@ -104,7 +109,11 @@ func TestWriteAndDeprecatePreserveFrontmatter(t *testing.T) {
 	want := strings.SplitN(old, "---\r\n", 3)
 	prefix := "---\r\n" + want[1] + "---\r\n"
 	saved, _ := os.ReadFile(filepath.Join(dir, "guide.md"))
-	if string(saved) != prefix+"New body\r\n" {
+	comparable, err := okf.PatchFrontmatter("guide", saved, nil, []string{"generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(comparable) != prefix+"New body\r\n" {
 		t.Fatalf("write reformats frontmatter: %q", saved)
 	}
 	_, err = ws.Deprecate(context.Background(), "/guide", factile.DeprecateOptions{ExpectedRevision: result.Concept.Revision, Reason: "Replaced"})
@@ -120,7 +129,7 @@ func TestWriteAndDeprecatePreserveFrontmatter(t *testing.T) {
 func TestReservedReadWriteAndSourceGuards(t *testing.T) {
 	dir, ws := editingWorkspace(t)
 	for _, name := range []string{"index", "log"} {
-		for _, prefix := range []string{"", "---\ntype: Guide\n---\n", "---\ntitle: Reserved\n---\n"} {
+		for _, prefix := range []string{"", "---\nokf_version: \"0.2\"\n---\n"} {
 			source := prefix + "Body\n"
 			if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(source), 0600); err != nil {
 				t.Fatal(err)

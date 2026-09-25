@@ -53,6 +53,7 @@ type readerWorkspace interface {
 }
 
 type curatorWorkspace interface {
+	Review(ctx context.Context, path string, opts factile.ReviewOptions) (factile.ConceptResult, error)
 	readerWorkspace
 	Create(ctx context.Context, path string, input factile.CreateConceptInput) (factile.ConceptResult, error)
 	Write(ctx context.Context, path string, input factile.WriteConceptInput) (factile.ConceptResult, error)
@@ -132,6 +133,7 @@ func NewHandler(ws curatorWorkspace, opts Options) http.Handler {
 		mux.HandleFunc(APIPrefix+"/writer/write", writeHandler(ws))
 		mux.HandleFunc(APIPrefix+"/writer/update", writeHandler(ws))
 		mux.HandleFunc(APIPrefix+"/writer/patch", patchHandler(ws))
+		mux.HandleFunc(APIPrefix+"/writer/review", reviewHandler(ws))
 		mux.HandleFunc(APIPrefix+"/writer/rename", renameHandler(ws))
 		mux.HandleFunc(APIPrefix+"/writer/deprecate", deprecateHandler(ws))
 		mux.HandleFunc(APIPrefix+"/writer/validate", writerValidateHandler(ws))
@@ -141,6 +143,7 @@ func NewHandler(ws curatorWorkspace, opts Options) http.Handler {
 			"/writer/write",
 			"/writer/update",
 			"/writer/patch",
+			"/writer/review",
 			"/writer/rename",
 			"/writer/deprecate",
 			"/writer/validate",
@@ -221,6 +224,7 @@ func capabilitiesHandler(opts Options) http.HandlerFunc {
 				"create":      opts.Curator,
 				"write":       opts.Curator,
 				"patch":       opts.Curator,
+				"review":      opts.Curator,
 				"rename":      opts.Curator,
 				"delete":      false,
 				"deprecate":   opts.Curator,
@@ -369,7 +373,12 @@ func readHandler(ws readerWorkspace) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "path is required"))
 			return
 		}
-		result, err := ws.Read(r.Context(), path, factile.ReadOptions{})
+		includeReview := r.URL.Query().Get("include_review")
+		if includeReview != "" && includeReview != "true" && includeReview != "false" {
+			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "include_review must be a boolean"))
+			return
+		}
+		result, err := ws.Read(r.Context(), path, factile.ReadOptions{IncludeReview: includeReview == "true", EvaluatedAt: r.URL.Query().Get("evaluated_at")})
 		if err != nil {
 			writeError(w, errorStatus(err), err)
 			return
@@ -395,7 +404,7 @@ func searchHandler(ws readerWorkspace) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "path and query are required"))
 			return
 		}
-		result, err := ws.Search(r.Context(), input.Path, input.Query, factile.SearchOptions{View: input.View})
+		result, err := ws.Search(r.Context(), input.Path, input.Query, factile.SearchOptions{View: input.View, IncludeReview: input.IncludeReview, EvaluatedAt: input.EvaluatedAt, Status: input.Status, ReviewTier: input.ReviewTier, Stale: input.Stale, ChangedSinceReview: input.ChangedSinceReview})
 		if err != nil {
 			writeError(w, errorStatus(err), err)
 			return
@@ -430,9 +439,10 @@ func contextHandler(ws readerWorkspace) http.HandlerFunc {
 			depth = 1
 		}
 		result, err := ws.Context(r.Context(), input.Path, input.Query, factile.ContextOptions{
-			MaxTokens: maxTokens,
-			Depth:     depth,
-			View:      input.View,
+			MaxTokens:   maxTokens,
+			EvaluatedAt: input.EvaluatedAt,
+			Depth:       depth,
+			View:        input.View,
 		})
 		if err != nil {
 			writeError(w, errorStatus(err), err)
@@ -547,6 +557,31 @@ func writeHandler(ws curatorWorkspace) http.HandlerFunc {
 			ExpectedRevision: input.ExpectedRevision,
 			Markdown:         input.Markdown,
 		})
+		if err != nil {
+			writeError(w, errorStatus(err), err)
+			return
+		}
+		writeJSON(w, result)
+	}
+}
+
+func reviewHandler(ws curatorWorkspace) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requirePost(w, r) {
+			return
+		}
+		var input struct {
+			Path             string `json:"path"`
+			ExpectedRevision string `json:"expected_revision"`
+		}
+		if !decodeBody(w, r, &input) {
+			return
+		}
+		if strings.TrimSpace(input.Path) == "" {
+			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "path is required"))
+			return
+		}
+		result, err := ws.Review(r.Context(), input.Path, factile.ReviewOptions{ExpectedRevision: input.ExpectedRevision})
 		if err != nil {
 			writeError(w, errorStatus(err), err)
 			return
@@ -705,6 +740,12 @@ func (s sourceSelector) has() bool {
 }
 
 type searchInput struct {
+	IncludeReview      bool   `json:"include_review,omitempty"`
+	EvaluatedAt        string `json:"evaluated_at,omitempty"`
+	Status             string `json:"status,omitempty"`
+	ReviewTier         string `json:"review_tier,omitempty"`
+	Stale              *bool  `json:"stale,omitempty"`
+	ChangedSinceReview *bool  `json:"changed_since_review,omitempty"`
 	sourceSelector
 	Path  string `json:"path"`
 	Query string `json:"query"`
@@ -712,6 +753,7 @@ type searchInput struct {
 }
 
 type contextInput struct {
+	EvaluatedAt string `json:"evaluated_at,omitempty"`
 	sourceSelector
 	Path      string `json:"path"`
 	Query     string `json:"query"`
@@ -793,6 +835,7 @@ func selectorFromQuery(r *http.Request) sourceSelector {
 
 func decodeBody(w http.ResponseWriter, r *http.Request, value any) bool {
 	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrValidationFailed, "Invalid JSON body: "+err.Error()))

@@ -1,7 +1,3 @@
----
-type: Index
-title: Legacy Notes
----
 
 # Legacy Notes
 

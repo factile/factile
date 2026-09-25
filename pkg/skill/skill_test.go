@@ -866,7 +866,7 @@ func TestSkillBatchExampleEditsOneDocument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.Concept.Markdown != "new\n" || result.Concept.Frontmatter["status"] != "active" || result.Receipt == nil || !result.Receipt.Changed {
+			if result.Concept.Markdown != "new\n" || result.Concept.Frontmatter["status"] != "stable" || result.Receipt == nil || !result.Receipt.Changed {
 				t.Fatalf("batch example: %#v", result)
 			}
 			if (mode == ModeReader) != strings.Contains(mcpConfigBlock(mode), "--read-only") {

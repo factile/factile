@@ -3,7 +3,8 @@ type: Reference
 title: Factile Documentation Overview
 description: Starting point for public Factile CLI documentation.
 tags: [factile, docs, cli]
-timestamp: 2026-07-15T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-15T00:00:00+02:00"
 ---
 
 # Factile Documentation Overview

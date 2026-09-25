@@ -14,7 +14,7 @@ fixture = pathlib.Path(__file__).resolve().parents[1] / "testdata/bundles/editin
 scenarios = {
     "sentence": [("guide", [{"op": "replace_text", "old": "An old sentence.", "new": "A new sentence."}], [("An old sentence.", "A new sentence.")])],
     "link": [("guide", [{"op": "replace_text", "old": "](/old)", "new": "](/new)"}], [("](/old)", "](/new)")])],
-    "metadata": [("guide", [{"op": "set", "key": "status", "value": "active"}], [("status: draft", "status: active")])],
+    "metadata": [("guide", [{"op": "set", "key": "status", "value": "stable"}], [("status: draft", "status: stable")])],
     "multi_section": [("guide", [{"op": "replace_text", "old": "Do this.", "new": "Do that."}, {"op": "replace_text", "old": "Keep this.", "new": "Keep that."}], [("Do this.", "Do that."), ("Keep this.", "Keep that.")])],
     "concept_index_log": [
         ("guide", [{"op": "replace_text", "old": "An old sentence.", "new": "A new sentence."}], [("An old sentence.", "A new sentence.")]),
@@ -66,6 +66,16 @@ with tempfile.TemporaryDirectory(prefix="factile-edit-compare-") as temporary:
                     input_bytes += len(encoded(["patch", f"/{document}", "--input", "-", "--json"])) + len(payload)
                     output_bytes += len(read) + len(response)
                 calls += 2
-                assert file.read_bytes() == expected, (name, mode, "unexpected or unrelated diff")
+                actual = file.read_bytes()
+                if mode != "direct" and document == "guide" and name != "metadata":
+                    import re
+                    # The CLI also records its actual production event; compare all
+                    # other bytes against the literal edit and qualify the event.
+                    match = re.search(rb'generated:\n  at: "([^"\n]+)"\n  by: factile/[^\n]+\n', actual)
+                    assert match, (name, "missing actual production event")
+                    from datetime import datetime
+                    assert datetime.fromisoformat(match[1].decode()).utcoffset() is not None
+                    actual = actual[:match.start()] + actual[match.end():]
+                assert actual == expected, (name, mode, "unexpected or unrelated diff")
             results.append({"scenario": name, "mode": mode, "calls": calls, "input_bytes": input_bytes, "output_bytes": output_bytes, "retries": 0, "correct": True, "unrelated_diff": False})
 print(json.dumps(results, indent=2))

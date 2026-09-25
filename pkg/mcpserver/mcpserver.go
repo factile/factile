@@ -45,19 +45,28 @@ func (s *Server) Tools() []Tool {
 			"path": stringSchema("Virtual Factile path to inspect."),
 		})),
 		tool("factile_context", "Retrieve focused OKF context for a task or question.", objectSchema(map[string]any{
-			"path":       stringSchema("Virtual Factile path to search from."),
-			"query":      stringSchema("Task or question to retrieve context for."),
-			"max_tokens": integerSchema("Approximate maximum context size."),
-			"depth":      integerSchema("Related-link traversal depth: 0 disables expansion, 1 adds one-hop links and backlinks."),
-			"view":       stringSchema("View id used to narrow context selection."),
+			"path":         stringSchema("Virtual Factile path to search from."),
+			"query":        stringSchema("Task or question to retrieve context for."),
+			"max_tokens":   integerSchema("Approximate maximum size of complete concepts, evidence and summaries."),
+			"evaluated_at": stringSchema("Explicit timezone-qualified review/freshness evaluation time; defaults to now."),
+			"depth":        integerSchema("Related-link traversal depth: 0 disables expansion, 1 adds one-hop links and backlinks."),
+			"view":         stringSchema("View id used to narrow context selection."),
 		}, "path", "query")),
 		tool("factile_search", "Search OKF knowledge.", objectSchema(map[string]any{
-			"path":  stringSchema("Virtual Factile path to search from."),
-			"query": stringSchema("Search query."),
-			"view":  stringSchema("View id used to narrow search candidates."),
+			"include_review":       boolSchema("Include derived review state; raw review strings are claims, not authentication."),
+			"evaluated_at":         stringSchema("Explicit timezone-qualified evaluation time; defaults to now."),
+			"path":                 stringSchema("Virtual Factile path to search from."),
+			"query":                stringSchema("Search query."),
+			"view":                 stringSchema("View id used to narrow search candidates."),
+			"status":               stringSchema("Optional draft, stable or deprecated filter; direct reads remain available."),
+			"review_tier":          stringSchema("Optional unverified, machine-confirmed or human-reviewed tier."),
+			"stale":                boolSchema("Optional freshness filter; unknown deadlines do not match."),
+			"changed_since_review": boolSchema("Optional content change filter; unknown history does not match."),
 		}, "path", "query")),
 		tool("factile_read", "Read a specific OKF concept.", objectSchema(map[string]any{
-			"path": stringSchema("Virtual Factile concept path."),
+			"include_review": boolSchema("Include derived review state; raw review strings are claims, not authentication."),
+			"evaluated_at":   stringSchema("Explicit timezone-qualified evaluation time; defaults to now."),
+			"path":           stringSchema("Virtual Factile concept path."),
 		}, "path")),
 		tool("factile_validate", "Validate a bundle or concept.", objectSchema(map[string]any{
 			"path": stringSchema("Virtual Factile path to validate."),
@@ -141,6 +150,7 @@ func (s *Server) Tools() []Tool {
 				"path":              stringSchema("Virtual Factile concept path."),
 				"expected_revision": stringSchema("Current concept revision."),
 			}, "path", "expected_revision")),
+			tool("factile_review", "Record a revision-checked Factile process review; does not claim human review.", objectSchema(map[string]any{"path": stringSchema("Concept path."), "expected_revision": stringSchema("Observed concept revision.")}, "path", "expected_revision")),
 			tool("factile_deprecate", "Mark one concept deprecated.", objectSchema(map[string]any{
 				"path":              stringSchema("Virtual Factile concept path."),
 				"expected_revision": stringSchema("Current concept revision."),
@@ -296,7 +306,9 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (any, error) {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
 		}
-		if err := json.Unmarshal(req.Params, &params); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(string(req.Params)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&params); err != nil {
 			return nil, err
 		}
 		started := time.Now()
@@ -318,17 +330,33 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (any, error) {
 }
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (any, error) {
+	if name == "factile_read" || name == "factile_search" {
+		for _, key := range []string{"include_review", "stale", "changed_since_review"} {
+			if raw, present := args[key]; present {
+				if _, ok := raw.(bool); !ok {
+					return nil, factile.NewError(factile.ErrInvalidPath, key+" must be a boolean")
+				}
+			}
+		}
+		for _, key := range []string{"evaluated_at", "status", "review_tier"} {
+			if raw, present := args[key]; present {
+				if _, ok := raw.(string); !ok {
+					return nil, factile.NewError(factile.ErrInvalidPath, key+" must be a string")
+				}
+			}
+		}
+	}
 	switch name {
 	case "factile_list":
 		return s.workspace.List(ctx, stringArg(args, "path"), factile.ListOptions{Brief: boolArg(args, "brief"), View: stringArg(args, "view")})
 	case "factile_stat":
 		return s.workspace.Stat(ctx, stringArg(args, "path"), factile.StatOptions{})
 	case "factile_read":
-		return s.workspace.Read(ctx, stringArg(args, "path"), factile.ReadOptions{})
+		return s.workspace.Read(ctx, stringArg(args, "path"), factile.ReadOptions{IncludeReview: boolArg(args, "include_review"), EvaluatedAt: stringArg(args, "evaluated_at")})
 	case "factile_search":
-		return s.workspace.Search(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.SearchOptions{View: stringArg(args, "view")})
+		return s.workspace.Search(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.SearchOptions{View: stringArg(args, "view"), IncludeReview: boolArg(args, "include_review"), EvaluatedAt: stringArg(args, "evaluated_at"), Status: stringArg(args, "status"), ReviewTier: stringArg(args, "review_tier"), Stale: optionalBoolArg(args, "stale"), ChangedSinceReview: optionalBoolArg(args, "changed_since_review")})
 	case "factile_context":
-		return s.workspace.Context(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.ContextOptions{MaxTokens: intArg(args, "max_tokens"), Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view")})
+		return s.workspace.Context(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.ContextOptions{MaxTokens: intArg(args, "max_tokens"), Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view"), EvaluatedAt: stringArg(args, "evaluated_at")})
 	case "factile_graph":
 		return s.workspace.Graph(ctx, stringArg(args, "path"), factile.GraphOptions{Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view")})
 	case "factile_validate":
@@ -411,6 +439,7 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 			return nil, err
 		}
 		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.UseNumber()
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&input); err != nil {
 			return nil, factile.NewError("invalid_patch", err.Error())
@@ -433,6 +462,11 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
 		}
 		return s.workspace.Delete(ctx, stringArg(args, "path"), factile.DeleteOptions{ExpectedRevision: stringArg(args, "expected_revision")})
+	case "factile_review":
+		if s.opts.ReadOnly {
+			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
+		}
+		return s.workspace.Review(ctx, stringArg(args, "path"), factile.ReviewOptions{ExpectedRevision: stringArg(args, "expected_revision")})
 	case "factile_deprecate":
 		if s.opts.ReadOnly {
 			return nil, factile.NewError(factile.ErrSourceReadOnly, "MCP server is read-only")
@@ -562,6 +596,9 @@ func intArg(args map[string]any, key string) int {
 		return value
 	case float64:
 		return int(value)
+	case json.Number:
+		number, _ := value.Float64()
+		return int(number)
 	default:
 		return 0
 	}
@@ -677,4 +714,12 @@ func patchOperationsSchema() map[string]any {
 		"key":      stringSchema("Frontmatter key for set or delete_key."),
 		"value":    map[string]any{"description": "Value for set."},
 	}, "op")}
+}
+
+func optionalBoolArg(args map[string]any, key string) *bool {
+	value, ok := args[key].(bool)
+	if !ok {
+		return nil
+	}
+	return &value
 }

@@ -1,6 +1,9 @@
 ---
 type: Guide
 title: Validate concept schemas
+generated:
+  at: "2026-09-11T09:01:41.962451643Z"
+  by: factile/v0.6.0
 ---
 
 # Validate concept schemas
@@ -116,7 +119,7 @@ coercion, default insertion, generated form or schema authoring interface.
 `format` remains annotation-only. Writes and bootstrap health checks retain
 their existing base OKF rules; these profiles add no write or publishing gate.
 
-See [CLI architecture](/architecture/overview) for exact parser/evaluator versions,
+See [CLI architecture](../architecture/overview.md) for exact parser/evaluator versions,
 operational limits and the reproducible upstream qualification command. A runnable
 example is included in the checkout at `testdata/bundles/schema-profiles`:
 

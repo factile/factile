@@ -286,8 +286,10 @@ func verifyInit(ctx context.Context, plan InitPlan) HealthResult {
 	indexData, err := os.ReadFile(filepath.Join(plan.layout.rootBundleDir, "index.md"))
 	if err != nil {
 		documentError = fmt.Errorf("/index.md: %w", err)
-	} else if _, err := okf.ParseConcept("", indexData); err != nil {
+	} else if doc, err := okf.ParseConcept("index", indexData); err != nil {
 		documentError = fmt.Errorf("/index.md: %w", err)
+	} else if diagnostic := okf.IndexDiagnostic(doc); diagnostic != nil && diagnostic.Code == "invalid_reserved_file" {
+		documentError = fmt.Errorf("/index.md: %s", diagnostic.Message)
 	} else if _, err := reader.List(ctx, "/", factile.ListOptions{}); err != nil {
 		documentError = fmt.Errorf("/: %w", err)
 	} else if _, err := reader.Read(ctx, "/overview", factile.ReadOptions{}); err != nil {
@@ -1010,16 +1012,13 @@ func titleFromName(name string) string {
 func indexMarkdown(bundle vfs.BundleConfig) string {
 	title := bundle.Title + " Knowledge"
 	return fmt.Sprintf(`---
-type: Index
-title: %s
-description: %s
-tags: [factile, project]
+okf_version: "0.2"
 ---
 
 # %s
 
 - [Overview](overview.md)
-`, strconv.Quote(title), strconv.Quote(bundle.Description), title)
+`, title)
 }
 
 func overviewMarkdown(bundle vfs.BundleConfig, now time.Time) string {
@@ -1029,13 +1028,13 @@ type: Reference
 title: %s
 description: %s
 tags: [factile, project]
-timestamp: %s
+generated: { by: %s, at: %s }
 ---
 
 # %s
 
 %s
-`, strconv.Quote(title), strconv.Quote(bundle.Description), now.Format(time.RFC3339), title, bundle.Description)
+`, strconv.Quote(title), strconv.Quote(bundle.Description), okf.StringField(factile.GeneratedMetadata(now), "by"), now.UTC().Format(time.RFC3339Nano), title, bundle.Description)
 }
 
 func initWorkDir(workDir string) (string, error) {

@@ -50,7 +50,7 @@ func TestInitCreatesDefaultWorkspaceWithoutLocalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsedIndex, err := okf.ParseConcept("", index)
-	if err != nil || parsedIndex.Frontmatter["type"] != "Index" {
+	if err != nil || parsedIndex.Frontmatter["okf_version"] != "0.2" || len(parsedIndex.Frontmatter) != 1 {
 		t.Fatalf("init created an invalid bundle index: %#v, %v", parsedIndex.Frontmatter, err)
 	}
 	resolved, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: filepath.Join(workspace, "docs")})
@@ -505,7 +505,7 @@ func TestInitDerivesUsefulMetadataAndStarterDocuments(t *testing.T) {
 	}
 	index := readBootstrapTestFile(t, filepath.Join(workspace, "docs", "index.md"))
 	overview := readBootstrapTestFile(t, filepath.Join(workspace, "docs", "overview.md"))
-	for _, want := range []string{"title: \"My Project Cli Knowledge\"", "description: \"" + wantDescription + "\"", "# My Project Cli Knowledge"} {
+	for _, want := range []string{`okf_version: "0.2"`, "# My Project Cli Knowledge"} {
 		if !strings.Contains(index, want) {
 			t.Fatalf("derived index missing %q:\n%s", want, index)
 		}
@@ -870,6 +870,9 @@ func TestInitReportsInvalidAuthoredKnowledgeWithoutOverwritingIt(t *testing.T) {
 			}
 			path := filepath.Join(workspace, "docs", filename)
 			invalid := "# Authored but invalid " + filename + "\n"
+			if filename == "index.md" {
+				invalid = "---\ntitle: Invalid index\n---\n"
+			}
 			writeBootstrapTestFile(t, path, invalid)
 
 			result, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentNone})
@@ -887,6 +890,26 @@ func TestInitReportsInvalidAuthoredKnowledgeWithoutOverwritingIt(t *testing.T) {
 			}
 			if got := readBootstrapTestFile(t, path); got != invalid {
 				t.Fatalf("verification rewrote authored knowledge: %q", got)
+			}
+		})
+	}
+}
+
+func TestInitPreservesPlainOrVersionOnlyRootIndex(t *testing.T) {
+	for _, content := range []string{"# Authored index\n", "---\nokf_version: \"0.2\"\n---\n# Authored index\n"} {
+		t.Run(content, func(t *testing.T) {
+			workspace := t.TempDir()
+			if _, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentNone}); err != nil {
+				t.Fatal(err)
+			}
+			filename := filepath.Join(workspace, "docs", "index.md")
+			writeBootstrapTestFile(t, filename, content)
+			result, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentNone})
+			if err != nil || !result.Health.OK {
+				t.Fatalf("valid index failed health: %#v %v", result.Health, err)
+			}
+			if got := readBootstrapTestFile(t, filename); got != content {
+				t.Fatalf("index changed: %q", got)
 			}
 		})
 	}

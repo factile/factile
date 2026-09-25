@@ -3,7 +3,8 @@ type: Reference
 title: Profiles and Recipes
 description: Implemented profile, template, recipe-data, and skill-install behavior in Factile v0.4.
 tags: [factile, profiles, recipes, skills, templates]
-timestamp: 2026-07-20T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-20T00:00:00+02:00"
 ---
 
 # Profiles and Recipes

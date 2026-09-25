@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/factile/factile/pkg/contextpack"
 	"github.com/factile/factile/pkg/gitsource"
@@ -234,6 +235,14 @@ func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOp
 	if err != nil {
 		return ConceptResult{}, err
 	}
+	if opts.IncludeReview || opts.EvaluatedAt != "" {
+		at, err := evaluationTime(opts.EvaluatedAt)
+		if err != nil {
+			return ConceptResult{}, err
+		}
+		state, _ := okf.Review(concept.Frontmatter, at)
+		concept.ReviewState = &state
+	}
 	return ConceptResult{Concept: concept}, nil
 }
 
@@ -242,6 +251,10 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 		return SearchResults{}, errorf(ErrInvalidPath, "Search query must not be empty")
 	}
 	scope, err := w.scopeWithView(ctx, inputPath, opts.View)
+	if err != nil {
+		return SearchResults{}, err
+	}
+	selection, err := reviewSelection(opts)
 	if err != nil {
 		return SearchResults{}, err
 	}
@@ -260,13 +273,22 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 	scored := searchpkg.Score(query, fields)
 	results := make([]SearchResult, 0, len(scored))
 	for _, item := range scored {
+		summary := scope.Summaries[item.Index]
+		if selection != nil {
+			state, _ := okf.Review(scope.Concepts[item.Index].Concept.Frontmatter, selection.EvaluatedAt)
+			if reason := reviewExclusion(state, opts); reason != "" {
+				selection.Excluded = append(selection.Excluded, OmittedItem{Path: summary.Path, Reason: reason})
+				continue
+			}
+			summary.ReviewState = &state
+		}
 		results = append(results, SearchResult{
-			Concept: scope.Summaries[item.Index],
+			Concept: summary,
 			Score:   item.Score,
 			Snippet: item.Snippet,
 		})
 	}
-	return SearchResults{Path: scope.Path, Query: query, Results: results}, nil
+	return SearchResults{Path: scope.Path, Query: query, Results: results, Selection: selection}, nil
 }
 
 func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query string, opts ContextOptions) (ContextPack, error) {
@@ -274,6 +296,10 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		opts.MaxTokens = 4000
 	}
 	depth, err := normalizeLinkDepth(opts.Depth)
+	if err != nil {
+		return ContextPack{}, err
+	}
+	at, err := evaluationTime(opts.EvaluatedAt)
 	if err != nil {
 		return ContextPack{}, err
 	}
@@ -303,21 +329,34 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	for _, result := range searchResults.Results {
 		add(result.Concept.Path)
 	}
+	seeds := map[string]bool{}
+	for path := range seen {
+		seeds[path] = true
+	}
 	if depth > 0 {
-		for _, item := range append([]scopedConcept(nil), ordered...) {
-			for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
-				if target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target); ok {
-					add(target)
+		related := map[string]bool{}
+		for _, item := range scope.Concepts {
+			for _, link := range conceptLinks(item) {
+				target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+				destination, exists := byPath[target]
+				if !ok || !exists || !sourceTargetVisible(item, destination, link) {
+					continue
+				}
+				if seeds[item.Concept.Path] {
+					related[target] = true
+				}
+				if seeds[target] {
+					related[item.Concept.Path] = true
 				}
 			}
 		}
-		for _, item := range scope.Concepts {
-			for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
-				target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
-				if ok && seen[target] {
-					add(item.Concept.Path)
-				}
-			}
+		paths := make([]string, 0, len(related))
+		for path := range related {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			add(path)
 		}
 	}
 	concepts := []Concept{}
@@ -325,16 +364,26 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	var omitted []OmittedItem
 	remaining := opts.MaxTokens
 	for _, item := range ordered {
-		tokens := contextpack.EstimateTokens(item.Concept.Markdown)
+		concept := item.Concept
+		if strings.TrimSpace(opts.View) != "" {
+			concept = restrictSourceTargets(concept, scope.Paths)
+		}
+		state, _ := okf.Review(concept.Frontmatter, at)
+		concept.ReviewState = &state
+		concept.Origin = concept.origin
+		tokens, err := contextpack.EvidenceTokens(concept, item.Summary)
+		if err != nil {
+			return ContextPack{}, NormalizeError(err)
+		}
 		if tokens > remaining {
-			omitted = append(omitted, OmittedItem{Path: item.Concept.Path, Reason: "token_budget"})
+			omitted = append(omitted, OmittedItem{Path: concept.Path, Reason: "token_budget", EstimatedTokens: tokens})
 			continue
 		}
 		remaining -= tokens
-		concepts = append(concepts, item.Concept)
+		concepts = append(concepts, concept)
 		summaries = append(summaries, item.Summary)
 	}
-	return ContextPack{Path: scope.Path, Query: query, Concepts: concepts, Summaries: summaries, Omitted: omitted}, nil
+	return ContextPack{Path: scope.Path, Query: query, Concepts: concepts, Summaries: summaries, Omitted: omitted, View: opts.View, EvaluatedAt: at, Budget: ContextBudget{MaxTokens: opts.MaxTokens, UsedTokens: opts.MaxTokens - remaining, Estimator: "utf8_json_bytes/4"}}, nil
 }
 
 func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts GraphOptions) (GraphResult, error) {
@@ -375,11 +424,20 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 		includeSource := !targetResolved || target.Kind != TargetConcept || item.Concept.Path == target.Path
 		if includeSource {
 			addNode(item.Summary)
+			for _, diagnostic := range item.Concept.MetadataDiagnostics {
+				if depth == 0 {
+					break
+				}
+				if viewID != "" && diagnostic.Code == "broken_source" {
+					continue
+				}
+				issues = append(issues, ValidationIssue{Severity: "warning", Code: diagnostic.Code, Message: diagnostic.Message, Path: item.Concept.Path, ConceptID: item.Concept.ConceptID, Details: map[string]any{"field": diagnostic.Field}})
+			}
 		}
 		if depth == 0 {
 			continue
 		}
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			targetPath, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
 			if !ok {
 				continue
@@ -388,18 +446,12 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 			if !includeEdge {
 				continue
 			}
-			if target, exists := byPath[targetPath]; exists {
+			if target, exists := byPath[targetPath]; exists && sourceTargetVisible(item, target, link) {
 				addNode(item.Summary)
 				addNode(target.Summary)
-				edges = append(edges, GraphEdge{From: item.Concept.Path, To: targetPath, Kind: "markdown_link"})
-			} else if viewID == "" {
-				issues = append(issues, ValidationIssue{
-					Severity:  "warning",
-					Code:      "broken_link",
-					Message:   "Broken Markdown link: " + link.Target,
-					Path:      item.Concept.Path,
-					ConceptID: item.Concept.ConceptID,
-				})
+				edges = append(edges, GraphEdge{From: item.Concept.Path, To: targetPath, Kind: linkKind(link)})
+			} else if viewID == "" && link.Kind != "source_reference" {
+				issues = append(issues, linkIssue(item, link))
 			}
 		}
 	}
@@ -508,13 +560,13 @@ func validateRootIndex(mount vfs.Mount) (*scopedConcept, []ValidationIssue) {
 	if err != nil {
 		return nil, []ValidationIssue{{Severity: "error", Code: ErrValidationFailed, Message: err.Error(), Path: "/"}}
 	}
-	doc, err := okf.ParseConcept("", data)
+	doc, err := okf.ParseConcept("index", data)
 	if err != nil {
 		return nil, []ValidationIssue{{Severity: "error", Code: ErrOKFParse, Message: "Invalid root index.md: " + err.Error(), Path: "/"}}
 	}
 	concept := conceptFromDoc(mount, doc, data)
 	item := &scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
-	return item, validateDocument("/", doc)
+	return item, nil
 }
 
 func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error) {
@@ -640,6 +692,7 @@ func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input Cre
 		doc.Frontmatter["resource"] = input.Resource
 		doc.Order = append(doc.Order, "resource")
 	}
+	doc.Frontmatter["generated"] = GeneratedMetadata(time.Now())
 	data := okf.Serialize(doc)
 	if issues := validateDocument(target.Path, doc); hasErrors(issues) {
 		return ConceptResult{}, validationError(issues)
@@ -731,6 +784,28 @@ func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input Patc
 		doc, err := okf.ParseConcept(target.ConceptID, next)
 		if err != nil {
 			return err
+		}
+		if !okf.IsReservedFile(target.ConceptID + ".md") {
+			before, err := okf.ParseConcept(target.ConceptID, data)
+			if err != nil {
+				return err
+			}
+			if meaningfulContentChanged(before, doc) {
+				generated := map[string]any{}
+				if previous, ok := doc.Frontmatter["generated"].(map[string]any); ok {
+					for key, value := range previous {
+						generated[key] = value
+					}
+				}
+				for key, value := range GeneratedMetadata(time.Now()) {
+					generated[key] = value
+				}
+				next, err = okf.PatchFrontmatter(target.ConceptID, next, map[string]any{"generated": generated}, nil)
+				if err != nil {
+					return err
+				}
+				doc.Frontmatter["generated"] = generated
+			}
 		}
 		issues := validateDocument(target.Path, doc)
 		if hasErrors(issues) {
@@ -861,7 +936,7 @@ func (w *LocalWorkspace) Deprecate(ctx context.Context, inputPath string, opts D
 	return w.Patch(ctx, inputPath, PatchConceptInput{
 		ExpectedRevision: opts.ExpectedRevision,
 		Set: map[string]any{
-			"deprecated":        true,
+			"status":            "deprecated",
 			"deprecated_reason": opts.Reason,
 		},
 		AppendSections: map[string]string{
@@ -1404,13 +1479,13 @@ func summaryFromDoc(mount vfs.Mount, doc okf.Document, data []byte) ConceptSumma
 }
 
 func conceptFromDoc(mount vfs.Mount, doc okf.Document, data []byte) Concept {
-	return Concept{
+	return conceptSources(Concept{origin: contextOrigin(mount),
 		Path:        cleanVirtualJoin(mount.MountPath, doc.ConceptID),
 		ConceptID:   doc.ConceptID,
 		Revision:    revision.DigestBytes(data),
 		Frontmatter: doc.Frontmatter,
 		Markdown:    doc.Markdown,
-	}
+	}, mount)
 }
 
 func validateScope(scope scopedSet) []ValidationIssue {
@@ -1425,16 +1500,10 @@ func validateScope(scope scopedSet) []ValidationIssue {
 		})...)
 	}
 	for _, item := range scope.Concepts {
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
-			if ok && !byPath[target] {
-				issues = append(issues, ValidationIssue{
-					Severity:  "warning",
-					Code:      "broken_link",
-					Message:   "Broken Markdown link: " + link.Target,
-					Path:      item.Concept.Path,
-					ConceptID: item.Concept.ConceptID,
-				})
+			if ok && missingLink(item, link, target, byPath) {
+				issues = append(issues, linkIssue(item, link))
 			}
 		}
 	}
@@ -1446,7 +1515,7 @@ func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]s
 	if err != nil {
 		return nil, nil, NormalizeError(err)
 	}
-	ids, err := store.ListConceptIDs(prefix)
+	ids, err := store.ListDocumentIDs(prefix)
 	if err != nil {
 		return nil, nil, NormalizeError(err)
 	}
@@ -1457,7 +1526,7 @@ func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]s
 		if err != nil {
 			return nil, nil, err
 		}
-		if item != nil {
+		if item != nil && !okf.IsReservedFile(id+".md") {
 			concepts = append(concepts, *item)
 		}
 		issues = append(issues, conceptIssues...)
@@ -1476,6 +1545,10 @@ func (w *LocalWorkspace) validateConcept(mount vfs.Mount, conceptID string) (*sc
 	}
 	doc, err := okf.ParseConcept(conceptID, data)
 	if err != nil {
+		if strings.HasSuffix(conceptID, "index") && okf.IsReservedFile(conceptID+".md") {
+			return nil, []ValidationIssue{{Severity: "error", Code: "invalid_reserved_file", Message: "Index frontmatter is only permitted at the bundle root with an okf_version key", Path: cleanVirtualJoin(mount.MountPath, conceptID)}}, nil
+		}
+
 		return nil, []ValidationIssue{{
 			Severity:  "error",
 			Code:      ErrOKFParse,
@@ -1511,18 +1584,12 @@ func localRootLinkIssues(concepts []scopedConcept, mounts []vfs.Mount) []Validat
 	}
 	var issues []ValidationIssue
 	for _, item := range concepts {
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
-			if !ok || byPath[target] || localReservedFileExists(rootSource, target) || coveredByNonRootMount(target, mounts) {
+			if !ok || !missingLink(item, link, target, byPath) || (link.Kind != "source_reference" && (localReservedFileExists(rootSource, target) || coveredByNonRootMount(target, mounts))) {
 				continue
 			}
-			issues = append(issues, ValidationIssue{
-				Severity:  "warning",
-				Code:      "broken_link",
-				Message:   "Broken Markdown link: " + link.Target,
-				Path:      item.Concept.Path,
-				ConceptID: item.Concept.ConceptID,
-			})
+			issues = append(issues, linkIssue(item, link))
 		}
 	}
 	return issues
@@ -1549,16 +1616,10 @@ func coveredByNonRootMount(target string, mounts []vfs.Mount) bool {
 func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []ValidationIssue {
 	var issues []ValidationIssue
 	for _, item := range concepts {
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
-			if ok && !byPath[target] {
-				issues = append(issues, ValidationIssue{
-					Severity:  "warning",
-					Code:      "broken_link",
-					Message:   "Broken Markdown link: " + link.Target,
-					Path:      item.Concept.Path,
-					ConceptID: item.Concept.ConceptID,
-				})
+			if ok && missingLink(item, link, target, byPath) {
+				issues = append(issues, linkIssue(item, link))
 			}
 		}
 	}
@@ -1572,18 +1633,12 @@ func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []Validat
 	}
 	var issues []ValidationIssue
 	for _, item := range concepts {
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
-			if !ok || !pathInAnyScope(target, scopes) || byPath[target] {
+			if !ok || !pathInAnyScope(target, scopes) || !missingLink(item, link, target, byPath) {
 				continue
 			}
-			issues = append(issues, ValidationIssue{
-				Severity:  "warning",
-				Code:      "broken_link",
-				Message:   "Broken Markdown link: " + link.Target,
-				Path:      item.Concept.Path,
-				ConceptID: item.Concept.ConceptID,
-			})
+			issues = append(issues, linkIssue(item, link))
 		}
 	}
 	return issues
@@ -1591,7 +1646,7 @@ func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []Validat
 
 func pathInAnyScope(candidate string, scopes []string) bool {
 	for _, scope := range scopes {
-		if candidate == scope || strings.HasPrefix(candidate, scope+"/") {
+		if scope == "/" || candidate == scope || strings.HasPrefix(candidate, scope+"/") {
 			return true
 		}
 	}
@@ -1600,6 +1655,24 @@ func pathInAnyScope(candidate string, scopes []string) bool {
 
 func validateDocument(path string, doc okf.Document) []ValidationIssue {
 	var issues []ValidationIssue
+	if okf.IsReservedFile(doc.ConceptID + ".md") {
+		if diagnostic := okf.IndexDiagnostic(doc); diagnostic != nil {
+			severity := "warning"
+			if diagnostic.Code == "invalid_reserved_file" {
+				severity = "error"
+			}
+			issues = append(issues, ValidationIssue{Severity: severity, Code: diagnostic.Code, Message: diagnostic.Message, Path: path})
+		}
+		return issues
+	}
+	for _, diagnostic := range okf.MetadataDiagnostics(doc.Frontmatter) {
+		issues = append(issues, ValidationIssue{Severity: "warning", Code: diagnostic.Code, Message: diagnostic.Message, Path: path, ConceptID: doc.ConceptID, Details: map[string]any{"field": diagnostic.Field}})
+	}
+
+	_, _, sourceDiagnostics := okf.SourceReferences(doc.ConceptID, doc.Frontmatter, doc.Markdown, func(string) bool { return true })
+	for _, diagnostic := range sourceDiagnostics {
+		issues = append(issues, ValidationIssue{Severity: "warning", Code: diagnostic.Code, Message: diagnostic.Message, Path: path, ConceptID: doc.ConceptID, Details: map[string]any{"field": diagnostic.Field}})
+	}
 	conceptType, _ := doc.Frontmatter["type"].(string)
 	if !okf.IsReservedFile(doc.ConceptID+".md") && strings.TrimSpace(conceptType) == "" {
 		issues = append(issues, ValidationIssue{
@@ -1632,7 +1705,7 @@ func mkdirScaffoldFiles(logicalPath string, rel string, opts MkdirOptions) mkdir
 		files.storage = append(files.storage, storage.ScaffoldFile{Name: name, Data: data})
 		files.logical = append(files.logical, path.Join(logicalPath, name))
 	}
-	add("index.md", mkdirIndexMarkdown(title, opts.Bundle))
+	add("index.md", mkdirIndexMarkdown(title))
 	if opts.Log {
 		add("log.md", mkdirLogMarkdown(title))
 	}
@@ -1642,25 +1715,12 @@ func mkdirScaffoldFiles(logicalPath string, rel string, opts MkdirOptions) mkdir
 	return files
 }
 
-func mkdirIndexMarkdown(title string, bundle bool) []byte {
-	if bundle {
-		return []byte("---\nokf_version: \"0.1\"\ntitle: " + okf.FormatValue(title) + "\n---\n\n# " + title + "\n")
-	}
-	frontmatter := map[string]any{"title": title}
-	order := []string{"title"}
-	return okf.Serialize(okf.Document{
-		Frontmatter: frontmatter,
-		Order:       order,
-		Markdown:    "# " + title + "\n",
-	})
+func mkdirIndexMarkdown(title string) []byte {
+	return []byte("# " + title + "\n")
 }
 
 func mkdirLogMarkdown(title string) []byte {
-	return okf.Serialize(okf.Document{
-		Frontmatter: map[string]any{"title": title + " Log"},
-		Order:       []string{"title"},
-		Markdown:    "# " + title + " Log\n\n- Created directory scaffold.\n",
-	})
+	return []byte("# " + title + " Log\n\n## " + time.Now().UTC().Format("2006-01-02") + "\n\n- Created directory scaffold.\n")
 }
 
 func mkdirOverviewMarkdown(rel string, title string) []byte {
@@ -1668,8 +1728,9 @@ func mkdirOverviewMarkdown(rel string, title string) []byte {
 	return okf.Serialize(okf.Document{
 		ConceptID: rel + "/overview",
 		Frontmatter: map[string]any{
-			"type":  "Reference",
-			"title": overviewTitle,
+			"type":      "Reference",
+			"title":     overviewTitle,
+			"generated": GeneratedMetadata(time.Now()),
 		},
 		Order:    []string{"type", "title"},
 		Markdown: "# " + overviewTitle + "\n",
@@ -1722,7 +1783,7 @@ func (w *LocalWorkspace) backlinkWarnings(mount vfs.Mount, oldPath string) []Val
 	}
 	var warnings []ValidationIssue
 	for _, item := range items {
-		for _, link := range graphpkg.ExtractMarkdownLinks(item.Concept.Markdown) {
+		for _, link := range conceptLinks(item) {
 			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
 			if ok && target == oldPath {
 				warnings = append(warnings, ValidationIssue{

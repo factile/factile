@@ -159,6 +159,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return writeSummaryResult(stdout, global, result)
 	case "init":
 		return runInit(ctx, args, global, stdin, stdout)
+	case "migrate":
+		return migrate_okf_01_to_02(ctx, args, global, stdout)
 	case "list":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile list [path] [--brief] [--view <id>]")
@@ -200,24 +202,41 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return writeStatResult(stdout, global, result)
 	case "read":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile read <document-path>")
+			return showUsage(stdout, "factile read <document-path> [--include-review] [--evaluated-at <datetime>]")
 		}
-		if len(args) != 2 {
+		fs := flag.NewFlagSet("read", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		include := fs.Bool("include-review", false, "")
+		at := fs.String("evaluated-at", "", "")
+		ordered, err := reorderFlags(args[1:], map[string]bool{"--include-review": false, "--evaluated-at": true})
+		if err != nil {
+			return 2, err
+		}
+		if err := fs.Parse(ordered); err != nil {
+			return 2, err
+		}
+		if fs.NArg() != 1 {
 			return usage(global, stdout, "factile read <document-path>")
 		}
-		result, err := ws.Read(ctx, args[1], factile.ReadOptions{})
+		result, err := ws.Read(ctx, fs.Arg(0), factile.ReadOptions{IncludeReview: *include, EvaluatedAt: *at})
 		if err != nil {
 			return 0, err
 		}
 		return writeReadResult(stdout, global, result)
 	case "search":
 		if hasHelp(args) {
-			return showUsage(stdout, "factile search <path> <query> [--view <id>]")
+			return showUsage(stdout, "factile search <path> <query> [--view <id>] [--include-review] [--evaluated-at <datetime>] [--status <draft|stable|deprecated>] [--review-tier <tier>] [--stale <true|false>] [--changed-since-review <true|false>]")
 		}
 		fs := flag.NewFlagSet("search", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		view := fs.String("view", "", "")
-		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--view": true})
+		include := fs.Bool("include-review", false, "")
+		at := fs.String("evaluated-at", "", "")
+		status := fs.String("status", "", "")
+		tier := fs.String("review-tier", "", "")
+		stale := fs.String("stale", "", "")
+		changed := fs.String("changed-since-review", "", "")
+		ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--view": true, "--include-review": false, "--evaluated-at": true, "--status": true, "--review-tier": true, "--stale": true, "--changed-since-review": true})
 		if orderErr != nil {
 			return 2, orderErr
 		}
@@ -225,9 +244,17 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 			return 2, err
 		}
 		if fs.NArg() != 2 {
-			return usage(global, stdout, "factile search <path> <query> [--view <id>]")
+			return usage(global, stdout, "factile search <path> <query> [--view <id>] [--include-review] [--evaluated-at <datetime>] [--status <draft|stable|deprecated>] [--review-tier <tier>] [--stale <true|false>] [--changed-since-review <true|false>]")
 		}
-		result, err := ws.Search(ctx, fs.Arg(0), fs.Arg(1), factile.SearchOptions{View: *view})
+		staleFilter, err := optionalReviewBool(*stale)
+		if err != nil {
+			return 2, err
+		}
+		changedFilter, err := optionalReviewBool(*changed)
+		if err != nil {
+			return 2, err
+		}
+		result, err := ws.Search(ctx, fs.Arg(0), fs.Arg(1), factile.SearchOptions{View: *view, IncludeReview: *include, EvaluatedAt: *at, Status: *status, ReviewTier: *tier, Stale: staleFilter, ChangedSinceReview: changedFilter})
 		if err != nil {
 			return 0, err
 		}
@@ -278,6 +305,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runRename(ctx, ws, args, global, stdout)
 	case "delete":
 		return runDelete(ctx, ws, args, global, stdout)
+	case "review":
+		return runReview(ctx, ws, args, global, stdout)
 	case "deprecate":
 		return runDeprecate(ctx, ws, args, global, stdout)
 	case "mount":
@@ -641,14 +670,15 @@ func runUI(ctx context.Context, ws factile.Workspace, args []string, global glob
 
 func runContext(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]")
+		return showUsage(stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>]")
 	}
 	fs := flag.NewFlagSet("context", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	maxTokens := fs.Int("max-tokens", 4000, "")
 	depth := fs.Int("depth", 1, "")
 	view := fs.String("view", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true})
+	at := fs.String("evaluated-at", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true, "--evaluated-at": true})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -656,9 +686,9 @@ func runContext(ctx context.Context, ws factile.Workspace, args []string, global
 		return 2, err
 	}
 	if fs.NArg() != 2 {
-		return usage(global, stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>]")
+		return usage(global, stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>]")
 	}
-	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view})
+	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view, EvaluatedAt: *at})
 	if err != nil {
 		return 0, err
 	}
@@ -806,7 +836,7 @@ Delete one document using its observed revision. Use deprecate to retain the
 document with a transition notice.`
 
 const deprecateUsage = `factile deprecate <document-path> --rev <rev> --reason <text>
-Set deprecated metadata and append the reason to a Deprecation section.
+Set status: deprecated and append the reason to a Deprecation section.
 Use the revision from a read or the preceding successful mutation.`
 
 const patchUsage = `factile patch <document-path> --rev <rev> [patch options]
@@ -836,7 +866,7 @@ One edit:
 
 Batch several edits to that document:
   factile patch /guide --rev <observed-revision> --input - --brief --json <<'JSON'
-{"operations":[{"op":"replace_text","old":"An old sentence.","new":"A new sentence."},{"op":"set","key":"status","value":"active"}]}
+{"operations":[{"op":"replace_text","old":"An old sentence.","new":"A new sentence."},{"op":"set","key":"status","value":"stable"}]}
 JSON
 JSON operations: replace_text (old/new), set (key/value), delete_key (key),
 replace_section or append_section (heading/markdown), replace_body (markdown).
@@ -933,6 +963,7 @@ func runPatch(ctx context.Context, ws factile.Workspace, args []string, global g
 		}
 		var decoded *factile.PatchConceptInput
 		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.UseNumber()
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&decoded); err != nil {
 			return 2, factile.NewError(factile.ErrInvalidPatch, "Invalid patch input: "+err.Error())

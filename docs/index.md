@@ -1,8 +1,5 @@
 ---
-type: Index
-title: Factile Documentation
-description: Public documentation for the local-first Factile CLI.
-tags: [factile, cli, documentation]
+okf_version: "0.2"
 ---
 
 # Factile Documentation

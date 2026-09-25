@@ -12,7 +12,7 @@ import (
 
 func TestHelpRoutesDoNotNeedWorkspace(t *testing.T) {
 	missing := t.TempDir() + "/missing"
-	for _, command := range [][]string{{"patch"}, {"create"}, {"write"}, {"rename"}, {"delete"}, {"deprecate"}, {"mkdir"}, {"view", "set"}, {"mcp", "serve"}} {
+	for _, command := range [][]string{{"migrate"}, {"patch"}, {"create"}, {"write"}, {"rename"}, {"delete"}, {"deprecate"}, {"mkdir"}, {"view", "set"}, {"mcp", "serve"}} {
 		var want bytes.Buffer
 		canonical := append(append([]string{}, command...), "--help")
 		if code := Run(context.Background(), canonical, nil, &want, &bytes.Buffer{}); code != 0 {
@@ -51,7 +51,7 @@ func TestPatchHelpBatchExample(t *testing.T) {
 	}
 	receipt := runCLIJSONWithInput[factile.EditReceipt](t, strings.NewReader(payload), "--workspace", dir, "patch", "/guide", "--rev", read.Concept.Revision, "--input", "-", "--brief", "--json")
 	result := runCLIJSON[factile.ConceptResult](t, "--workspace", dir, "read", "/guide", "--json")
-	if result.Concept.Markdown != strings.Replace(read.Concept.Markdown, "An old sentence.", "A new sentence.", 1) || result.Concept.Frontmatter["status"] != "active" || receipt.Revision != result.Concept.Revision {
+	if result.Concept.Markdown != strings.Replace(read.Concept.Markdown, "An old sentence.", "A new sentence.", 1) || result.Concept.Frontmatter["status"] != "stable" || receipt.Revision != result.Concept.Revision {
 		t.Fatalf("example did not perform described edits: %#v", result)
 	}
 	// A literal help word in an edit remains content, not a request for help.

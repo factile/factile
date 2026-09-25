@@ -122,7 +122,25 @@ func (s Local) ReadConcept(conceptID string) ([]byte, string, error) {
 	return data, file, err
 }
 
+// ResourceExists checks a bundle-relative file without following symlinks.
+func (s Local) ResourceExists(rel string) bool {
+	file, err := s.safeJoin(rel)
+	if err != nil {
+		return false
+	}
+	info, err := os.Lstat(file)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func (s Local) ListConceptIDs(prefix string) ([]string, error) {
+	return s.listMarkdownIDs(prefix, false)
+}
+
+func (s Local) ListDocumentIDs(prefix string) ([]string, error) {
+	return s.listMarkdownIDs(prefix, true)
+}
+
+func (s Local) listMarkdownIDs(prefix string, reserved bool) ([]string, error) {
 	prefix = okf.NormalizeConceptID(prefix)
 	root := s.Root
 	if prefix != "" {
@@ -153,7 +171,7 @@ func (s Local) ListConceptIDs(prefix string) ([]string, error) {
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
-		if !strings.HasSuffix(d.Name(), ".md") || okf.IsReservedFile(d.Name()) {
+		if !strings.HasSuffix(d.Name(), ".md") || (!reserved && okf.IsReservedFile(d.Name())) {
 			return nil
 		}
 		rel, err := filepath.Rel(s.Root, p)
@@ -161,6 +179,9 @@ func (s Local) ListConceptIDs(prefix string) ([]string, error) {
 			return err
 		}
 		id, ok := okf.ConceptIDFromRel(filepath.ToSlash(rel))
+		if reserved && okf.IsReservedFile(d.Name()) {
+			id, ok = strings.TrimSuffix(filepath.ToSlash(rel), ".md"), true
+		}
 		if ok {
 			ids = append(ids, id)
 		}

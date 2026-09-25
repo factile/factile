@@ -3,7 +3,8 @@ type: Domain Concept
 title: Workspaces, Bundles, Paths, Sources, and Views
 description: Accepted Root Layout v2 model for locating and composing local Factile knowledge.
 tags: [factile, workspaces, bundles, paths, mounts, sources, views]
-timestamp: 2026-07-27T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-07-27T00:00:00+02:00"
 ---
 
 # Workspaces, Bundles, Paths, Sources, and Views

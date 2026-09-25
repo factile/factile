@@ -2,6 +2,8 @@
 
 ## 2026-09-11
 
+- Added native OKF 0.2 metadata diagnostics and reserved-index validation, with
+  plain/version-only root health and shared CLI/Server conformance checks.
 - Fixed frontmatter key-order collection at the projection budget boundary and
   explicit Core tag validation (ft-0zn). Added parser and CLI JSON regressions;
   verified the shared EOF/tag and schema-definition cases against Server.
@@ -172,3 +174,7 @@
 - Apply concept schemas automatically in workspace validation, isolated by physical root and mount source including cached Git. Report base OKF separately, distinguish complete/scoped/skipped coverage, exclude base-invalid concepts, and deduplicate overlapping views. Preserve existing write and bootstrap health-check policy.
 
 - Expose base/schema coverage and actionable field diagnostics in CLI text and JSON, with matching local MCP and reader/curator bridge results. Add seven JSON/text golden scenarios, operational-error checks and a public schema authoring example. Older base-only results remain explicitly unevaluated.
+
+## 2026-09-11: Review and Freshness
+
+Added explicit revision-checked Factile process review, optional review-state reads and search filters with exclusion reasons. Review history survives content changes. Evaluation preserves timezone offsets and fractional precision, with freshness due at the declared deadline. Human authentication remains a separate hosted action. Shared OKF review cases and local mutation/filter tests verify these semantics.

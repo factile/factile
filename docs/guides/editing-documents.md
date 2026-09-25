@@ -3,7 +3,8 @@ type: Guide
 title: Editing Documents Safely
 description: Create and change OKF documents with optimistic revisions and targeted patches.
 tags: [factile, cli, writing, revisions, patch]
-timestamp: 2026-09-10T00:00:00+02:00
+legacy_metadata:
+  timestamp: "2026-09-10T00:00:00+02:00"
 ---
 
 # Editing Documents Safely

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/factile/factile/pkg/factile"
+	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -795,7 +796,11 @@ func TestPatchBridgeUsesSharedEditing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(saved) != strings.Replace(source, "Old sentence.", "New sentence.", 1) || !receipt.Changed || receipt.Diff == nil || strings.Contains(response.Body.String(), `"concept"`) {
+	comparable, err := okf.PatchFrontmatter("guide", saved, nil, []string{"generated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(comparable) != strings.Replace(source, "Old sentence.", "New sentence.", 1) || !receipt.Changed || receipt.Diff == nil || strings.Contains(response.Body.String(), `"concept"`) {
 		t.Fatalf("bridge patch: %s %q", response.Body.String(), saved)
 	}
 	conflict := requestWithBody(handler, http.MethodPost, APIPrefix+"/writer/patch", string(body))
@@ -812,5 +817,71 @@ func TestPatchBridgeUsesSharedEditing(t *testing.T) {
 	reader := requestWithBody(NewHandler(ws, Options{}), http.MethodPost, APIPrefix+"/writer/patch", string(body))
 	if reader.Code != http.StatusNotImplemented {
 		t.Fatalf("reader patch status: %d", reader.Code)
+	}
+}
+
+func TestPatchBridgePreservesPortableNumbers(t *testing.T) {
+	dir := t.TempDir()
+	writeUICombinedWorkspace(t, dir)
+	writeUITestFile(t, filepath.Join(dir, "numbers.md"), "---\ntype: Note\n---\nEvidence.\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: dir})
+	read, err := ws.Read(context.Background(), "/numbers", factile.ReadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := `{"path":"/numbers","expected_revision":"` + read.Concept.Revision + `","set":{"extension":{"count":9007199254740993,"ratio":0.12345678901234567890123456789}},"operations":[{"op":"set","key":"observation","value":9007199254740993123456789}]}`
+	response := requestWithBody(NewHandler(ws, Options{Curator: true}), http.MethodPost, APIPrefix+"/writer/patch", input)
+	if response.Code != http.StatusOK {
+		t.Fatalf("patch: %s", response.Body.String())
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, "numbers.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []string{"9007199254740993", "0.12345678901234567890123456789", "9007199254740993123456789"} {
+		if !strings.Contains(string(saved), number) || !strings.Contains(response.Body.String(), number) {
+			t.Fatalf("portable number lost: %s: saved %s response %s", number, saved, response.Body.String())
+		}
+	}
+}
+
+func (fakeReader) Review(ctx context.Context, path string, opts factile.ReviewOptions) (factile.ConceptResult, error) {
+	return factile.ConceptResult{}, nil
+}
+
+func TestReviewBridgeUsesActualProcessAndRevision(t *testing.T) {
+	dir := t.TempDir()
+	writeUICombinedWorkspace(t, dir)
+	writeUITestFile(t, filepath.Join(dir, "guide.md"), "---\ntype: Guide\ngenerated: {by: 'agent:fixture', at: '2026-01-01T00:00:00Z'}\ncustom: keep\n---\nClaim.\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: dir})
+	initial, err := ws.Read(context.Background(), "/guide", factile.ReadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"path": "/guide", "expected_revision": initial.Concept.Revision})
+	reader := NewHandler(ws, Options{})
+	if response := requestWithBody(reader, http.MethodPost, APIPrefix+"/writer/review", string(payload)); response.Code != http.StatusNotImplemented {
+		t.Fatalf("read-only review: %d %s", response.Code, response.Body.String())
+	}
+	curator := NewHandler(ws, Options{Curator: true})
+	forged := strings.TrimSuffix(string(payload), "}") + `,"by":"human:forged"}`
+	if response := requestWithBody(curator, http.MethodPost, APIPrefix+"/writer/review", forged); response.Code != http.StatusBadRequest {
+		t.Fatalf("forged: %s", response.Body.String())
+	}
+	response := requestWithBody(curator, http.MethodPost, APIPrefix+"/writer/review", string(payload))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "process:factile/") {
+		t.Fatalf("review: %s", response.Body.String())
+	}
+	if retry := requestWithBody(curator, http.MethodPost, APIPrefix+"/writer/review", string(payload)); retry.Code != http.StatusConflict {
+		t.Fatalf("conflict: %s", retry.Body.String())
+	}
+	reopened := NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{Workspace: dir}), Options{})
+	read := request(reopened, http.MethodGet, APIPrefix+"/reader/read?path=/guide&include_review=true")
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"tier":"machine-confirmed"`) || !strings.Contains(read.Body.String(), `"custom":"keep"`) {
+		t.Fatalf("reopened: %s", read.Body.String())
+	}
+	search := requestWithBody(reopened, http.MethodPost, APIPrefix+"/reader/search", `{"path":"/","query":"Claim","review_tier":"human-reviewed","evaluated_at":"2026-09-11T09:00:00Z"}`)
+	if search.Code != http.StatusOK || !strings.Contains(search.Body.String(), `"reason":"tier"`) {
+		t.Fatalf("review filter: %s", search.Body.String())
 	}
 }
