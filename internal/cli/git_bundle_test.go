@@ -173,6 +173,86 @@ func TestCLIGitInvalidRefreshPreservesBundleAndDescriptor(t *testing.T) {
 	}
 }
 
+func TestCLIGitCommittedConsumerReconstructionAndPinnedRoot(t *testing.T) {
+	root := t.TempDir()
+	writeCLITestFile(t, filepath.Join(root, "factile.toml"), "version = 2\n[workspace]\nroot = \"docs\"\n")
+	writeCLIBundleManifest(t, filepath.Join(root, "docs"), "consumer", "Consumer")
+	remote, source, revision := cliSnapshotRemote(t, map[string]string{
+		"factile.toml":                         "version = 2\n[workspace]\nroot = \"docs\"\n",
+		"docs/factile.toml":                    cliSelectedManifest,
+		"docs/practices/boundary-contracts.md": cliBoundaryConcept,
+	}, false)
+	t.Chdir(root)
+	runCLIJSON[factile.MountResult](t, "mount", remote, "/coding", "--revision", revision, "--json")
+	descriptor := filepath.Join("docs", "coding.mount.toml")
+	before, err := os.ReadFile(filepath.Join(root, descriptor))
+	if err != nil || !strings.Contains(string(before), revision) {
+		t.Fatalf("descriptor must contain full pin: %s, %v", before, err)
+	}
+	cliGitRun(t, root, "init")
+	cliGitRun(t, root, "config", "user.name", "Factile Test")
+	cliGitRun(t, root, "config", "user.email", "factile@example.test")
+	cliGitRun(t, root, "add", "--", "factile.toml", "docs/factile.toml", descriptor)
+	cliGitRun(t, root, "commit", "-m", "consumer intent only")
+	if tracked := cliGitOutput(t, root, "ls-files"); tracked != "docs/coding.mount.toml\ndocs/factile.toml\nfactile.toml" {
+		t.Fatalf("consumer committed more than manifests and descriptor: %s", tracked)
+	}
+	assertPin := func(workspace string) {
+		t.Helper()
+		for _, phase := range []string{"before refresh", "after refresh"} {
+			if phase == "after refresh" {
+				refreshed := runCLIJSON[factile.RefreshResult](t, "--workspace", workspace, "refresh", "/coding", "--json")
+				if refreshed.Outcome != "pinned" || refreshed.Status.SelectedRevision != revision {
+					t.Fatalf("pin moved: %#v", refreshed)
+				}
+			}
+			read := runCLIJSON[factile.ConceptResult](t, "--workspace", workspace, "read", "/coding/practices/boundary-contracts", "--json")
+			if !strings.Contains(read.Concept.Markdown, "Describe inputs and guarantees.") || strings.Contains(read.Concept.Markdown, "Changed root") {
+				t.Fatalf("%s read changed pinned content: %#v", phase, read)
+			}
+			validated := runCLIJSON[factile.ValidationResult](t, "--workspace", workspace, "validate", "/coding", "--json")
+			if !validated.Valid || len(validated.Issues) != 0 {
+				t.Fatalf("validation: %#v", validated)
+			}
+			mounts := runCLIJSON[factile.MountListResult](t, "--workspace", workspace, "mounts", "--json")
+			if len(mounts.Mounts) != 1 || mounts.Mounts[0].SourceStatus.SelectedRevision != revision || mounts.Mounts[0].Writable {
+				t.Fatalf("pin status: %#v", mounts)
+			}
+		}
+		after, err := os.ReadFile(filepath.Join(workspace, descriptor))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("intent changed: %v", err)
+		}
+	}
+	cloneConsumer := func() string {
+		t.Helper()
+		cold := filepath.Join(t.TempDir(), "consumer")
+		cliGitRun(t, "", "clone", "--no-local", "--", root, cold)
+		if _, err := os.Stat(filepath.Join(cold, ".factile")); !os.IsNotExist(err) {
+			t.Fatalf("consumer inherited generated state: %v", err)
+		}
+		return cold
+	}
+	assertPin(cloneConsumer())
+	// Keep both valid bundles to detect selection from remote HEAD instead of the pin.
+	writeCLITestFile(t, filepath.Join(source, "factile.toml"), "version = 2\n[workspace]\nroot = \"knowledge\"\n")
+	writeCLITestFile(t, filepath.Join(source, "knowledge", "factile.toml"), cliSelectedManifest)
+	writeCLITestFile(t, filepath.Join(source, "knowledge", "practices", "boundary-contracts.md"), strings.ReplaceAll(cliBoundaryConcept, "Describe inputs and guarantees.", "Changed root content."))
+	cliGitRun(t, source, "add", "--all", "--", ".")
+	cliGitRun(t, source, "commit", "-m", "move workspace root")
+	cliGitRun(t, source, "push", "--", remote, "main:main")
+	assertPin(root)
+	assertPin(cloneConsumer())
+	// A new floating consumer proves that HEAD really selects the changed root.
+	floating := t.TempDir()
+	writeCLICombinedWorkspace(t, floating)
+	runCLIJSON[factile.MountResult](t, "--workspace", floating, "mount", remote, "/coding", "--json")
+	read := runCLIJSON[factile.ConceptResult](t, "--workspace", floating, "read", "/coding/practices/boundary-contracts", "--json")
+	if !strings.Contains(read.Concept.Markdown, "Changed root content.") {
+		t.Fatalf("HEAD did not move: %#v", read)
+	}
+}
+
 func cliSnapshotRemote(t *testing.T, files map[string]string, symlink bool) (string, string, string) {
 	t.Helper()
 	source := t.TempDir()
