@@ -135,7 +135,7 @@ with `--writable` can be curated through the consuming workspace.
   snapshot exists.
 - `revision_not_available`: the selected ref or commit is absent.
 - `unsupported_source`: the source form or operation is unsupported.
-- `validation_failed`: the recorded selector or descriptor is invalid.
+- `validation_failed`: the selector, descriptor, or selected Git bundle is invalid.
 
 Check the descriptor and cached status:
 
@@ -148,9 +148,30 @@ A stale result means the last snapshot remains readable after a refresh failure.
 Check network, Git, SSH, and credential helpers outside the descriptor. Never
 embed a password, token, query, or fragment in the source URI.
 
-Git mounts support SHA-1 repositories and 40-hex pinned commits. SHA-256 object
-format, subdirectory mounts, submodule initialization, Git LFS downloads, and
-repository symlinks are not supported.
+Bundle-selection errors include a stable `details.reason` in CLI and MCP JSON:
+
+| Reason | Fix in the source repository |
+|---|---|
+| `missing_manifest` | Add repository-root `factile.toml` with `version = 2` and `[bundle]`, or `[workspace]` selecting a bundle. Manifestless Git sources are no longer accepted. |
+| `invalid_manifest` | Fix the repository-root manifest's TOML, version, required fields, or unknown keys. Combined manifests require `workspace.root = "."`. |
+| `invalid_root` | Use a normalized relative root inside the repository. Remove traversal, absolute/private paths, and intermediate workspace boundaries. |
+| `missing_bundle` | Create the selected directory and its `factile.toml`. |
+| `invalid_bundle` | Give the selected directory a valid version 2 `[bundle]` manifest. |
+| `symlink` | Replace symlinks with ordinary files throughout the commit, including outside the selected bundle. |
+
+A failed initial mount does not write or replace its descriptor. An existing
+invalid descriptor remains listed, but reads fail and validation reports the
+reason at its mount path. An invalid floating refresh retains the previous
+usable snapshot and reports stale status with `last_error_code =
+"validation_failed"` and `last_error_reason`. Cached sources are validated by
+the same rules. Commit the fix, then refresh a floating source; an exact pin
+requires explicitly mounting the corrected full SHA-1.
+
+Git mounts support SHA-1 repositories and full 40-hex pinned commits. A
+repository-root workspace manifest may select a contained bundle such as
+`docs`; there is no caller-selected subdirectory option. SHA-256 object format,
+submodule initialization, Git LFS downloads, and repository symlinks are not
+supported.
 
 ## Validation failures and warnings
 

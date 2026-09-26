@@ -18,7 +18,7 @@ import (
 var (
 	ErrInvalidIntent           = errors.New("invalid Git mount intent")
 	ErrGitSourceLocked         = errors.New("Git sources are read-only")
-	ErrSnapshotSymlink         = errors.New("Git snapshot contains a symlink")
+	ErrSnapshotSymlink         = &SelectionError{Reason: "symlink"}
 	ErrRemoteSourceUnavailable = errors.New("Git source is unavailable and no cached snapshot exists")
 	ErrRevisionNotAvailable    = errors.New("requested Git ref or revision is not available")
 )
@@ -78,13 +78,18 @@ func (c *Cache) Refresh(ctx context.Context, intent Intent) (RefreshResult, erro
 }
 
 func (c *Cache) Status(intent Intent) (vfs.SourceStatus, error) {
+	status, _, err := c.cachedStatus(intent)
+	return status, err
+}
+
+func (c *Cache) cachedStatus(intent Intent) (vfs.SourceStatus, string, error) {
 	selected, err := validateIntent(intent)
 	if err != nil {
-		return vfs.SourceStatus{}, err
+		return vfs.SourceStatus{}, "", err
 	}
 	entry, err := c.entryPaths(intent.MountPath, intent.Source)
 	if err != nil {
-		return vfs.SourceStatus{}, err
+		return vfs.SourceStatus{}, "", err
 	}
 	state, err := c.ReadState(entry)
 	if errors.Is(err, os.ErrNotExist) {
@@ -94,10 +99,10 @@ func (c *Cache) Status(intent Intent) (vfs.SourceStatus, error) {
 		setStateSelector(&state, selected)
 		state.LastErrorCode = "validation_failed"
 	} else if err != nil {
-		return vfs.SourceStatus{}, err
+		return vfs.SourceStatus{}, "", err
 	}
-	status, _ := c.statusFromState(entry, state, selected, c.nowUTC())
-	return status, nil
+	status, snapshot := c.statusFromState(entry, state, selected, c.nowUTC())
+	return status, snapshot, nil
 }
 
 func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolution, RefreshResult, error) {
@@ -109,7 +114,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 	if err != nil {
 		return Resolution{}, RefreshResult{}, err
 	}
-	observedStatus, err := c.Status(intent)
+	observedStatus, observedSnapshot, err := c.cachedStatus(intent)
 	if err != nil {
 		return Resolution{}, RefreshResult{}, err
 	}
@@ -120,7 +125,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 				if selected.mode == SelectorRevision {
 					outcome = "pinned"
 				}
-				resolution := resolutionFromStatus(entry, observedStatus, false)
+				resolution := resolutionFromStatus(observedSnapshot, observedStatus, false)
 				return resolution, refreshResult(outcome, observedStatus), nil
 			}
 			if observedStatus.LastAttemptAt != "" && observedStatus.LastErrorCode != "" {
@@ -154,7 +159,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 		now := c.nowUTC()
 		status, snapshot := c.statusFromState(entry, state, selected, now)
 		if selected.mode == SelectorRevision && !force && status.SnapshotAvailable {
-			resolution = resolutionFromStatus(entry, status, false)
+			resolution = resolutionFromStatus(snapshot, status, false)
 			refresh = refreshResult("pinned", status)
 			return nil
 		}
@@ -163,15 +168,23 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 			c.commitExists(ctx, entry, state.ResolvedRevision) {
 			snapshot, _, materializeErr := c.materializeSnapshot(ctx, entry, state.ResolvedRevision)
 			if materializeErr == nil {
-				status, _ = c.statusFromState(entry, state, selected, now)
-				resolution = resolutionFromStatus(entry, status, false)
-				resolution.SourcePath = snapshot
+				status, snapshot = c.statusFromState(entry, state, selected, now)
+				resolution = resolutionFromStatus(snapshot, status, false)
 				outcome := "not_due"
 				if selected.mode == SelectorRevision {
 					outcome = "pinned"
 				}
 				refresh = refreshResult(outcome, status)
 				return nil
+			}
+			if reason := selectionReason(materializeErr); reason != "" {
+				state.LastAttemptAt = now.Format(time.RFC3339Nano)
+				state.LastErrorCode = "validation_failed"
+				state.LastErrorReason = reason
+				if err := c.WriteState(entry, state); err != nil {
+					return err
+				}
+				return materializeErr
 			}
 		}
 		if force && state.LastAttemptAt != observedAttempt {
@@ -186,7 +199,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 			if !status.SnapshotAvailable {
 				return statusError(status)
 			}
-			resolution = resolutionFromStatus(entry, status, outcome == "updated")
+			resolution = resolutionFromStatus(snapshot, status, outcome == "updated")
 			refresh = refreshResult(outcome, status)
 			return nil
 		}
@@ -195,7 +208,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 				return statusError(status)
 			}
 			if status.SnapshotAvailable {
-				resolution = resolutionFromStatus(entry, status, false)
+				resolution = resolutionFromStatus(snapshot, status, false)
 				refresh = refreshResult("not_due", status)
 				return nil
 			}
@@ -211,6 +224,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 		state.LastAttemptAt = completedAt
 		if err != nil {
 			state.LastErrorCode = sourceErrorCode(err)
+			state.LastErrorReason = selectionReason(err)
 			if writeErr := c.WriteState(entry, state); writeErr != nil {
 				return writeErr
 			}
@@ -219,7 +233,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 			}
 			status, snapshot = c.statusFromState(entry, state, selected, c.nowUTC())
 			if status.SnapshotAvailable {
-				resolution = resolutionFromStatus(entry, status, false)
+				resolution = resolutionFromStatus(snapshot, status, false)
 				refresh = refreshResult("stale", status)
 				return nil
 			}
@@ -230,6 +244,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 		}
 		state.LastSuccessAt = completedAt
 		state.LastErrorCode = ""
+		state.LastErrorReason = ""
 		state.ResolvedRevision = revision
 		state.SelectedSnapshot = revision
 		state.SelectedMode = selected.mode
@@ -238,10 +253,9 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 		if err := c.WriteState(entry, state); err != nil {
 			return err
 		}
-		status, _ = c.statusFromState(entry, state, selected, c.nowUTC())
+		status, snapshot = c.statusFromState(entry, state, selected, c.nowUTC())
 		updated := previous != "" && previous != revision
-		resolution = resolutionFromStatus(entry, status, updated)
-		resolution.SourcePath = snapshot
+		resolution = resolutionFromStatus(snapshot, status, updated)
 		outcome := "unchanged"
 		if selected.mode == SelectorRevision {
 			outcome = "pinned"
@@ -275,7 +289,7 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 			return err
 		}
 		now := c.nowUTC()
-		status, _ := c.statusFromState(entry, state, selected, now)
+		status, snapshot := c.statusFromState(entry, state, selected, now)
 		if state.LastAttemptAt != observed.LastAttemptAt {
 			if status.SnapshotAvailable {
 				outcome := "not_due"
@@ -291,7 +305,7 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 						updated = true
 					}
 				}
-				resolution = resolutionFromStatus(entry, status, updated)
+				resolution = resolutionFromStatus(snapshot, status, updated)
 				refresh = refreshResult(outcome, status)
 				return nil
 			}
@@ -302,18 +316,19 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 		}
 
 		setStateSelector(&state, selected)
-		status, _ = c.statusFromState(entry, state, selected, now)
-		if status.LastErrorCode == "validation_failed" {
-			return ErrInvalidCache
+		status, snapshot = c.statusFromState(entry, state, selected, now)
+		if !status.SnapshotAvailable && status.LastErrorCode == "validation_failed" {
+			return statusError(status)
 		}
 		state.LastAttemptAt = now.Format(time.RFC3339Nano)
 		state.LastErrorCode = sourceErrorCode(cause)
+		state.LastErrorReason = selectionReason(cause)
 		if err := c.WriteState(entry, state); err != nil {
 			return err
 		}
-		status, _ = c.statusFromState(entry, state, selected, now)
+		status, snapshot = c.statusFromState(entry, state, selected, now)
 		if status.SnapshotAvailable {
-			resolution = resolutionFromStatus(entry, status, false)
+			resolution = resolutionFromStatus(snapshot, status, false)
 			refresh = refreshResult("stale", status)
 			return nil
 		}
@@ -350,15 +365,19 @@ func (c *Cache) statusFromState(entry Entry, state State, selected selector, now
 	status.LastAttemptAt = state.LastAttemptAt
 	status.LastSuccessAt = state.LastSuccessAt
 	status.LastErrorCode = state.LastErrorCode
+	if state.LastErrorCode == "validation_failed" && validSelectionReason(state.LastErrorReason) {
+		status.LastErrorReason = state.LastErrorReason
+	}
 	snapshot := ""
 	if selectedStateMatches(state, selected) && state.SelectedSnapshot != "" && state.ResolvedRevision == state.SelectedSnapshot {
 		candidate := filepath.Join(entry.SnapshotsPath, state.SelectedSnapshot)
-		if err := validateSnapshot(entry.SnapshotsPath, candidate); err == nil {
+		if bundle, err := snapshotBundle(entry.SnapshotsPath, candidate); err == nil {
 			status.SnapshotAvailable = true
 			status.SelectedRevision = state.ResolvedRevision
-			snapshot = candidate
+			snapshot = bundle
 		} else if !errors.Is(err, os.ErrNotExist) {
 			status.LastErrorCode = "validation_failed"
+			status.LastErrorReason = selectionReason(err)
 		}
 	}
 	status.RefreshDue = selected.mode != SelectorRevision && refreshDue(state.LastAttemptAt, now)
@@ -382,6 +401,7 @@ func setStateSelector(state *State, selected selector) {
 		state.LastAttemptAt = ""
 		state.LastSuccessAt = ""
 		state.LastErrorCode = ""
+		state.LastErrorReason = ""
 	}
 	state.SelectorMode = selected.mode
 	state.Ref = selected.ref
@@ -409,9 +429,9 @@ func resolutionDue(status vfs.SourceStatus, selected selector, now time.Time) bo
 	return !status.SnapshotAvailable && refreshDue(status.LastAttemptAt, now)
 }
 
-func resolutionFromStatus(entry Entry, status vfs.SourceStatus, updated bool) Resolution {
+func resolutionFromStatus(sourcePath string, status vfs.SourceStatus, updated bool) Resolution {
 	return Resolution{
-		SourcePath:   filepath.Join(entry.SnapshotsPath, status.SelectedRevision),
+		SourcePath:   sourcePath,
 		Revision:     status.SelectedRevision,
 		SelectorMode: status.SelectorMode,
 		Ref:          status.IntentRef,
@@ -432,7 +452,7 @@ func staleWarning(mountPath string) *vfs.SourceWarning {
 }
 
 func sourceErrorCode(err error) string {
-	if errors.Is(err, ErrInvalidIntent) || errors.Is(err, ErrInvalidCache) || errors.Is(err, ErrSnapshotSymlink) {
+	if errors.Is(err, ErrInvalidIntent) || errors.Is(err, ErrInvalidCache) || selectionReason(err) != "" {
 		return "validation_failed"
 	}
 	if errors.Is(err, ErrRevisionNotAvailable) {
@@ -442,6 +462,15 @@ func sourceErrorCode(err error) string {
 }
 
 func statusError(status vfs.SourceStatus) error {
+	if status.LastErrorCode == "validation_failed" {
+		if status.LastErrorReason == "symlink" {
+			return ErrSnapshotSymlink
+		}
+		if validSelectionReason(status.LastErrorReason) {
+			return &SelectionError{Reason: status.LastErrorReason}
+		}
+		return ErrInvalidCache
+	}
 	if status.LastErrorCode == "revision_not_available" {
 		return ErrRevisionNotAvailable
 	}
@@ -581,8 +610,8 @@ func (c *Cache) materializeSnapshot(ctx context.Context, entry Entry, revision s
 	if err := validateManagedPath(entry.SnapshotsPath, target); err != nil {
 		return "", false, err
 	}
-	if err := validateSnapshot(entry.SnapshotsPath, target); err == nil {
-		return target, false, nil
+	if bundle, err := snapshotBundle(entry.SnapshotsPath, target); err == nil {
+		return bundle, false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", false, err
 	}
@@ -620,16 +649,24 @@ func (c *Cache) materializeSnapshot(ctx context.Context, entry Entry, revision s
 	if err := rejectTreeSymlinks(temporary, ""); err != nil {
 		return "", false, err
 	}
+	bundle, err := selectSnapshotBundle(temporary)
+	if err != nil {
+		return "", false, err
+	}
+	bundleRel, err := filepath.Rel(temporary, bundle)
+	if err != nil {
+		return "", false, err
+	}
 	if err := makeSnapshotReadOnly(temporary); err != nil {
 		return "", false, err
 	}
 	if err := os.Rename(temporary, target); err != nil {
-		if validateErr := validateSnapshot(entry.SnapshotsPath, target); validateErr == nil {
-			return target, false, nil
+		if bundle, validateErr := snapshotBundle(entry.SnapshotsPath, target); validateErr == nil {
+			return bundle, false, nil
 		}
 		return "", false, err
 	}
-	return target, true, nil
+	return filepath.Join(target, bundleRel), true, nil
 }
 
 func (c *Cache) rejectCommitSymlinks(ctx context.Context, entry Entry, revision string) error {

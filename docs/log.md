@@ -1,5 +1,11 @@
 # Documentation Log
 
+## 2026-09-26
+
+- Documented repository-root and nested Git bundle layouts, strict manifest
+  selection across acquisition/cache/refresh, stable selection diagnostics,
+  failure-before-descriptor persistence, and full-SHA pinning (ft-diw.2).
+
 ## 2026-09-11
 
 - Added native OKF 0.2 metadata diagnostics and reserved-index validation, with

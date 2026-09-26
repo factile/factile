@@ -118,6 +118,34 @@ Every explicit mount defaults to read-only. A local bundle can opt into writes;
 a Git source cannot. Workspace containment is not visibility: mounting is the
 only operation that projects a secondary bundle into the logical tree.
 
+## Git bundle selection
+
+A Git source must contain a valid version 2 `factile.toml` at the repository
+root of the selected commit. Two layouts are supported:
+
+| Repository layout | Mounted bundle |
+|---|---|
+| Repository-root `[bundle]` | The repository root. A combined `[workspace]` and `[bundle]` with `root = "."` also works. |
+| Repository-root `[workspace]` with `root = "docs"`, plus `docs/factile.toml` containing `[bundle]` | The `docs` bundle. Other contained relative roots work the same way. |
+
+For either layout, mounting at `/coding` exposes the selected bundle's
+`practices/boundary-contracts.md` at `/coding/practices/boundary-contracts`.
+Title and description defaults come from that bundle. Files outside it remain
+outside the mount, and the source workspace's mounts and views are not
+activated.
+
+Selection uses strict manifest and workspace-root validation inside the complete
+Git snapshot. Missing or malformed manifests, unsafe roots, missing bundles,
+and crossed workspace boundaries fail. Symlinks anywhere in the commit are
+rejected, even outside the selected bundle. There is no raw-repository fallback
+or caller-selected subdirectory override.
+
+This tightens earlier Git behavior: manifestless repositories are no longer
+accepted, and workspace repositories expose their selected bundle directly.
+Add a valid manifest to the source repository and update any old paths that
+included the bundle directory. The same checks apply to existing cached
+snapshots, fresh acquisition, reconstruction, validation, and refresh.
+
 ## Git source state and credentials
 
 Git sources are materialized as immutable snapshots below the workspace's
@@ -131,6 +159,9 @@ A Git mount may follow remote `HEAD`, follow a branch or tag through `--ref`, or
 pin one 40-hex SHA-1 commit through `--revision`. Floating sources check at most
 once per 24 hours during ordinary use. `factile refresh <mount-path>` checks
 immediately. A failed refresh can retain the last usable snapshot as stale.
+An invalid candidate never replaces that snapshot or its mounted paths and
+metadata. Exact pins never advance, including after cache reconstruction.
+Initial selection failures do not create or replace a mount descriptor.
 
 Credentials come from Git credential helpers, an OS keychain, SSH agent/key, or
 the process environment. They never belong in `factile.toml`,

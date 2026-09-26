@@ -8,7 +8,7 @@ okf_version: "0.2"
 - [CLI architecture, frontmatter and schema validation](architecture/overview.md)
 - [Human text and JSON interfaces](architecture/text-mode.md)
 - [Init reconciliation contract](architecture/init-reconciliation.md)
-- [Workspaces, bundles, paths, sources, and views](concepts/roots-paths-and-sources.md)
+- [Workspaces, bundles, paths, sources, and views](concepts/roots-paths-and-sources.md) - Includes Git bundle selection and cache behavior.
 - [Getting started](guides/getting-started.md)
 - [Reading knowledge](guides/reading-knowledge.md)
 - [Validate concept schemas](/guides/concept-schemas) - Portable frontmatter and bundle-local validation.

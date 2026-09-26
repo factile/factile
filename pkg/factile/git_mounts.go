@@ -90,7 +90,13 @@ func (w *LocalWorkspace) mountsForValidationScope(ctx context.Context, normalize
 			normalizedErr := normalizeGitSourceError(err)
 			if ErrorCode(normalizedErr) == ErrValidationFailed {
 				invalid[mount.MountPath] = true
-				issues = append(issues, invalidGitMountIssue(mount.MountPath))
+				issue := invalidGitMountIssue(mount.MountPath)
+				var appErr *AppError
+				if errors.As(normalizedErr, &appErr) {
+					issue.Message = appErr.Message
+					issue.Details = appErr.Details
+				}
+				issues = append(issues, issue)
 				continue
 			}
 			return nil, nil, nil, normalizedErr
@@ -141,6 +147,10 @@ func (w *LocalWorkspace) hydrateMountIndexes(ctx context.Context, mounts []vfs.M
 }
 
 func normalizeGitSourceError(err error) error {
+	var selection *gitsource.SelectionError
+	if errors.As(err, &selection) {
+		return &AppError{Code: ErrValidationFailed, Message: selection.Error(), Details: map[string]any{"reason": selection.Reason}}
+	}
 	switch {
 	case errors.Is(err, gitsource.ErrGitSourceLocked):
 		return NewError(ErrSourceReadOnly, "Git sources are always read-only.")
@@ -181,8 +191,15 @@ func (w *LocalWorkspace) resolveMountSource(ctx context.Context, workspace vfs.W
 	if err != nil {
 		return "", NormalizeError(err)
 	}
-	if _, err := cache.Refresh(ctx, intent); err != nil {
+	refreshed, err := cache.Refresh(ctx, intent)
+	if err != nil {
 		return "", normalizeGitSourceError(err)
+	}
+	if refreshed.Status.LastErrorCode == ErrValidationFailed {
+		if refreshed.Status.LastErrorReason == "" {
+			return "", normalizeGitSourceError(gitsource.ErrInvalidCache)
+		}
+		return "", normalizeGitSourceError(&gitsource.SelectionError{Reason: refreshed.Status.LastErrorReason})
 	}
 	resolution, err := cache.Resolve(ctx, intent)
 	if err != nil {

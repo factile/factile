@@ -158,6 +158,18 @@ Repeat `--path` on `view set` to select more than one scope. Explicit mounts
 default read-only; only a local source can use `--writable`. `--read-only` is a
 deprecated compatibility flag.
 
+Git sources require a version 2 repository-root `factile.toml`: either a
+`[bundle]`, a combined root with `workspace.root = "."`, or a `[workspace]`
+selecting a contained bundle. Mounted paths and metadata begin at that bundle.
+Manifestless sources now fail; invalid selections return `validation_failed`
+with `details.reason`. No failed selection writes a descriptor. Cached sources
+use the same checks. A failed floating refresh can retain the prior snapshot,
+reporting `stale`, `last_error_code`, and `last_error_reason`. Status and mount
+listing inspect local cached state without fetching. Use a full 40-hex SHA-1
+with `--revision`; refresh never advances an exact pin. See
+[Git bundle selection](/concepts/roots-paths-and-sources.md#git-bundle-selection)
+and [selection diagnostics](/guides/troubleshooting.md#git-source-failures).
+
 ## Directory and document writes
 
 ```text

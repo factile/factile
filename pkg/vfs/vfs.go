@@ -65,6 +65,7 @@ type SourceStatus struct {
 	LastAttemptAt     string         `json:"last_attempt_at,omitempty"`
 	LastSuccessAt     string         `json:"last_success_at,omitempty"`
 	LastErrorCode     string         `json:"last_error_code,omitempty"`
+	LastErrorReason   string         `json:"last_error_reason,omitempty"`
 	Warning           *SourceWarning `json:"warning,omitempty"`
 }
 

@@ -47,6 +47,45 @@ Omitting a selector follows remote `HEAD`. `--ref` follows a branch or tag.
 `--revision` pins one full 40-hex SHA-1 commit. The selectors are mutually
 exclusive, and Git mounts cannot be writable.
 
+The repository's selected commit must have a valid version 2 manifest. Use
+one of these layouts:
+
+```toml
+# factile.toml at the repository root: bundle-only layout
+version = 2
+[bundle]
+name = "coding-practice"
+title = "Coding Practice"
+```
+
+```toml
+# factile.toml at the repository root: nested bundle layout
+version = 2
+[workspace]
+root = "docs"
+```
+
+For the nested layout, put the `[bundle]` manifest shown above in
+`docs/factile.toml`. A combined root manifest with both sections and
+`root = "."` also works. Both layouts expose bundle-relative paths directly;
+`docs/practices/boundary-contracts.md` becomes
+`/public-docs/practices/boundary-contracts` in the nested example. Source mounts
+and views are not imported. Title and description defaults use the selected
+bundle and are saved in the descriptor.
+
+Manifestless repositories now fail instead of mounting raw content. Add the
+manifest in the source repository and commit it before mounting. The root must
+be a contained, normalized relative directory with a valid bundle manifest;
+absolute, traversing, private, or crossed-workspace roots fail. Remove all
+repository symlinks, including those outside the bundle. See
+[Git selection failures](/guides/troubleshooting.md#git-source-failures) for
+specific diagnostics. A failed mount leaves an existing descriptor unchanged.
+
+For a reproducible mount, obtain the full SHA-1 of the commit containing the
+manifest and content, for example with `git rev-parse HEAD` in that repository,
+and pass all 40 hex characters to `--revision`. Abbreviated SHAs do not work.
+A pin keeps that commit even when the remote advances or the cache is rebuilt.
+
 Use credentials through normal Git credential helpers, an OS keychain, SSH
 agent/key, or the process environment. Do not put credentials, query strings,
 or fragments in workspace or bundle manifests, descriptors, state, or recorded
@@ -62,7 +101,10 @@ factile unmount /reference
 
 `mounts` and `status` inspect cached state without fetching. `refresh` performs
 an immediate Git check. A failed refresh may keep the last snapshot marked
-stale; it never turns the source writable. `unmount` removes the descriptor,
+stale. An invalid bundle update reports `validation_failed` with
+`last_error_reason`, retaining the prior paths and metadata. Correct the source
+and refresh again, or select a valid full commit SHA. Refresh never moves an
+exact pin. `unmount` removes the descriptor,
 not the external source repository.
 
 ## Manage views
