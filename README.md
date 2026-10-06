@@ -410,7 +410,7 @@ reader/curator mismatch between the skill, `AGENTS.md`, and MCP configuration.
 
 The first profile seed lives under `profiles/software/` as data: a profile
 manifest, Markdown templates, and JSON recipes. Recipes are guidance data in
-v0.6.1; there is no recipe runner or `factile recipe` command.
+v0.6.2; there is no recipe runner or `factile recipe` command.
 
 ## Local Trace
 
@@ -427,7 +427,7 @@ ledger.
 
 ## Known Limitations
 
-Factile v0.6.1 is intentionally local-first:
+Factile v0.6.2 is intentionally local-first:
 
 - There is no hosted service, hosted `factile://` source resolution, auth
   product, marketplace, billing, publication workflow, or cloud MCP in this

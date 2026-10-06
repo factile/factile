@@ -25,7 +25,7 @@ ft
 Local package smoke test:
 
 ```bash
-node packaging/npm/scripts/prepare-packages.mjs --build --out /tmp/factile-npm --version 0.6.1
+node packaging/npm/scripts/prepare-packages.mjs --build --out /tmp/factile-npm --version 0.6.2
 node packaging/npm/scripts/smoke-test.mjs --packages-dir /tmp/factile-npm
 ```
 

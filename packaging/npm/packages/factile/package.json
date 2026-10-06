@@ -1,6 +1,6 @@
 {
   "name": "factile",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Factile CLI.",
   "license": "Apache-2.0",
   "repository": {
@@ -16,11 +16,11 @@
     "ft": "bin/factile.js"
   },
   "optionalDependencies": {
-    "@factile/cli-linux-x64": "0.6.1",
-    "@factile/cli-linux-arm64": "0.6.1",
-    "@factile/cli-darwin-x64": "0.6.1",
-    "@factile/cli-darwin-arm64": "0.6.1",
-    "@factile/cli-win32-x64": "0.6.1"
+    "@factile/cli-linux-x64": "0.6.2",
+    "@factile/cli-linux-arm64": "0.6.2",
+    "@factile/cli-darwin-x64": "0.6.2",
+    "@factile/cli-darwin-arm64": "0.6.2",
+    "@factile/cli-win32-x64": "0.6.2"
   },
   "files": [
     "bin/",
