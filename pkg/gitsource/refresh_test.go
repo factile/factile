@@ -6,11 +6,85 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestAuthenticationFailureSurvivesCacheAndRecoversOnRefresh(t *testing.T) {
+	for _, pinned := range []bool{false, true} {
+		name := "floating"
+		if pinned {
+			name = "pinned"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := newResolutionFixture(t)
+			t.Setenv("FACTILE_GIT_HELPER", "diagnostic-error")
+			t.Setenv("FACTILE_GIT_HELPER_DIAGNOSTIC", "fatal: could not read Username for 'https://example.test': terminal prompts disabled\nopaque-helper-secret")
+			fail := true
+			fetches := 0
+			runner := fixture.runner
+			runner.command = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+				if containsExact(args, "fetch") {
+					fetches++
+					if fail {
+						return helperRunner(5*time.Second).command(ctx, name, args...)
+					}
+				}
+				return exec.CommandContext(ctx, name, args...)
+			}
+			workspace := resolveGitSourceWorkspace(t, writeGitSourceRoot(t))
+			cache, err := OpenCache(workspace, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent := Intent{MountPath: "/coding", Source: fixture.remote}
+			if pinned {
+				intent.Revision = fixture.mainRevision
+			}
+			if _, err := cache.Resolve(ctx, intent); !errors.Is(err, ErrGitAuthentication) {
+				t.Fatalf("first failure = %v", err)
+			}
+			entry, err := cache.Entry(intent.MountPath, intent.Source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(entry.StatePath)
+			if err != nil || strings.Contains(string(data), "opaque-helper-secret") || strings.Contains(string(data), "could not read Username") {
+				t.Fatalf("unsafe cache state: %s %v", data, err)
+			}
+			cache, err = OpenCache(workspace, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := cache.Resolve(ctx, intent); !errors.Is(err, ErrGitAuthentication) || fetches != 1 {
+				t.Fatalf("cached failure = %v, fetches=%d", err, fetches)
+			}
+			status, err := cache.Status(intent)
+			if err != nil || status.LastErrorCode != "remote_source_unavailable" || status.LastErrorReason != "authentication_failed" {
+				t.Fatalf("authentication status = %#v, %v", status, err)
+			}
+			fail = false
+			refreshed, err := cache.Refresh(ctx, intent)
+			if err != nil || !refreshed.Status.SnapshotAvailable || refreshed.Status.LastErrorReason != "" || refreshed.Status.LastErrorCode != "" {
+				t.Fatalf("recovery = %#v, %v", refreshed, err)
+			}
+			if !pinned {
+				fail = true
+				stale, err := cache.Refresh(ctx, intent)
+				if err != nil || stale.Outcome != "stale" || !stale.Status.SnapshotAvailable || stale.Status.LastErrorReason != "authentication_failed" {
+					t.Fatalf("stale authenticated source = %#v, %v", stale, err)
+				}
+				if _, err := cache.Resolve(ctx, intent); err != nil {
+					t.Fatalf("stale snapshot became unreadable: %v", err)
+				}
+			}
+		})
+	}
+}
 
 func TestLazyFreshnessExplicitRefreshAndStaleFallback(t *testing.T) {
 	ctx := context.Background()

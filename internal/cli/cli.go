@@ -1079,7 +1079,7 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 
 func runMount(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]")
+		return showUsage(stdout, "factile mount <source> <mount-path> [--ref <ref> | --revision <40-hex-sha1>] [--writable] [--read-only] [--title <title>] [--description <text>]\n\nGit authentication uses your configured HTTPS credential helper or SSH key.\nFactile cannot prompt for credentials; configure Git access before mounting.")
 	}
 	fs := flag.NewFlagSet("mount", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -1132,7 +1132,7 @@ func runMount(ctx context.Context, ws factile.Workspace, args []string, global g
 
 func runRefresh(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
 	if hasHelp(args) {
-		return showUsage(stdout, "factile refresh <mount-path>")
+		return showUsage(stdout, "factile refresh <mount-path>\n\nRetry a Git source immediately, including after fixing credentials or network access.")
 	}
 	if len(args) != 2 {
 		return usage(global, stdout, "factile refresh <mount-path>")

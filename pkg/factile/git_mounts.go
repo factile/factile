@@ -152,6 +152,12 @@ func normalizeGitSourceError(err error) error {
 		return &AppError{Code: ErrValidationFailed, Message: selection.Error(), Details: map[string]any{"reason": selection.Reason}}
 	}
 	switch {
+	case errors.Is(err, gitsource.ErrGitAuthentication):
+		return &AppError{
+			Code:    ErrRemoteSourceUnavailable,
+			Message: "Git authentication failed. Factile cannot prompt for credentials. Configure a Git credential helper for HTTPS or use an SSH URL with an authorized key. Retry the mount command, or run factile refresh <mount-path> for an existing mount.",
+			Details: map[string]any{"reason": "authentication_failed"},
+		}
 	case errors.Is(err, gitsource.ErrGitSourceLocked):
 		return NewError(ErrSourceReadOnly, "Git sources are always read-only.")
 	case errors.Is(err, gitsource.ErrInvalidIntent):

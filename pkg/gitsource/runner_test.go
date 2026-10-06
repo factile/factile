@@ -161,6 +161,36 @@ func TestBoundedBufferDiscardsExcessOutput(t *testing.T) {
 	}
 }
 
+func TestRunnerClassifiesAuthenticationWithoutExposingOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name, diagnostic string
+		authentication   bool
+	}{
+		{"missing username", "fatal: could not read Username for 'https://example.test': terminal prompts disabled", true},
+		{"missing password", "fatal: could not read Password for 'https://alice@example.test': terminal prompts disabled", true},
+		{"rejected token", "fatal: Authentication failed for 'https://alice:secret@example.test/repo.git/'", true},
+		{"github token", "remote: Invalid username or token. Password authentication is not supported for Git operations.", true},
+		{"gitlab token", "remote: HTTP Basic: Access denied", true},
+		{"ssh key", "git@example.test: Permission denied (publickey).", true},
+		{"dns", "fatal: unable to access 'https://example.test/repo.git/': Could not resolve host: example.test", false},
+		{"missing repository", "remote: Repository not found.", false},
+		{"missing revision", "fatal: couldn't find remote ref missing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FACTILE_GIT_HELPER", "diagnostic-error")
+			t.Setenv("FACTILE_GIT_HELPER_DIAGNOSTIC", tc.diagnostic+"\nopaque-helper-secret")
+			output, err := helperRunner(5*time.Second).Run(context.Background(), "", "fetch")
+			want := ErrGitCommand
+			if tc.authentication {
+				want = ErrGitAuthentication
+			}
+			if !errors.Is(err, want) || len(output) != 0 || err.Error() != want.Error() {
+				t.Fatalf("unsafe or incorrect error: output=%q err=%v", output, err)
+			}
+		})
+	}
+}
+
 func helperRunner(timeout time.Duration) Runner {
 	return Runner{
 		GitPath: "git",
@@ -212,6 +242,9 @@ func TestGitSourceCommandHelper(t *testing.T) {
 	case "secret-error":
 		_, _ = fmt.Fprint(os.Stderr, "fatal: https://alice:correct-horse@example.test/repo.git?token=hunter2 Authorization: Bearer bearer-secret opaque-helper-secret")
 		os.Exit(2)
+	case "diagnostic-error":
+		_, _ = fmt.Fprint(os.Stderr, os.Getenv("FACTILE_GIT_HELPER_DIAGNOSTIC"))
+		os.Exit(128)
 	default:
 		os.Exit(2)
 	}

@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrGitUnavailable = errors.New("git executable is unavailable")
-	ErrGitTimeout     = errors.New("git command timed out")
-	ErrGitCommand     = errors.New("git command failed")
+	ErrGitUnavailable    = errors.New("git executable is unavailable")
+	ErrGitTimeout        = errors.New("git command timed out")
+	ErrGitCommand        = errors.New("git command failed")
+	ErrGitAuthentication = errors.New("Git authentication failed")
 )
 
 const (
@@ -82,10 +83,32 @@ func (r Runner) run(ctx context.Context, dir, indexPath string, args ...string) 
 	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 		return nil, ErrGitUnavailable
 	}
-	// Git and credential helpers share stderr. Returning subprocess output could
-	// expose helper-provided secrets that cannot be reliably recognized, so
-	// failed commands expose only the stable error category.
+	// Only recognized categories cross this boundary; Git and credential helpers
+	// can include secrets anywhere in their output.
+	if gitAuthenticationFailed(output.String()) {
+		return nil, ErrGitAuthentication
+	}
 	return nil, ErrGitCommand
+}
+
+func gitAuthenticationFailed(output string) bool {
+	output = strings.ToLower(output)
+	if strings.Contains(output, "terminal prompts disabled") &&
+		(strings.Contains(output, "could not read username") || strings.Contains(output, "could not read password")) {
+		return true
+	}
+	for _, diagnostic := range []string{
+		"fatal: authentication failed",
+		"remote: invalid username or password",
+		"remote: invalid username or token",
+		"remote: http basic: access denied",
+		"permission denied (publickey",
+	} {
+		if strings.Contains(output, diagnostic) {
+			return true
+		}
+	}
+	return false
 }
 
 var repositoryEnvironment = map[string]struct{}{

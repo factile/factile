@@ -224,7 +224,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 		state.LastAttemptAt = completedAt
 		if err != nil {
 			state.LastErrorCode = sourceErrorCode(err)
-			state.LastErrorReason = selectionReason(err)
+			state.LastErrorReason = sourceErrorReason(err)
 			if writeErr := c.WriteState(entry, state); writeErr != nil {
 				return writeErr
 			}
@@ -238,7 +238,7 @@ func (c *Cache) resolve(ctx context.Context, intent Intent, force bool) (Resolut
 				return nil
 			}
 			if state.LastErrorCode == "remote_source_unavailable" {
-				return ErrRemoteSourceUnavailable
+				return statusError(status)
 			}
 			return err
 		}
@@ -322,7 +322,7 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 		}
 		state.LastAttemptAt = now.Format(time.RFC3339Nano)
 		state.LastErrorCode = sourceErrorCode(cause)
-		state.LastErrorReason = selectionReason(cause)
+		state.LastErrorReason = sourceErrorReason(cause)
 		if err := c.WriteState(entry, state); err != nil {
 			return err
 		}
@@ -332,7 +332,7 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 			refresh = refreshResult("stale", status)
 			return nil
 		}
-		resultErr = ErrRemoteSourceUnavailable
+		resultErr = statusError(status)
 		return nil
 	})
 	if err != nil {
@@ -346,7 +346,7 @@ func (c *Cache) completeSetupFailure(entry Entry, selected selector, force bool,
 
 func isOperationalGitError(err error) bool {
 	return errors.Is(err, ErrGitUnavailable) || errors.Is(err, ErrGitTimeout) ||
-		errors.Is(err, ErrGitCommand) || errors.Is(err, ErrRemoteSourceUnavailable)
+		errors.Is(err, ErrGitCommand) || errors.Is(err, ErrGitAuthentication) || errors.Is(err, ErrRemoteSourceUnavailable)
 }
 
 func (c *Cache) statusFromState(entry Entry, state State, selected selector, now time.Time) (vfs.SourceStatus, string) {
@@ -366,6 +366,9 @@ func (c *Cache) statusFromState(entry Entry, state State, selected selector, now
 	status.LastSuccessAt = state.LastSuccessAt
 	status.LastErrorCode = state.LastErrorCode
 	if state.LastErrorCode == "validation_failed" && validSelectionReason(state.LastErrorReason) {
+		status.LastErrorReason = state.LastErrorReason
+	}
+	if state.LastErrorCode == "remote_source_unavailable" && state.LastErrorReason == "authentication_failed" {
 		status.LastErrorReason = state.LastErrorReason
 	}
 	snapshot := ""
@@ -462,6 +465,9 @@ func sourceErrorCode(err error) string {
 }
 
 func statusError(status vfs.SourceStatus) error {
+	if status.LastErrorCode == "remote_source_unavailable" && status.LastErrorReason == "authentication_failed" {
+		return ErrGitAuthentication
+	}
 	if status.LastErrorCode == "validation_failed" {
 		if status.LastErrorReason == "symlink" {
 			return ErrSnapshotSymlink
@@ -475,6 +481,13 @@ func statusError(status vfs.SourceStatus) error {
 		return ErrRevisionNotAvailable
 	}
 	return ErrRemoteSourceUnavailable
+}
+
+func sourceErrorReason(err error) string {
+	if errors.Is(err, ErrGitAuthentication) {
+		return "authentication_failed"
+	}
+	return selectionReason(err)
 }
 
 func validateIntent(intent Intent) (selector, error) {
@@ -549,6 +562,9 @@ func (c *Cache) resolveRevision(ctx context.Context, entry Entry, selected selec
 			return selected.revision, nil
 		}
 		if _, err := c.runner.Run(ctx, "", "-C", entry.RepositoryPath, "fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", "--force", "--", "origin", selected.revision); err != nil {
+			if errors.Is(err, ErrGitAuthentication) {
+				return "", err
+			}
 			if reachable, probeErr := c.remoteReachable(ctx, entry); probeErr == nil && reachable {
 				return "", ErrRevisionNotAvailable
 			}
@@ -565,6 +581,9 @@ func (c *Cache) resolveRevision(ctx context.Context, entry Entry, selected selec
 		remoteRef = selected.ref
 	}
 	if _, err := c.runner.Run(ctx, "", "-C", entry.RepositoryPath, "fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", "--force", "--", "origin", remoteRef); err != nil {
+		if errors.Is(err, ErrGitAuthentication) {
+			return "", err
+		}
 		if available, probeErr := c.remoteRefAvailable(ctx, entry, remoteRef); probeErr == nil && !available {
 			return "", ErrRevisionNotAvailable
 		}
