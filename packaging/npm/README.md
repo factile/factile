@@ -50,3 +50,25 @@ First publish bootstrap:
 
 After bootstrap, trusted publishing should authenticate the same workflow through
 GitHub OIDC without a long-lived npm token.
+
+Trusted publishing requires two-factor authentication on the npm owner account.
+Configure every package, including all five platform packages, to trust the
+GitHub repository `factile/factile`, workflow filename `release.yml`, with no
+environment restriction and permission to run `npm publish`. With a current npm
+CLI and an authenticated owner session, the command for each package is:
+
+```bash
+npm trust github <package> --repo=factile/factile --file=release.yml --allow-publish
+```
+
+If the GitHub release succeeds but npm publication fails before publishing any
+package, repair the npm authentication settings and retry the existing release:
+
+```bash
+gh workflow run release.yml --repo factile/factile --ref main -f tag=v0.6.2
+```
+
+This downloads and verifies the existing release archives against `checksums.txt`,
+then prepares, smoke-tests, and publishes the npm packages. It does not rebuild
+or replace the GitHub release. If some npm packages already published, inspect
+that partial publication before retrying; published npm versions are immutable.

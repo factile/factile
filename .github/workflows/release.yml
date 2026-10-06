@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish to npm (for example, v0.6.2)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,14 +19,23 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Validate release tag
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "v$(cat VERSION)"
       - uses: actions/setup-go@v6
+        if: github.event_name == 'push'
         with:
           go-version-file: go.mod
       - name: Release
+        if: github.event_name == 'push'
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -28,13 +43,22 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download existing release archives
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.tar.gz' --pattern '*.zip' --pattern checksums.txt --dir dist
+          cd dist
+          sha256sum --check checksums.txt
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Prepare npm packages
-        run: node packaging/npm/scripts/prepare-packages.mjs --dist dist --out dist/npm --version "${GITHUB_REF_NAME#v}"
+        run: node packaging/npm/scripts/prepare-packages.mjs --dist dist --out dist/npm --version "${RELEASE_TAG#v}"
       - name: Smoke test npm packages
         run: node packaging/npm/scripts/smoke-test.mjs --packages-dir dist/npm
       - name: Publish npm packages
