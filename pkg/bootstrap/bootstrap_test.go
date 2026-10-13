@@ -96,6 +96,22 @@ func TestPrepareBuildsCompletePlanWithoutMutation(t *testing.T) {
 }
 
 func TestPrepareRejectsUnsafeAgentOutputsWithoutMutation(t *testing.T) {
+	t.Run("codex parent is a regular file", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeBootstrapTestFile(t, filepath.Join(workspace, ".codex"), "")
+		before := snapshotTree(t, workspace)
+
+		_, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentCodex})
+		assertInvalidWorkspace(t, err)
+		want := "Repo agent integration cannot be reconciled safely. Repo agent cannot create .codex/config.toml: .codex exists as a regular file; a real directory is required."
+		if err.Error() != want {
+			t.Fatalf("unexpected directory collision error: %v", err)
+		}
+		if after := snapshotTree(t, workspace); after != before {
+			t.Fatalf("rejected init changed workspace:\nbefore:\n%s\nafter:\n%s", before, after)
+		}
+	})
+
 	t.Run("skill output is a directory", func(t *testing.T) {
 		workspace := t.TempDir()
 		skillPath := filepath.Join(workspace, ".agents", "skills", "factile", "SKILL.md")
@@ -138,6 +154,10 @@ func TestPrepareRejectsUnsafeAgentOutputsWithoutMutation(t *testing.T) {
 		_, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentCodex})
 		assertInvalidWorkspace(t, err)
 		assertInitDidNotStart(t, workspace)
+		want := "Repo agent integration cannot be reconciled safely. Repo agent cannot create .agents/skills/factile/SKILL.md: .agents exists as a symlink; a real directory is required."
+		if err.Error() != want {
+			t.Fatalf("unexpected symlink parent error: %v", err)
+		}
 		if _, err := os.Stat(filepath.Join(outside, "skills")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("init wrote through agent parent symlink: %v", err)
 		}

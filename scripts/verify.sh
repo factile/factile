@@ -426,6 +426,21 @@ fi
 cmp "$user_scope_outside/factile/SKILL.md" "$tmpdir/user-symlink.before"
 test ! -e "$user_scope_outside/factile/scripts/factile-discover.sh"
 
+codex_file_workspace="$tmpdir/codex-file-workspace"
+mkdir -p "$codex_file_workspace"
+touch "$codex_file_workspace/.codex"
+if "$factile_bin" --workspace "$codex_file_workspace" init --agent codex --yes --json > "$tmpdir/codex-file.stdout" 2> "$tmpdir/codex-file.stderr"; then
+  echo 'init accepted a regular file as the Codex directory' >&2
+  exit 1
+fi
+test ! -s "$tmpdir/codex-file.stdout"
+require_contains "$tmpdir/codex-file.stderr" '"code":"invalid_workspace"'
+require_contains "$tmpdir/codex-file.stderr" 'Repo agent cannot create .codex/config.toml: .codex exists as a regular file; a real directory is required.'
+test -f "$codex_file_workspace/.codex"
+test ! -s "$codex_file_workspace/.codex"
+test ! -e "$codex_file_workspace/factile.toml"
+test ! -e "$codex_file_workspace/.gitignore"
+
 for missing_option in workspace root name title description agent; do
   missing_workspace="$tmpdir/missing-$missing_option-workspace"
   mkdir -p "$missing_workspace"

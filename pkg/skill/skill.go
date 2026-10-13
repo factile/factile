@@ -291,7 +291,7 @@ func validateManagedPath(anchor, filename, label string) error {
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	current := anchor
-	for _, part := range parts[:len(parts)-1] {
+	for i, part := range parts[:len(parts)-1] {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
@@ -301,7 +301,14 @@ func validateManagedPath(anchor, filename, label string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return factile.NewError(factile.ErrInvalidPath, label+" output path must use real directories: "+filepath.ToSlash(rel))
+			kind := "a non-directory entry"
+			if info.Mode().IsRegular() {
+				kind = "a regular file"
+			} else if info.Mode()&os.ModeSymlink != 0 {
+				kind = "a symlink"
+			}
+			parent := filepath.ToSlash(filepath.Join(parts[:i+1]...))
+			return factile.NewError(factile.ErrInvalidPath, fmt.Sprintf("%s cannot create %s: %s exists as %s; a real directory is required.", label, filepath.ToSlash(rel), parent, kind))
 		}
 	}
 	info, err := os.Lstat(filename)
