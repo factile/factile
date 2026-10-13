@@ -364,7 +364,25 @@ func runInit(ctx context.Context, args []string, global globals, stdin io.Reader
 }
 
 func runInitWithIO(ctx context.Context, args []string, global globals, commandIO initCommandIO) (int, error) {
-	const usageText = "factile init [--root <directory>] [--name <name>] [--title <title>] [--description <text>] [--agent auto|codex|none] [--yes]"
+	const usageText = `factile init [--workspace <directory>] [--root <directory>] [--name <name>] [--title <title>] [--description <text>] [--agent auto|codex|none] [--yes]
+
+Set up or reconcile a Factile workspace.
+
+Without --workspace, init uses the nearest workspace in the current directory
+or its parents; if none exists, it creates one in the current directory.
+--workspace <directory> targets exactly that existing directory, creating a
+workspace there if needed without searching its parents.
+--root <directory> selects the bundle directory relative to the selected
+workspace. It does not choose the workspace itself.
+
+From inside a subrepo, create its own workspace with documentation in docs/:
+  factile --workspace . init --root docs
+
+To select another existing directory explicitly:
+  factile --workspace ./subrepo init --root docs
+
+Add --yes to accept defaults without prompting. Global options may appear
+before or after the command.`
 	if hasHelp(args) {
 		return showUsage(commandIO.stdout, usageText)
 	}

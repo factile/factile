@@ -3,6 +3,7 @@ AGENTS.md
 TASKS.md
 .agents/
 .beads/
+.beads.gate.lock
 .codex/
 .codebase-memory/
 /.factile/
