@@ -50,6 +50,16 @@ func Score(query string, fields []Fields) []Scored {
 	if len(terms) == 0 {
 		return nil
 	}
+	results := scoreTerms(terms, fields)
+	if len(results) == 0 {
+		if corrected := fallbackTerms(query, terms, fields); corrected != nil {
+			return scoreTerms(corrected, fields)
+		}
+	}
+	return results
+}
+
+func scoreTerms(terms []string, fields []Fields) []Scored {
 	phrase := strings.Join(terms, " ")
 	boundedPhrase := allPlainTerms(terms)
 	var scored []Scored

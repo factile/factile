@@ -75,8 +75,9 @@ terms such as `a`, `an`, `the`, and `with` when substantive terms remain. A
 query made only of those terms keeps them as a deliberate fallback. Plain words
 match complete Unicode letter-or-digit tokens, so `cat` does not match
 `application`. Paths, resources, and terms containing identifier punctuation
-remain case-insensitive literals. Search does not stem words or infer synonyms,
-and JSON results still echo the original query.
+remain case-insensitive literals. When literal search finds nothing, Factile
+tries common word endings and unambiguous one-letter corrections for longer
+words found in the selected documents. JSON still echoes the original query.
 
 Ranking keeps the established metadata field weights, caps repeated evidence
 for one term after its third occurrence in a field, and scales multi-term
