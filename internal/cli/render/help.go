@@ -80,6 +80,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "context <path> <query> [--depth 0|1] [--view <id>] [--passages]", description: "Assemble relevant context"},
 			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect Markdown links"},
 			{command: "validate <path> [--view <id>]", description: "Validate base OKF and optional bundle-local concept schemas"},
+			{command: "review list [path]", description: "List documents that need review"},
 			{command: "ui [--port <port>] [--no-open] [--dev-assets <url>]", description: "Serve the local browser reader"},
 		}},
 		{title: "Curator commands", items: []helpItem{

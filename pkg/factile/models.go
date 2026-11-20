@@ -424,6 +424,7 @@ type Workspace interface {
 	Delete(ctx context.Context, path string, opts DeleteOptions) (DeleteResult, error)
 	Deprecate(ctx context.Context, path string, opts DeprecateOptions) (ConceptResult, error)
 	Review(ctx context.Context, path string, opts ReviewOptions) (ConceptResult, error)
+	ListReview(ctx context.Context, path, evaluatedAt string) (ReviewListResult, error)
 	Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error)
 	Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error)
 	ListMounts(ctx context.Context) (MountListResult, error)

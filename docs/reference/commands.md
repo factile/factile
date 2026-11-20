@@ -313,6 +313,11 @@ Read optional derived state with `factile read /path --include-review --evaluate
 
 `factile review /path --rev <observed-revision>` appends an explicit `process:factile/<version>` event at the current time with the observed revision. It keeps earlier history, content and generation metadata unchanged. Local review does not assert an authenticated human identity; arbitrary actor strings can still be imported as portable metadata claims. MCP exposes the same revision-checked `factile_review` operation only in writable mode.
 
+`factile review list [path] [--evaluated-at <datetime>]` lists documents
+whose review deadline has arrived or that changed after their last recorded
+review. It defaults to the whole workspace. Each document appears once with
+each applicable reason and its owning bundle.
+
 Search accepts `--include-review`, `--evaluated-at`, `--status draft|stable|deprecated`, `--review-tier unverified|machine-confirmed|human-reviewed`, `--stale true|false`, and `--changed-since-review true|false`. Filters apply to query matches and are opt-in. Unknown values match neither boolean choice. `selection` records the evaluation time, applied filters, and excluded matching paths with reasons. Direct reads and unfiltered searches retain historical material. Domain fields such as `workflow_status` remain separate from OKF lifecycle.
 
 ## Complete Context Evidence

@@ -19,6 +19,47 @@ func evaluationTime(value string) (string, error) {
 	return value, nil
 }
 
+type ReviewListResult struct {
+	Path        string           `json:"path"`
+	EvaluatedAt string           `json:"evaluated_at"`
+	Documents   []ReviewListItem `json:"documents"`
+}
+
+type ReviewListItem struct {
+	Concept ConceptSummary    `json:"concept"`
+	Origin  map[string]string `json:"origin"`
+	Reasons []string          `json:"reasons"`
+}
+
+func (w *LocalWorkspace) ListReview(ctx context.Context, inputPath, evaluatedAt string) (ReviewListResult, error) {
+	at, err := evaluationTime(evaluatedAt)
+	if err != nil {
+		return ReviewListResult{}, err
+	}
+	scope, err := w.scopeWithView(ctx, inputPath, "")
+	if err != nil {
+		return ReviewListResult{}, err
+	}
+	result := ReviewListResult{Path: scope.Path, EvaluatedAt: at, Documents: []ReviewListItem{}}
+	for _, item := range scope.Concepts {
+		state, _ := okf.Review(item.Concept.Frontmatter, at)
+		var reasons []string
+		if state.Stale != nil && *state.Stale {
+			reasons = append(reasons, "stale")
+		}
+		if state.ChangedSinceReview != nil && *state.ChangedSinceReview {
+			reasons = append(reasons, "changed_since_review")
+		}
+		if len(reasons) > 0 {
+			item.Summary.ReviewState = &state
+			result.Documents = append(result.Documents, ReviewListItem{
+				Concept: item.Summary, Origin: item.Concept.origin, Reasons: reasons,
+			})
+		}
+	}
+	return result, nil
+}
+
 // Review is an explicit process review, never an authenticated human assertion.
 // Reuse Patch's revision fence and atomic write; retain even malformed history.
 func (w *LocalWorkspace) Review(ctx context.Context, inputPath string, opts ReviewOptions) (ConceptResult, error) {

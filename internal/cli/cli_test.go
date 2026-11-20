@@ -46,7 +46,8 @@ func TestCLIHelpAndReadJSON(t *testing.T) {
 			"factile ui",
 			"factile version",
 			"Reader commands",
-			"stat     <path>",
+			"Show one compact card",
+			"review list [path]",
 			"Curator commands",
 			"Bundle admin",
 			"Agents and MCP",
@@ -3611,6 +3612,45 @@ func TestCLITraceFile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"command":"list --brief"`) {
 		t.Fatalf("brief list was not traced distinctly: %s", string(data))
+	}
+}
+
+func TestCLIReviewList(t *testing.T) {
+	root, mount := t.TempDir(), t.TempDir()
+	writeCLICombinedWorkspace(t, root)
+	writeCLIBundleManifest(t, mount, "mounted", "Mounted")
+	writeCLITestFile(t, filepath.Join(root, "mounted.mount.toml"), fmt.Sprintf("source = %q\nwritable = false\n", mount))
+	const overdue = "stale_after: '2026-06-01T00:00:00Z'\n"
+	const changed = "generated: {by: 'process:fixture', at: '2026-05-01T00:00:00Z'}\nverified: {by: 'human:fixture', at: '2026-04-01T00:00:00Z'}\n"
+	for name, metadata := range map[string]string{"review/overdue": overdue, "review/changed": changed, "review/both": overdue + changed, "review/current": ""} {
+		writeCLITestFile(t, filepath.Join(mount, name+".md"), "---\ntype: Guide\n"+metadata+"---\n# Guide\n")
+	}
+	writeCLITestFile(t, filepath.Join(root, "guide.md"), "---\ntype: Guide\n---\n# Guide\n")
+	args := []string{"--workspace", root, "review", "list", "/mounted/review", "--evaluated-at", "2026-06-01T00:00:00Z", "--json"}
+	result := runCLIJSON[factile.ReviewListResult](t, args...)
+	if len(result.Documents) != 3 {
+		t.Fatalf("expected three review rows: %#v", result)
+	}
+	expected := map[string]string{"both": "stale,changed_since_review", "changed": "changed_since_review", "overdue": "stale"}
+	for _, row := range result.Documents {
+		name := filepath.Base(row.Concept.Path)
+		if row.Origin["bundle_path"] != "/mounted" || strings.Join(row.Reasons, ",") != expected[name] {
+			t.Fatalf("unexpected review row: %#v", row)
+		}
+		delete(expected, name)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("missing review rows: %#v", expected)
+	}
+	var stdout, stderr bytes.Buffer
+	exit := Run(context.Background(), []string{"--workspace", root, "review", "list", "/guide"}, nil, &stdout, &stderr)
+	if exit != 0 || !strings.Contains(stdout.String(), "No documents need review") {
+		t.Fatalf("empty review result: %d %s %s", exit, &stdout, &stderr)
+	}
+	guide := runCLIJSON[factile.ConceptResult](t, "--workspace", root, "--json", "read", "/guide")
+	reviewed := runCLIJSON[factile.ConceptResult](t, "--workspace", root, "--json", "review", "/guide", "--rev", guide.Concept.Revision)
+	if reviewed.Concept.ReviewState == nil || len(reviewed.Concept.ReviewState.Verified) != 1 {
+		t.Fatalf("review command lost its behavior: %#v", reviewed)
 	}
 }
 
