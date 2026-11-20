@@ -54,6 +54,7 @@ type readerWorkspace interface {
 
 type curatorWorkspace interface {
 	Review(ctx context.Context, path string, opts factile.ReviewOptions) (factile.ConceptResult, error)
+	ValidateDraft(ctx context.Context, path string, input factile.DraftValidationInput) (factile.ValidationResult, error)
 	readerWorkspace
 	Create(ctx context.Context, path string, input factile.CreateConceptInput) (factile.ConceptResult, error)
 	Write(ctx context.Context, path string, input factile.WriteConceptInput) (factile.ConceptResult, error)
@@ -221,17 +222,18 @@ func capabilitiesHandler(opts Options) http.HandlerFunc {
 				"source_metadata": true,
 			},
 			"writer": map[string]bool{
-				"create":      opts.Curator,
-				"write":       opts.Curator,
-				"patch":       opts.Curator,
-				"review":      opts.Curator,
-				"rename":      opts.Curator,
-				"delete":      false,
-				"deprecate":   opts.Curator,
-				"mount":       false,
-				"unmount":     false,
-				"view_set":    false,
-				"view_delete": false,
+				"create":         opts.Curator,
+				"write":          opts.Curator,
+				"patch":          opts.Curator,
+				"review":         opts.Curator,
+				"validate_draft": opts.Curator,
+				"rename":         opts.Curator,
+				"delete":         false,
+				"deprecate":      opts.Curator,
+				"mount":          false,
+				"unmount":        false,
+				"view_set":       false,
+				"view_delete":    false,
 			},
 		})
 	}
@@ -692,7 +694,13 @@ func writerValidateHandler(ws curatorWorkspace) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, factile.NewError(factile.ErrInvalidPath, "path is required"))
 			return
 		}
-		result, err := ws.Validate(r.Context(), input.Path, factile.ValidateOptions{View: input.View})
+		var result factile.ValidationResult
+		var err error
+		if input.Draft != nil {
+			result, err = ws.ValidateDraft(r.Context(), input.Path, *input.Draft)
+		} else {
+			result, err = ws.Validate(r.Context(), input.Path, factile.ValidateOptions{View: input.View})
+		}
 		if err != nil {
 			writeError(w, errorStatus(err), err)
 			return
@@ -803,8 +811,9 @@ type renameInput struct {
 
 type writerValidateInput struct {
 	sourceSelector
-	Path string `json:"path"`
-	View string `json:"view,omitempty"`
+	Path  string                        `json:"path"`
+	View  string                        `json:"view,omitempty"`
+	Draft *factile.DraftValidationInput `json:"draft,omitempty"`
 }
 
 func (i *contextInput) UnmarshalJSON(data []byte) error {

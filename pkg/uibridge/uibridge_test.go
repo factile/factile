@@ -849,6 +849,10 @@ func (fakeReader) Review(ctx context.Context, path string, opts factile.ReviewOp
 	return factile.ConceptResult{}, nil
 }
 
+func (fakeReader) ValidateDraft(ctx context.Context, path string, input factile.DraftValidationInput) (factile.ValidationResult, error) {
+	return factile.ValidationResult{}, nil
+}
+
 func TestReviewBridgeUsesActualProcessAndRevision(t *testing.T) {
 	dir := t.TempDir()
 	writeUICombinedWorkspace(t, dir)

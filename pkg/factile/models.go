@@ -417,6 +417,7 @@ type Workspace interface {
 	Context(ctx context.Context, path string, query string, opts ContextOptions) (ContextPack, error)
 	Graph(ctx context.Context, path string, opts GraphOptions) (GraphResult, error)
 	Validate(ctx context.Context, path string, opts ValidateOptions) (ValidationResult, error)
+	ValidateDraft(ctx context.Context, path string, input DraftValidationInput) (ValidationResult, error)
 	Summary(ctx context.Context) (SummaryResult, error)
 	Mkdir(ctx context.Context, path string, opts MkdirOptions) (DirectoryResult, error)
 	Create(ctx context.Context, path string, input CreateConceptInput) (ConceptResult, error)

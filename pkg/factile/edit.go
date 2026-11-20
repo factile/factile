@@ -3,6 +3,7 @@ package factile
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/patch"
@@ -101,4 +102,64 @@ func validateOperation(op PatchOperation) error {
 		return fmt.Errorf("key is required")
 	}
 	return nil
+}
+
+func createDocument(conceptID string, input CreateConceptInput) okf.Document {
+	doc := okf.Document{
+		ConceptID: conceptID,
+		Frontmatter: map[string]any{
+			"type":  input.Type,
+			"title": input.Title,
+		},
+		Order:    []string{"type", "title"},
+		Markdown: input.Markdown,
+	}
+	if input.Description != "" {
+		doc.Frontmatter["description"] = input.Description
+		doc.Order = append(doc.Order, "description")
+	}
+	if len(input.Tags) > 0 {
+		doc.Frontmatter["tags"] = input.Tags
+		doc.Order = append(doc.Order, "tags")
+	}
+	if input.Resource != "" {
+		doc.Frontmatter["resource"] = input.Resource
+		doc.Order = append(doc.Order, "resource")
+	}
+	doc.Frontmatter["generated"] = GeneratedMetadata(time.Now())
+	return doc
+}
+
+func preparePatch(conceptID string, data []byte, input PatchConceptInput) ([]byte, []string, okf.Document, error) {
+	next, summary, err := applyPatch(conceptID, data, input)
+	if err != nil {
+		return nil, nil, okf.Document{}, err
+	}
+	doc, err := okf.ParseConcept(conceptID, next)
+	if err != nil {
+		return nil, nil, okf.Document{}, err
+	}
+	if !okf.IsReservedFile(conceptID + ".md") {
+		before, err := okf.ParseConcept(conceptID, data)
+		if err != nil {
+			return nil, nil, okf.Document{}, err
+		}
+		if meaningfulContentChanged(before, doc) {
+			generated := map[string]any{}
+			if previous, ok := doc.Frontmatter["generated"].(map[string]any); ok {
+				for key, value := range previous {
+					generated[key] = value
+				}
+			}
+			for key, value := range GeneratedMetadata(time.Now()) {
+				generated[key] = value
+			}
+			next, err = okf.PatchFrontmatter(conceptID, next, map[string]any{"generated": generated}, nil)
+			if err != nil {
+				return nil, nil, okf.Document{}, err
+			}
+			doc.Frontmatter["generated"] = generated
+		}
+	}
+	return next, summary, doc, nil
 }

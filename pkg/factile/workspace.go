@@ -538,7 +538,7 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 		return ValidationResult{}, err
 	}
 	issues := append(metadataIssues, scan.Issues...)
-	issues = append(issues, linkIssues(scan.Concepts)...)
+	issues = append(issues, linkIssues(scan.Concepts, scan.Mounts)...)
 	return w.applyConceptSchemas(ctx, baseValidation(scan.Path, issues), scan.Scopes)
 }
 
@@ -710,28 +710,7 @@ func (w *LocalWorkspace) Create(ctx context.Context, inputPath string, input Cre
 	if err != nil {
 		return ConceptResult{}, NormalizeError(err)
 	}
-	doc := okf.Document{
-		ConceptID: target.ConceptID,
-		Frontmatter: map[string]any{
-			"type":  input.Type,
-			"title": input.Title,
-		},
-		Order:    []string{"type", "title"},
-		Markdown: input.Markdown,
-	}
-	if input.Description != "" {
-		doc.Frontmatter["description"] = input.Description
-		doc.Order = append(doc.Order, "description")
-	}
-	if len(input.Tags) > 0 {
-		doc.Frontmatter["tags"] = input.Tags
-		doc.Order = append(doc.Order, "tags")
-	}
-	if input.Resource != "" {
-		doc.Frontmatter["resource"] = input.Resource
-		doc.Order = append(doc.Order, "resource")
-	}
-	doc.Frontmatter["generated"] = GeneratedMetadata(time.Now())
+	doc := createDocument(target.ConceptID, input)
 	data := okf.Serialize(doc)
 	if issues := validateDocument(target.Path, doc); hasErrors(issues) {
 		return ConceptResult{}, validationError(issues)
@@ -816,35 +795,9 @@ func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input Patc
 		if current != input.ExpectedRevision {
 			return revisionMismatch(target.Path, input.ExpectedRevision, current)
 		}
-		next, summary, err := applyPatch(target.ConceptID, data, input)
+		next, summary, doc, err := preparePatch(target.ConceptID, data, input)
 		if err != nil {
 			return err
-		}
-		doc, err := okf.ParseConcept(target.ConceptID, next)
-		if err != nil {
-			return err
-		}
-		if !okf.IsReservedFile(target.ConceptID + ".md") {
-			before, err := okf.ParseConcept(target.ConceptID, data)
-			if err != nil {
-				return err
-			}
-			if meaningfulContentChanged(before, doc) {
-				generated := map[string]any{}
-				if previous, ok := doc.Frontmatter["generated"].(map[string]any); ok {
-					for key, value := range previous {
-						generated[key] = value
-					}
-				}
-				for key, value := range GeneratedMetadata(time.Now()) {
-					generated[key] = value
-				}
-				next, err = okf.PatchFrontmatter(target.ConceptID, next, map[string]any{"generated": generated}, nil)
-				if err != nil {
-					return err
-				}
-				doc.Frontmatter["generated"] = generated
-			}
 		}
 		issues := validateDocument(target.Path, doc)
 		if hasErrors(issues) {
@@ -1601,12 +1554,12 @@ func (w *LocalWorkspace) validateConcept(mount vfs.Mount, conceptID string) (*sc
 	return &item, validateDocument(concept.Path, doc), nil
 }
 
-func linkIssues(concepts []scopedConcept) []ValidationIssue {
+func linkIssues(concepts []scopedConcept, mounts []vfs.Mount) []ValidationIssue {
 	byPath := map[string]bool{}
 	for _, item := range concepts {
 		byPath[item.Concept.Path] = true
 	}
-	return linkIssuesAgainst(concepts, byPath)
+	return linkIssuesAgainst(concepts, byPath, mounts)
 }
 
 func localRootLinkIssues(concepts []scopedConcept, mounts []vfs.Mount) []ValidationIssue {
@@ -1652,14 +1605,21 @@ func coveredByNonRootMount(target string, mounts []vfs.Mount) bool {
 	return false
 }
 
-func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []ValidationIssue {
+func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool, mounts []vfs.Mount) []ValidationIssue {
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
 			target, ok := resolveConceptLink(item, link)
-			if ok && missingLink(item, link, target, byPath) {
-				issues = append(issues, linkIssue(item, link))
+			if !ok || !missingLink(item, link, target, byPath) {
+				continue
 			}
+			if link.Kind != "source_reference" {
+				resolved, err := vfs.Resolve(mounts, target)
+				if err == nil && resolved.Kind == TargetConcept {
+					continue
+				}
+			}
+			issues = append(issues, linkIssue(item, link))
 		}
 	}
 	return issues

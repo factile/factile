@@ -8,6 +8,8 @@ import (
 
 	"github.com/factile/factile/pkg/conceptschema"
 	"github.com/factile/factile/pkg/okf"
+	"github.com/factile/factile/pkg/revision"
+	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -24,6 +26,69 @@ type validationScan struct {
 	Concepts []scopedConcept
 	Issues   []ValidationIssue
 	Scopes   []schemaScope
+	Mounts   []vfs.Mount
+}
+
+type DraftValidationInput struct {
+	Create *CreateConceptInput `json:"create,omitempty"`
+	Patch  *PatchConceptInput  `json:"patch,omitempty"`
+}
+
+func (w *LocalWorkspace) ValidateDraft(ctx context.Context, path string, input DraftValidationInput) (ValidationResult, error) {
+	var mounts []vfs.Mount
+	var target vfs.Target
+	var err error
+	switch {
+	case input.Create != nil && input.Patch == nil:
+		mounts, target, err = w.resolveForConceptWrite(path)
+	case input.Patch != nil && input.Create == nil:
+		mounts, target, err = w.resolveExistingConceptWrite(path)
+	default:
+		return ValidationResult{}, NewError(ErrInvalidPath, "Supply one create or patch draft")
+	}
+	if err != nil {
+		return ValidationResult{}, err
+	}
+	if err := w.ensureWritable(target.Mount); err != nil {
+		return ValidationResult{}, err
+	}
+	var data []byte
+	var doc okf.Document
+	if input.Create != nil {
+		data = okf.Serialize(createDocument(target.ConceptID, *input.Create))
+		doc, err = okf.ParseConcept(target.ConceptID, data)
+	} else {
+		if input.Patch.ExpectedRevision == "" {
+			return ValidationResult{}, NewError(ErrRevisionRequired, "Expected revision is required")
+		}
+		store, err := storage.NewLocal(target.Mount.SourcePath)
+		if err != nil {
+			return ValidationResult{}, NormalizeError(err)
+		}
+		current, _, err := store.ReadConcept(target.ConceptID)
+		if err != nil {
+			return ValidationResult{}, NormalizeError(err)
+		}
+		if observed := revision.DigestBytes(current); observed != input.Patch.ExpectedRevision {
+			return ValidationResult{}, revisionMismatch(target.Path, input.Patch.ExpectedRevision, observed)
+		}
+		data, _, doc, err = preparePatch(target.ConceptID, current, *input.Patch)
+		if err != nil {
+			return ValidationResult{}, NormalizeError(err)
+		}
+	}
+	if err != nil {
+		return ValidationResult{}, NormalizeError(err)
+	}
+	concept := conceptFromDoc(target.Mount, doc, data)
+	items := []scopedConcept{{Concept: concept, Summary: summaryFromConcept(concept)}}
+	issues := validateDocument(target.Path, doc)
+	if input.Create != nil && strings.TrimSpace(input.Create.Title) == "" {
+		issues = append(issues, ValidationIssue{Severity: "error", Code: "missing_title", Message: "Title is required for a new document", Path: target.Path})
+	}
+	issues = append(issues, linkIssues(items, mounts)...)
+	scope := schemaScope{Mount: target.Mount, Path: target.Path, Concepts: items, Issues: issues}
+	return w.applyConceptSchemas(ctx, baseValidation(target.Path, issues), []schemaScope{scope})
 }
 
 func baseValidation(path string, issues []ValidationIssue) ValidationResult {
@@ -38,7 +103,7 @@ func (w *LocalWorkspace) validatePathScope(ctx context.Context, normalized strin
 	if err != nil {
 		return validationScan{}, err
 	}
-	scan := validationScan{Path: normalized, Issues: issues}
+	scan := validationScan{Path: normalized, Issues: issues, Mounts: mounts}
 	seen := map[string]bool{}
 	collect := func(mount vfs.Mount, prefix string, exact bool) error {
 		logical := cleanVirtualJoin(mount.MountPath, prefix)
