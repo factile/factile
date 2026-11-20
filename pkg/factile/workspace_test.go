@@ -514,6 +514,30 @@ writable = true
 	}
 }
 
+func TestBundleAbsoluteLinksWorkStandaloneAndMounted(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	bundle := t.TempDir()
+	writeRootConfig(t, root)
+	writeRootConfig(t, bundle)
+	mustWriteWorkspace(t, filepath.Join(root, "cli.mount.toml"), "source = "+strconv.Quote(bundle)+"\nwritable = false\n")
+	writeOKFFile(t, filepath.Join(root, "guides", "troubleshooting.md"), "Guide", "Root troubleshooting", "Root content")
+	writeOKFFile(t, filepath.Join(bundle, "guides", "troubleshooting.md"), "Guide", "Mounted troubleshooting", "## Git source failures")
+	writeOKFFile(t, filepath.Join(bundle, "reference", "commands.md"), "Guide", "Commands",
+		"[Troubleshooting](/guides/troubleshooting.md#git-source-failures)\n[Missing](/guides/missing.md)\n")
+	for _, fixture := range []struct{ root, prefix string }{{bundle, ""}, {root, "/cli"}} {
+		ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: fixture.root})
+		report, err := ws.Validate(ctx, "/", factile.ValidateOptions{})
+		if err != nil || len(report.Issues) != 1 || !hasValidationIssue(report.Issues, "warning", "broken_link", fixture.prefix+"/reference/commands", "/guides/missing.md") {
+			t.Fatalf("expected only the missing link: %#v %v", report, err)
+		}
+		graph, err := ws.Graph(ctx, fixture.prefix+"/guides/troubleshooting", factile.GraphOptions{Depth: 1})
+		if err != nil || len(graph.Edges) != 1 || graph.Edges[0].From != fixture.prefix+"/reference/commands" || graph.Edges[0].To != fixture.prefix+"/guides/troubleshooting" {
+			t.Fatalf("expected a backlink from the owning bundle: %#v %v", graph, err)
+		}
+	}
+}
+
 func TestWorkspaceValidateReportsInvalidGitMountsAsScopedIssues(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "root")

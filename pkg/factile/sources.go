@@ -56,6 +56,14 @@ func conceptLinks(item scopedConcept) []graphpkg.Link {
 	return links
 }
 
+func resolveConceptLink(item scopedConcept, link graphpkg.Link) (string, bool) {
+	target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+	if ok && link.Kind != "source_reference" && strings.HasPrefix(link.Target, "/") {
+		target = cleanVirtualJoin(conceptMount(item.Concept), target)
+	}
+	return target, ok
+}
+
 func linkKind(link graphpkg.Link) string {
 	if link.Kind == "source_reference" {
 		return link.Kind

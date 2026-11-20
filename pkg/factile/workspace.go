@@ -15,7 +15,6 @@ import (
 
 	"github.com/factile/factile/pkg/contextpack"
 	"github.com/factile/factile/pkg/gitsource"
-	graphpkg "github.com/factile/factile/pkg/graph"
 	"github.com/factile/factile/pkg/okf"
 	patchpkg "github.com/factile/factile/pkg/patch"
 	"github.com/factile/factile/pkg/revision"
@@ -345,7 +344,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		related := map[string]bool{}
 		for _, item := range scope.Concepts {
 			for _, link := range conceptLinks(item) {
-				target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+				target, ok := resolveConceptLink(item, link)
 				destination, exists := byPath[target]
 				if !ok || !exists || !sourceTargetVisible(item, destination, link) {
 					continue
@@ -478,7 +477,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 			continue
 		}
 		for _, link := range conceptLinks(item) {
-			targetPath, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			targetPath, ok := resolveConceptLink(item, link)
 			if !ok {
 				continue
 			}
@@ -1541,7 +1540,7 @@ func validateScope(scope scopedSet) []ValidationIssue {
 	}
 	for _, item := range scope.Concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			target, ok := resolveConceptLink(item, link)
 			if ok && missingLink(item, link, target, byPath) {
 				issues = append(issues, linkIssue(item, link))
 			}
@@ -1625,7 +1624,7 @@ func localRootLinkIssues(concepts []scopedConcept, mounts []vfs.Mount) []Validat
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			target, ok := resolveConceptLink(item, link)
 			if !ok || !missingLink(item, link, target, byPath) || (link.Kind != "source_reference" && (localReservedFileExists(rootSource, target) || coveredByNonRootMount(target, mounts))) {
 				continue
 			}
@@ -1657,7 +1656,7 @@ func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool) []Valid
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			target, ok := resolveConceptLink(item, link)
 			if ok && missingLink(item, link, target, byPath) {
 				issues = append(issues, linkIssue(item, link))
 			}
@@ -1674,7 +1673,7 @@ func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []Validat
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			target, ok := resolveConceptLink(item, link)
 			if !ok || !pathInAnyScope(target, scopes) || !missingLink(item, link, target, byPath) {
 				continue
 			}
@@ -1824,7 +1823,7 @@ func (w *LocalWorkspace) backlinkWarnings(mount vfs.Mount, oldPath string) []Val
 	var warnings []ValidationIssue
 	for _, item := range items {
 		for _, link := range conceptLinks(item) {
-			target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
+			target, ok := resolveConceptLink(item, link)
 			if ok && target == oldPath {
 				warnings = append(warnings, ValidationIssue{
 					Severity:  "warning",
