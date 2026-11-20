@@ -43,6 +43,16 @@ factile /guides
 
 It tries `read` first, then `list` only when no document exists at the path.
 
+## Read a document's Git history
+
+```bash
+factile history /guides/setup
+factile history /guides/setup --diff <commit>
+```
+
+History follows the owning local Git checkout, including for a mounted
+document. A diff compares the selected commit with the current local file.
+
 ## Search and context
 
 Search returns ranked document matches:

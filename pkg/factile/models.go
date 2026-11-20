@@ -411,6 +411,7 @@ type PatchConceptInput struct {
 type Workspace interface {
 	List(ctx context.Context, path string, opts ListOptions) (ListResult, error)
 	Stat(ctx context.Context, path string, opts StatOptions) (StatResult, error)
+	History(ctx context.Context, path, comparison string) (HistoryResult, error)
 	Read(ctx context.Context, path string, opts ReadOptions) (ConceptResult, error)
 	Search(ctx context.Context, path string, query string, opts SearchOptions) (SearchResults, error)
 	Context(ctx context.Context, path string, query string, opts ContextOptions) (ContextPack, error)

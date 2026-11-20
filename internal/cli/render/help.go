@@ -81,6 +81,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 			{command: "graph <path> [--depth 0|1] [--view <id>]", description: "Inspect Markdown links"},
 			{command: "validate <path> [--view <id>]", description: "Validate base OKF and optional bundle-local concept schemas"},
 			{command: "review list [path]", description: "List documents that need review"},
+			{command: "history <document-path> [--diff <commit>]", description: "Inspect local Git history for a document"},
 			{command: "ui [--port <port>] [--no-open] [--dev-assets <url>]", description: "Serve the local browser reader"},
 		}},
 		{title: "Curator commands", items: []helpItem{

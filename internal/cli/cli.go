@@ -300,6 +300,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runCreate(ctx, ws, args, global, stdin, stdout)
 	case "adopt":
 		return runAdopt(ws, args, global, stdout)
+	case "history":
+		return runHistory(ctx, ws, args, global, stdout)
 	case "write":
 		return runWrite(ctx, ws, args, global, stdin, stdout)
 	case "patch":
