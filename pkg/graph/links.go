@@ -45,6 +45,9 @@ func MarkdownTargets(markdown string) []MarkdownTarget {
 		if containsOffset(inCode, match[0]) || escapedAt(markdown, match[0]) {
 			continue
 		}
+		if (match[6] >= 0 || match[8] >= 0) && strings.HasPrefix(strings.TrimLeft(markdown[match[0]:match[1]], " "), "[^") {
+			continue
+		}
 		start, end := -1, -1
 		for i := 2; i < len(match); i += 2 {
 			if match[i] != -1 {

@@ -53,6 +53,7 @@ func TestMarkdownTargetOffsetsLeaveLabelsAndCodeIntact(t *testing.T) {
 	markdown := "[Guide](../guide.md#steps \"Title\")\n" +
 		"`[Example](../guide.md)`\n" +
 		"```md\n[Example](../guide.md)\n```\n" +
+		"[^local]: Source Note\n" +
 		"[Guide]: </guide.md#steps>\n"
 	found := MarkdownTargets(markdown)
 	if len(found) != 2 {
