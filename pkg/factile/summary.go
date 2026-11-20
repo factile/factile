@@ -3,8 +3,12 @@ package factile
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/factile/factile/pkg/gitsource"
 	"github.com/factile/factile/pkg/version"
+	"github.com/factile/factile/pkg/vfs"
 )
 
 func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
@@ -35,6 +39,17 @@ func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
 		health = append(health, HealthSummary{Status: "warning", Message: "Source listing failed: " + err.Error()})
 	} else {
 		result.Sources = sources.Mounts
+		for index := range result.Sources {
+			source := &result.Sources[index]
+			if source.Kind != vfs.SourceKindLocal || source.Revision == "" {
+				continue
+			}
+			checkout := localCheckoutStatus(ctx, *source)
+			source.LocalCheckout = &checkout
+			if checkout.PinMatches != nil && !*checkout.PinMatches {
+				health = append(health, HealthSummary{Status: "warning", Message: source.MountPath + " checkout differs from the declared revision."})
+			}
+		}
 	}
 	if len(health) == 0 {
 		health = append(health, HealthSummary{
@@ -45,6 +60,30 @@ func (w *LocalWorkspace) Summary(ctx context.Context) (SummaryResult, error) {
 	result.Health = health
 	result.NextCommands = summaryNextCommands(result)
 	return result, nil
+}
+
+func localCheckoutStatus(ctx context.Context, source vfs.Mount) vfs.LocalCheckoutStatus {
+	git := gitsource.NewRunner()
+	git.Timeout = 3 * time.Second
+	if source.SourcePath == "" {
+		return vfs.LocalCheckoutStatus{Reason: "Local source unavailable"}
+	}
+	head, err := git.Run(ctx, source.SourcePath, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return vfs.LocalCheckoutStatus{Reason: "Git checkout revision unavailable"}
+	}
+	revision := strings.TrimSpace(string(head))
+	matches := strings.EqualFold(revision, source.Revision)
+	result := vfs.LocalCheckoutStatus{ObservedRevision: revision, PinMatches: &matches}
+	status, err := git.Run(ctx, source.SourcePath, "--no-optional-locks", "status", "--porcelain=v1", "-z",
+		"--untracked-files=all", "--", ".")
+	if err != nil {
+		result.Reason = "Mounted directory status unavailable"
+		return result
+	}
+	dirty := len(status) > 0
+	result.Dirty = &dirty
+	return result
 }
 
 func summaryNextCommands(result SummaryResult) []string {

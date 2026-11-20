@@ -31,24 +31,32 @@ func (e *Error) Error() string {
 }
 
 type Mount struct {
-	MountPath    string        `json:"mount_path"`
-	Source       string        `json:"source"`
-	Kind         string        `json:"kind"`
-	Writable     bool          `json:"writable"`
-	Title        string        `json:"title,omitempty"`
-	Description  string        `json:"description,omitempty"`
-	WhenToUse    string        `json:"when_to_use,omitempty"`
-	WhenNotToUse string        `json:"when_not_to_use,omitempty"`
-	Version      string        `json:"version,omitempty"`
-	Ref          string        `json:"ref,omitempty"`
-	Revision     string        `json:"revision,omitempty"`
-	VersionSet   bool          `json:"-"`
-	RefSet       bool          `json:"-"`
-	RevisionSet  bool          `json:"-"`
-	Trust        string        `json:"trust,omitempty"`
-	SourceStatus *SourceStatus `json:"source_status,omitempty"`
-	RegistryPath string        `json:"-"`
-	SourcePath   string        `json:"-"`
+	MountPath     string               `json:"mount_path"`
+	Source        string               `json:"source"`
+	Kind          string               `json:"kind"`
+	Writable      bool                 `json:"writable"`
+	Title         string               `json:"title,omitempty"`
+	Description   string               `json:"description,omitempty"`
+	WhenToUse     string               `json:"when_to_use,omitempty"`
+	WhenNotToUse  string               `json:"when_not_to_use,omitempty"`
+	Version       string               `json:"version,omitempty"`
+	Ref           string               `json:"ref,omitempty"`
+	Revision      string               `json:"revision,omitempty"`
+	VersionSet    bool                 `json:"-"`
+	RefSet        bool                 `json:"-"`
+	RevisionSet   bool                 `json:"-"`
+	Trust         string               `json:"trust,omitempty"`
+	SourceStatus  *SourceStatus        `json:"source_status,omitempty"`
+	LocalCheckout *LocalCheckoutStatus `json:"local_checkout,omitempty"`
+	RegistryPath  string               `json:"-"`
+	SourcePath    string               `json:"-"`
+}
+
+type LocalCheckoutStatus struct {
+	ObservedRevision string `json:"observed_revision,omitempty"`
+	PinMatches       *bool  `json:"pin_matches,omitempty"`
+	Dirty            *bool  `json:"dirty,omitempty"`
+	Reason           string `json:"reason,omitempty"`
 }
 
 type SourceStatus struct {

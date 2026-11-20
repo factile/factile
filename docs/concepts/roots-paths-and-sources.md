@@ -214,5 +214,10 @@ Two revisions answer different questions:
   safe update; and
 - a Git source revision identifies the repository snapshot backing a mount.
 
+A local mount descriptor can declare a revision as an assertion about its
+checkout. `factile status` shows the declared and observed revisions and
+reports uncommitted changes under the mounted directory. Factile continues to
+read the local working tree.
+
 Do not substitute one for the other. Read a document immediately before a
 write, and use a full Git commit when a reproducible source snapshot matters.

@@ -127,6 +127,29 @@ func (r *Renderer) renderSummarySources(w io.Writer, sources []factile.Mount) er
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
+		if checkout := source.LocalCheckout; checkout != nil {
+			observed := checkout.ObservedRevision
+			if observed == "" {
+				observed = "unavailable"
+			}
+			detail := fmt.Sprintf("    Declared revision: %s · Checkout: %s", source.Revision, observed)
+			if checkout.PinMatches != nil && !*checkout.PinMatches {
+				detail += " (mismatch)"
+			}
+			if checkout.Dirty != nil {
+				if *checkout.Dirty {
+					detail += " · Mounted directory has uncommitted changes"
+				} else {
+					detail += " · Mounted directory clean"
+				}
+			}
+			if checkout.Reason != "" {
+				detail += " · " + checkout.Reason
+			}
+			if _, err := fmt.Fprintln(w, detail); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
