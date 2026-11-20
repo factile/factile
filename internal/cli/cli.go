@@ -298,6 +298,8 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runMkdir(ctx, ws, args, global, stdout)
 	case "create":
 		return runCreate(ctx, ws, args, global, stdin, stdout)
+	case "adopt":
+		return runAdopt(ws, args, global, stdout)
 	case "write":
 		return runWrite(ctx, ws, args, global, stdin, stdout)
 	case "patch":

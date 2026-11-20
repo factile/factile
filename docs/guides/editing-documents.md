@@ -45,6 +45,17 @@ factile create /runbooks/restore --template runbook --title "Restore from backup
 The template supplies the type, tags, and Markdown sections. Write your own
 description where the template provides a prompt.
 
+## Adopt existing Markdown
+
+Preview the frontmatter for one or more existing files at their current logical
+paths. Adoption uses the first Markdown heading as the title, with the filename
+as a fallback. Existing frontmatter and the original Markdown bytes stay intact.
+
+```bash
+factile adopt /guides/service-check --type Guide
+factile adopt /guides/service-check --type Guide --apply
+```
+
 ## Read before updating
 
 Use JSON to capture the exact current revision:

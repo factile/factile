@@ -3615,6 +3615,49 @@ func TestCLITraceFile(t *testing.T) {
 	}
 }
 
+func TestCLIAdoptsExistingMarkdownInPlace(t *testing.T) {
+	root, mount := t.TempDir(), t.TempDir()
+	writeCLICombinedWorkspace(t, root)
+	writeCLIBundleManifest(t, mount, "read-only", "Read only")
+	writeCLITestFile(t, filepath.Join(root, "external.mount.toml"), fmt.Sprintf("source = %q\nwritable = false\n", mount))
+	const body = "Service Checks\r\n==============\r\n\r\nPreserve this body."
+	const existing = "---\ntype: Guide\n---\n[Service checks](checks.md)\n"
+	filename := filepath.Join(root, "checks.md")
+	writeCLITestFile(t, filename, body)
+	writeCLITestFile(t, filepath.Join(root, "link.md"), existing)
+	writeCLITestFile(t, filepath.Join(mount, "plain.md"), body)
+	args := []string{"--workspace", root, "--json", "adopt", "/checks.md", "/link", "--type", "Guide"}
+	preview := runCLIJSON[factile.AdoptResult](t, args...)
+	if preview.Applied || len(preview.Files) != 1 || !strings.Contains(preview.Files[0].Frontmatter, "title: Service Checks") {
+		t.Fatalf("expected the heading in the proposed frontmatter: %#v", preview)
+	}
+	contents, _ := os.ReadFile(filename)
+	if string(contents) != body {
+		t.Fatal("preview rewrote the Markdown")
+	}
+	applied := runCLIJSON[factile.AdoptResult](t, append(args, "--apply")...)
+	if !applied.Applied || len(applied.Files) != 1 {
+		t.Fatalf("adoption did not apply: %#v", applied)
+	}
+	read := runCLIJSON[factile.ConceptResult](t, "--workspace", root, "--json", "read", "/checks")
+	if read.Concept.Markdown != body || read.Concept.Path != "/checks" || read.Concept.Frontmatter["title"] != "Service Checks" {
+		t.Fatalf("adoption changed the body or path: %#v", read)
+	}
+	link, _ := os.ReadFile(filepath.Join(root, "link.md"))
+	if string(link) != existing {
+		t.Fatal("existing frontmatter or inbound link was rewritten")
+	}
+	valid := runCLIJSON[factile.ValidationResult](t, "--workspace", root, "--json", "validate", "/checks")
+	if !valid.Valid || len(valid.Issues) != 0 {
+		t.Fatalf("adoption did not validate: %#v", valid)
+	}
+	assertCLIJSONError(t, 6, factile.ErrSourceReadOnly, "", "--workspace", root, "--json", "adopt", "/external/plain", "--type", "Guide", "--apply")
+	replayed := runCLIJSON[factile.AdoptResult](t, args...)
+	if len(replayed.Files) != 0 {
+		t.Fatalf("adoption was not idempotent: %#v", replayed)
+	}
+}
+
 func TestCLICreateFromTemplate(t *testing.T) {
 	root := t.TempDir()
 	writeCLICombinedWorkspace(t, root)

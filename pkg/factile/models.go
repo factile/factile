@@ -419,6 +419,7 @@ type Workspace interface {
 	Summary(ctx context.Context) (SummaryResult, error)
 	Mkdir(ctx context.Context, path string, opts MkdirOptions) (DirectoryResult, error)
 	Create(ctx context.Context, path string, input CreateConceptInput) (ConceptResult, error)
+	Adopt(paths []string, typ string, apply bool) (AdoptResult, error)
 	Write(ctx context.Context, path string, input WriteConceptInput) (ConceptResult, error)
 	Patch(ctx context.Context, path string, input PatchConceptInput) (ConceptResult, error)
 	Rename(ctx context.Context, oldPath string, newPath string, opts RenameOptions) (RenameResult, error)

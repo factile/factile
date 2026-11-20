@@ -96,6 +96,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		{title: "Write commands", items: []helpItem{
 			{command: "mkdir <path> [--title <title>] [--log] [--overview] [--bundle]", description: "Create a directory scaffold"},
 			{command: "create <document-path> --type <type> --title <title> --body <file|->", description: "Create a document"},
+			{command: "adopt <document-path>... --type <type> [--apply]", description: "Add frontmatter to existing Markdown"},
 			{command: "write <document-path> --rev <rev> --body <file|->", description: "Replace the whole body; preserve frontmatter"},
 			{command: "patch <document-path> --rev <rev> [options]", description: "Exact text, metadata, sections, or ordered edits via --input -"},
 			{command: "rename <old-path> <new-path> --rev <rev>", description: "Move one document"},
