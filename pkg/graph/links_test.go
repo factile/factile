@@ -48,3 +48,20 @@ func TestResolveLink(t *testing.T) {
 		})
 	}
 }
+
+func TestMarkdownTargetOffsetsLeaveLabelsAndCodeIntact(t *testing.T) {
+	markdown := "[Guide](../guide.md#steps \"Title\")\n" +
+		"`[Example](../guide.md)`\n" +
+		"```md\n[Example](../guide.md)\n```\n" +
+		"[Guide]: </guide.md#steps>\n"
+	found := MarkdownTargets(markdown)
+	if len(found) != 2 {
+		t.Fatalf("expected just the actual link destinations: %#v", found)
+	}
+	for index, want := range []string{"../guide.md", "/guide.md"} {
+		target := found[index]
+		if target.Target != want || markdown[target.Start:target.End] != want {
+			t.Fatalf("destination %d: %#v", index, target)
+		}
+	}
+}

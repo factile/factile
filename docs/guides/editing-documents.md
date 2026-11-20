@@ -186,10 +186,19 @@ factile delete /runbooks/cache-repair \
   --rev sha256:<current-revision>
 ```
 
-Each successful content change returns a new revision; reuse the returned one.
-Rename reports backlink warnings but does not rewrite links. Prefer deprecation
-when readers still need a transition path, and use delete only when removal is
-intentional.
+Each successful content change returns a new revision. For a move with
+Markdown link repairs in the same writable bundle, preview the changes and
+pass the returned plan digest to apply:
+
+```bash
+factile rename /runbooks/cache-recovery /guides/cache-repair --preview
+factile rename /runbooks/cache-recovery /guides/cache-repair --apply-plan <plan>
+```
+
+The preview includes inbound updates and outgoing relative links that need
+rebasing. A changed document invalidates the preview. Other bundles require
+updates in their own checkouts. The single-file `--rev` invocation still
+reports backlink warnings.
 
 ## Safety boundary
 

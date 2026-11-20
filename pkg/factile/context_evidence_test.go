@@ -50,7 +50,7 @@ func TestContextPassagesKeepTheWinningSectionWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := factile.ContextOptions{MaxTokens: 1200, Passages: true}
+	opts := factile.ContextOptions{MaxTokens: 1200, Passages: true, EvaluatedAt: "2026-09-11T08:00:00Z"}
 	pack, err := ws.Context(ctx, "/", "rename", opts)
 	if err != nil || pack.Mode != "passages" || len(pack.Passages) != 1 || len(pack.Concepts) != 0 {
 		t.Fatalf("expected one passage: %#v %v", pack, err)

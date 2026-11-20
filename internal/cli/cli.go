@@ -883,8 +883,9 @@ or the preceding successful mutation. Plain index/log documents are supported.
 Example: factile write /note --rev <observed-revision> --body ./body.md --json`
 
 const renameUsage = `factile rename <old-path> <new-path> --rev <rev>
-Move one document using its observed revision. Report backlink warnings;
-links in other documents are not rewritten.`
+factile rename <old-path> <new-path> --preview
+factile rename <old-path> <new-path> --apply-plan <plan>
+Move using the observed revision, or preview and apply a move with link repairs.`
 
 const deleteUsage = `factile delete <document-path> --rev <rev>
 Delete one document using its observed revision. Use deprecate to retain the
@@ -1066,7 +1067,9 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 	fs := flag.NewFlagSet("rename", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	rev := fs.String("rev", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true})
+	preview := fs.Bool("preview", false, "")
+	applyPlan := fs.String("apply-plan", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true, "--preview": false, "--apply-plan": true})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -1075,6 +1078,12 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 	}
 	if fs.NArg() != 2 {
 		return usage(global, stdout, "factile rename <old-path> <new-path> --rev <rev>")
+	}
+	if *preview || *applyPlan != "" {
+		if *rev != "" || (*preview && *applyPlan != "") {
+			return usage(global, stdout, renameUsage)
+		}
+		return runMoveWithLinks(ws, fs.Arg(0), fs.Arg(1), *applyPlan, global, stdout)
 	}
 	result, err := ws.Rename(ctx, fs.Arg(0), fs.Arg(1), factile.RenameOptions{ExpectedRevision: *rev})
 	if err != nil {

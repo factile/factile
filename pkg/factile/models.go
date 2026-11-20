@@ -425,6 +425,7 @@ type Workspace interface {
 	Write(ctx context.Context, path string, input WriteConceptInput) (ConceptResult, error)
 	Patch(ctx context.Context, path string, input PatchConceptInput) (ConceptResult, error)
 	Rename(ctx context.Context, oldPath string, newPath string, opts RenameOptions) (RenameResult, error)
+	MoveWithLinks(oldPath, newPath, expectedPlan string) (MovePlan, error)
 	Delete(ctx context.Context, path string, opts DeleteOptions) (DeleteResult, error)
 	Deprecate(ctx context.Context, path string, opts DeprecateOptions) (ConceptResult, error)
 	Review(ctx context.Context, path string, opts ReviewOptions) (ConceptResult, error)
