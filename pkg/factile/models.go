@@ -99,6 +99,7 @@ type CardSummary struct {
 	WhenToUse   string   `json:"when_to_use,omitempty"`
 	Writable    *bool    `json:"writable,omitempty"`
 	Revision    string   `json:"revision,omitempty"`
+	SourcePath  string   `json:"source_path,omitempty"`
 }
 
 type ListResult struct {

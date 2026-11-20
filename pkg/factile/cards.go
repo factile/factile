@@ -2,6 +2,7 @@ package factile
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/factile/factile/pkg/vfs"
 )
@@ -15,7 +16,7 @@ func (w *LocalWorkspace) Stat(ctx context.Context, inputPath string, opts StatOp
 	if err != nil {
 		return StatResult{}, NormalizeError(err)
 	}
-	card, err := w.cardForPath(ctx, normalized)
+	card, err := w.cardForPath(ctx, normalized, true)
 	if err != nil {
 		return StatResult{}, err
 	}
@@ -36,14 +37,14 @@ func (w *LocalWorkspace) listResult(ctx context.Context, path string, folders []
 func (w *LocalWorkspace) cardsForList(ctx context.Context, folders []FolderSummary, documents []DocumentSummary) ([]CardSummary, error) {
 	cards := make([]CardSummary, 0, len(folders)+len(documents))
 	for _, folder := range folders {
-		card, err := w.cardForPath(ctx, folder.Path)
+		card, err := w.cardForPath(ctx, folder.Path, false)
 		if err != nil {
 			return nil, err
 		}
 		cards = append(cards, card)
 	}
 	for _, document := range documents {
-		card, err := w.cardForPath(ctx, document.Path)
+		card, err := w.cardForPath(ctx, document.Path, false)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +53,7 @@ func (w *LocalWorkspace) cardsForList(ctx context.Context, folders []FolderSumma
 	return cards, nil
 }
 
-func (w *LocalWorkspace) cardForPath(ctx context.Context, normalized string) (CardSummary, error) {
+func (w *LocalWorkspace) cardForPath(ctx context.Context, normalized string, includeSourcePath bool) (CardSummary, error) {
 	if normalized == "/" {
 		return w.rootCard()
 	}
@@ -91,6 +92,9 @@ func (w *LocalWorkspace) cardForPath(ctx context.Context, normalized string) (Ca
 			Tags:        summary.Tags,
 			Revision:    summary.Revision,
 			Writable:    writablePtr(w.effectiveWritable(target.Mount)),
+		}
+		if includeSourcePath && target.Mount.Kind == vfs.SourceKindLocal {
+			card.SourcePath = filepath.Join(target.Mount.SourcePath, filepath.FromSlash(target.RelPath))
 		}
 		return card, nil
 	}

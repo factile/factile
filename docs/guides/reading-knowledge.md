@@ -24,7 +24,9 @@ factile stat /guides/setup
 
 `list` shows immediate folders and documents. `--brief` returns compact cards
 with useful metadata. `stat` inspects one path without loading the complete
-document.
+document. For a local Markdown document, `stat` also shows `source_path`.
+Use it to find the owning file when reading through a mount. The card's
+`writable` value still describes access from the active workspace.
 
 Read a known document explicitly:
 

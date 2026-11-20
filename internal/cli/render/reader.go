@@ -205,6 +205,9 @@ func (r *Renderer) renderCard(w io.Writer, card factile.CardSummary) error {
 	if card.Revision != "" {
 		metadata["revision"] = card.Revision
 	}
+	if card.SourcePath != "" {
+		metadata["source_path"] = card.SourcePath
+	}
 	if rendered := r.RenderMetadata(metadata); rendered != "" {
 		_, err := fmt.Fprintln(w, rendered)
 		return err

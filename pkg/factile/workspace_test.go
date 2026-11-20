@@ -1742,7 +1742,7 @@ title = "Outside Scope"
 		t.Fatalf("unexpected Git read: %#v %v", read, err)
 	}
 	stat, err := ws.Stat(ctx, "/git/overview", factile.StatOptions{})
-	if err != nil || stat.Card.Path != read.Concept.Path || stat.Card.Title != "Git Overview" {
+	if err != nil || stat.Card.Path != read.Concept.Path || stat.Card.Title != "Git Overview" || stat.Card.SourcePath != "" {
 		t.Fatalf("unexpected Git stat: %#v %v", stat, err)
 	}
 	search, err := ws.Search(ctx, "/git", "setup", factile.SearchOptions{})
