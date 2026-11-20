@@ -221,7 +221,7 @@ func listEntriesFromScope(current string, scoped scopedSet) ([]FolderSummary, []
 }
 
 func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOptions) (ConceptResult, error) {
-	_, target, err := w.resolveReadable(ctx, inputPath)
+	mounts, target, err := w.resolveReadable(ctx, inputPath)
 	if err != nil {
 		return ConceptResult{}, err
 	}
@@ -235,6 +235,7 @@ func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOp
 	if err != nil {
 		return ConceptResult{}, err
 	}
+	concept.WorkspaceLinks = workspaceLinkOverrides(concept, mounts)
 	if opts.IncludeReview || opts.EvaluatedAt != "" {
 		at, err := evaluationTime(opts.EvaluatedAt)
 		if err != nil {
@@ -344,7 +345,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		related := map[string]bool{}
 		for _, item := range scope.Concepts {
 			for _, link := range conceptLinks(item) {
-				target, ok := resolveConceptLink(item, link)
+				target, ok := resolveConceptLink(item, link, scope.Mounts)
 				destination, exists := byPath[target]
 				if !ok || !exists || !sourceTargetVisible(item, destination, link) {
 					continue
@@ -372,6 +373,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	remaining := opts.MaxTokens
 	for _, item := range ordered {
 		concept := item.Concept
+		concept.WorkspaceLinks = workspaceLinkOverrides(concept, scope.Mounts)
 		if strings.TrimSpace(opts.View) != "" {
 			concept = restrictSourceTargets(concept, scope.Paths)
 		}
@@ -477,7 +479,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 			continue
 		}
 		for _, link := range conceptLinks(item) {
-			targetPath, ok := resolveConceptLink(item, link)
+			targetPath, ok := resolveConceptLink(item, link, scope.Mounts)
 			if !ok {
 				continue
 			}
@@ -485,9 +487,18 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 			if !includeEdge {
 				continue
 			}
-			if target, exists := byPath[targetPath]; exists && sourceTargetVisible(item, target, link) {
+			destination, exists := byPath[targetPath]
+			if !exists && viewID == "" && targetResolved && item.Concept.Path == target.Path {
+				if resolved, found := existingLinkTarget(scope.Mounts, targetPath); found && resolved.Kind == TargetConcept {
+					if concept, err := w.readConcept(resolved.Mount, resolved.ConceptID); err == nil {
+						destination = scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
+						exists = true
+					}
+				}
+			}
+			if exists && sourceTargetVisible(item, destination, link) {
 				addNode(item.Summary)
-				addNode(target.Summary)
+				addNode(destination.Summary)
 				edges = append(edges, GraphEdge{From: item.Concept.Path, To: targetPath, Kind: linkKind(link)})
 			} else if viewID == "" && link.Kind != "source_reference" {
 				issues = append(issues, linkIssue(item, link))
@@ -655,6 +666,7 @@ func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string
 		return baseValidation(normalized, metadataIssues), nil
 	}
 	var scopes []schemaScope
+	var mounts []vfs.Mount
 	seenConcepts := map[string]bool{}
 	seenIssues := map[string]bool{}
 	var concepts []scopedConcept
@@ -673,6 +685,7 @@ func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string
 			return ValidationResult{}, err
 		}
 		scopes = append(scopes, scan.Scopes...)
+		mounts = scan.Mounts
 		for _, item := range scan.Concepts {
 			if seenConcepts[item.Concept.Path] {
 				continue
@@ -684,7 +697,7 @@ func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string
 			addIssue(issue)
 		}
 	}
-	for _, issue := range linkIssuesWithinScopes(concepts, selectedPaths) {
+	for _, issue := range linkIssuesWithinScopes(concepts, selectedPaths, mounts) {
 		addIssue(issue)
 	}
 	return w.applyConceptSchemas(ctx, baseValidation(normalized, issues), scopes)
@@ -1184,6 +1197,7 @@ type scopedSet struct {
 	Paths     []string
 	Concepts  []scopedConcept
 	Summaries []ConceptSummary
+	Mounts    []vfs.Mount
 }
 
 func (w *LocalWorkspace) scope(ctx context.Context, inputPath string) (scopedSet, error) {
@@ -1198,8 +1212,7 @@ func (w *LocalWorkspace) scope(ctx context.Context, inputPath string) (scopedSet
 	if err != nil {
 		return scopedSet{}, NormalizeError(err)
 	}
-	var scoped scopedSet
-	scoped.Path = normalized
+	scoped := scopedSet{Path: normalized, Mounts: mounts}
 	target, err := vfs.Resolve(mounts, normalized)
 	if err != nil {
 		selected := mountsForVirtualPath(mounts, normalized)
@@ -1493,7 +1506,7 @@ func validateScope(scope scopedSet) []ValidationIssue {
 	}
 	for _, item := range scope.Concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := resolveConceptLink(item, link)
+			target, ok := resolveConceptLink(item, link, scope.Mounts)
 			if ok && missingLink(item, link, target, byPath) {
 				issues = append(issues, linkIssue(item, link))
 			}
@@ -1577,7 +1590,7 @@ func localRootLinkIssues(concepts []scopedConcept, mounts []vfs.Mount) []Validat
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := resolveConceptLink(item, link)
+			target, ok := resolveConceptLink(item, link, mounts)
 			if !ok || !missingLink(item, link, target, byPath) || (link.Kind != "source_reference" && (localReservedFileExists(rootSource, target) || coveredByNonRootMount(target, mounts))) {
 				continue
 			}
@@ -1609,7 +1622,7 @@ func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool, mounts 
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := resolveConceptLink(item, link)
+			target, ok := resolveConceptLink(item, link, mounts)
 			if !ok || !missingLink(item, link, target, byPath) {
 				continue
 			}
@@ -1625,7 +1638,7 @@ func linkIssuesAgainst(concepts []scopedConcept, byPath map[string]bool, mounts 
 	return issues
 }
 
-func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []ValidationIssue {
+func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string, mounts []vfs.Mount) []ValidationIssue {
 	byPath := map[string]bool{}
 	for _, item := range concepts {
 		byPath[item.Concept.Path] = true
@@ -1633,7 +1646,7 @@ func linkIssuesWithinScopes(concepts []scopedConcept, scopes []string) []Validat
 	var issues []ValidationIssue
 	for _, item := range concepts {
 		for _, link := range conceptLinks(item) {
-			target, ok := resolveConceptLink(item, link)
+			target, ok := resolveConceptLink(item, link, mounts)
 			if !ok || !pathInAnyScope(target, scopes) || !missingLink(item, link, target, byPath) {
 				continue
 			}
@@ -1783,7 +1796,7 @@ func (w *LocalWorkspace) backlinkWarnings(mount vfs.Mount, oldPath string) []Val
 	var warnings []ValidationIssue
 	for _, item := range items {
 		for _, link := range conceptLinks(item) {
-			target, ok := resolveConceptLink(item, link)
+			target, ok := resolveConceptLink(item, link, nil)
 			if ok && target == oldPath {
 				warnings = append(warnings, ValidationIssue{
 					Severity:  "warning",

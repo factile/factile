@@ -56,12 +56,45 @@ func conceptLinks(item scopedConcept) []graphpkg.Link {
 	return links
 }
 
-func resolveConceptLink(item scopedConcept, link graphpkg.Link) (string, bool) {
+func resolveConceptLink(item scopedConcept, link graphpkg.Link, mounts []vfs.Mount) (string, bool) {
 	target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
 	if ok && link.Kind != "source_reference" && strings.HasPrefix(link.Target, "/") {
-		target = cleanVirtualJoin(conceptMount(item.Concept), target)
+		bundleTarget := cleanVirtualJoin(conceptMount(item.Concept), target)
+		if bundleTarget != target && coveredByNonRootMount(target, mounts) {
+			_, bundled := existingLinkTarget(mounts, bundleTarget)
+			_, composed := existingLinkTarget(mounts, target)
+			if !bundled && composed {
+				return target, true
+			}
+		}
+		target = bundleTarget
 	}
 	return target, ok
+}
+
+func existingLinkTarget(mounts []vfs.Mount, path string) (vfs.Target, bool) {
+	target, err := vfs.Resolve(mounts, path)
+	return target, err == nil && target.Exists
+}
+
+func workspaceLinkOverrides(concept Concept, mounts []vfs.Mount) map[string]string {
+	if conceptMount(concept) == "" {
+		return nil
+	}
+	var overrides map[string]string
+	for _, link := range graphpkg.ExtractMarkdownLinks(concept.Markdown) {
+		if !strings.HasPrefix(link.Target, "/") {
+			continue
+		}
+		target, ok := resolveConceptLink(scopedConcept{Concept: concept}, link, mounts)
+		if workspacePath, _ := graphpkg.ResolveLink(concept.Path, link.Target); ok && target == workspacePath {
+			if overrides == nil {
+				overrides = map[string]string{}
+			}
+			overrides[link.Target] = target
+		}
+	}
+	return overrides
 }
 
 func linkKind(link graphpkg.Link) string {

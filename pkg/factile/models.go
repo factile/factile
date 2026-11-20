@@ -48,6 +48,7 @@ type Concept struct {
 	Revision            string                `json:"revision"`
 	Frontmatter         map[string]any        `json:"frontmatter"`
 	Markdown            string                `json:"markdown"`
+	WorkspaceLinks      map[string]string     `json:"workspace_links,omitempty"`
 	SourceReferences    []okf.SourceReference `json:"source_references,omitempty"`
 	ClaimReferences     []okf.ClaimReference  `json:"claim_references,omitempty"`
 	MetadataDiagnostics []okf.Diagnostic      `json:"metadata_diagnostics,omitempty"`

@@ -118,6 +118,10 @@ factile graph /architecture --depth 1
 The graph is derived from Markdown links. It is not a separate database and
 does not infer relationships absent from the authored documents.
 
+Absolute links start at the document's owning bundle. In a composed workspace,
+an unresolved absolute link can also reach an existing target under an explicit
+workspace mount, such as a shared contracts bundle.
+
 ## Narrow with a view
 
 When a workspace defines a relevant view, inspect it before using it:

@@ -137,6 +137,7 @@ func (w *LocalWorkspace) scopeForView(ctx context.Context, inputPath string, vie
 		if err != nil {
 			return scopedSet{}, err
 		}
+		scoped.Mounts = part.Mounts
 		for _, item := range part.Concepts {
 			if seen[item.Concept.Path] {
 				continue

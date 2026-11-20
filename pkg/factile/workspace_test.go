@@ -538,6 +538,39 @@ func TestBundleAbsoluteLinksWorkStandaloneAndMounted(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMountFallbackKeepsOwningBundleTargetsFirst(t *testing.T) {
+	ctx := context.Background()
+	root, bundle, shared := t.TempDir(), t.TempDir(), t.TempDir()
+	writeRootConfig(t, root)
+	writeRootConfig(t, bundle)
+	writeRootConfig(t, shared)
+	for name, directory := range map[string]string{"component": bundle, "shared": shared} {
+		mustWriteWorkspace(t, filepath.Join(root, name+".mount.toml"), "source = "+strconv.Quote(directory)+"\nwritable = false\n")
+	}
+	writeOKFFile(t, filepath.Join(bundle, "guide.md"), "Guide", "Component", "[Protocol](/shared/protocol.md#steps)")
+	writeOKFFile(t, filepath.Join(shared, "protocol.md"), "Guide", "Shared", "## Steps")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	for _, want := range []string{"/shared/protocol", "/component/shared/protocol"} {
+		read, err := ws.Read(ctx, "/component/guide", factile.ReadOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		override := read.Concept.WorkspaceLinks["/shared/protocol.md"]
+		if (want == "/shared/protocol" && override != want) || (want == "/component/shared/protocol" && override != "") {
+			t.Fatalf("unexpected browser target override: %q", override)
+		}
+		graph, err := ws.Graph(ctx, "/component/guide", factile.GraphOptions{Depth: 1})
+		if err != nil || len(graph.Edges) != 1 || graph.Edges[0].To != want {
+			t.Fatalf("unexpected cross-mount graph: %#v %v", graph, err)
+		}
+		report, err := ws.Validate(ctx, "/", factile.ValidateOptions{})
+		if err != nil || !report.Valid || len(report.Issues) != 0 {
+			t.Fatalf("valid mount link produced warnings: %#v %v", report, err)
+		}
+		writeOKFFile(t, filepath.Join(bundle, "shared", "protocol.md"), "Guide", "Bundle protocol", "## Steps")
+	}
+}
+
 func TestWorkspaceValidateReportsInvalidGitMountsAsScopedIssues(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "root")

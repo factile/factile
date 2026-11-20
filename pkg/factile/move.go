@@ -151,7 +151,7 @@ func rewriteMoveLinks(markdown, id, from, to string, plan MovePlan) string {
 	var body strings.Builder
 	offset := 0
 	for _, link := range graph.MarkdownTargets(markdown) {
-		target, ok := resolveConceptLink(source, link.Link)
+		target, ok := resolveConceptLink(source, link.Link, nil)
 		if !ok {
 			continue
 		}
