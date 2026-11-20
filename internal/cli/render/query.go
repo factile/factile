@@ -58,6 +58,9 @@ func (r *Renderer) RenderContext(w io.Writer, result factile.ContextPack) error 
 		return err
 	}
 	selection := map[string]any{"path": result.Path, "query": result.Query, "view": result.View, "evaluated_at": result.EvaluatedAt, "budget": result.Budget, "omitted": result.Omitted}
+	if result.Mode != "" {
+		selection["mode"] = result.Mode
+	}
 	metadata, err := json.MarshalIndent(selection, "", "  ")
 	if err != nil {
 		return err
@@ -67,6 +70,18 @@ func (r *Renderer) RenderContext(w io.Writer, result factile.ContextPack) error 
 	}
 	for index, concept := range result.Concepts {
 		if err := renderContextEvidence(w, concept, index); err != nil {
+			return err
+		}
+	}
+	for _, passage := range result.Passages {
+		heading := passage.Heading
+		if heading == "" {
+			heading = "Matching passage"
+		}
+		if _, err := fmt.Fprintf(w, "\n## %s\n\n", heading); err != nil {
+			return err
+		}
+		if err := renderPassage(w, passage); err != nil {
 			return err
 		}
 	}

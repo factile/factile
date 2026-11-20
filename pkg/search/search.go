@@ -21,6 +21,8 @@ type Scored struct {
 	Score   float64
 	Snippet string
 	Path    string
+	Heading string
+	Passage string
 }
 
 const (
@@ -92,16 +94,14 @@ func Score(query string, fields []Fields) []Scored {
 		}
 
 		if bestScore > 0 {
-			snippet := ""
+			result := Scored{Index: i, Score: bestScore, Path: item.Path}
 			if bestPassage >= 0 {
-				snippet = passageSnippet(item.Body, passages[bestPassage], terms)
+				passage := passages[bestPassage]
+				result.Snippet = passageSnippet(item.Body, passage, terms)
+				result.Heading = passage.heading
+				result.Passage = passage.text(item.Body)
 			}
-			scored = append(scored, Scored{
-				Index:   i,
-				Score:   bestScore,
-				Snippet: snippet,
-				Path:    item.Path,
-			})
+			scored = append(scored, result)
 		}
 	}
 	sort.Slice(scored, func(i, j int) bool {

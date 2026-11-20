@@ -38,3 +38,35 @@ func TestContextBudgetsCompleteEvidence(t *testing.T) {
 		t.Fatal("context lost evidence, scope or review qualification")
 	}
 }
+
+func TestContextPassagesKeepTheWinningSectionWhole(t *testing.T) {
+	_, ws := editingWorkspace(t)
+	ctx := context.Background()
+	section := "## Rename a page\n\n```sh\nfactile rename /old /new\n```\n"
+	created, err := ws.Create(ctx, "/passages", factile.CreateConceptInput{
+		Title: "Document maintenance", Type: "Guide",
+		Markdown: "# Introduction\n\n" + strings.Repeat("Unrelated prose. ", 1000) + "\n\n" + section,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := factile.ContextOptions{MaxTokens: 1200, Passages: true}
+	pack, err := ws.Context(ctx, "/", "rename", opts)
+	if err != nil || pack.Mode != "passages" || len(pack.Passages) != 1 || len(pack.Concepts) != 0 {
+		t.Fatalf("expected one passage: %#v %v", pack, err)
+	}
+	passage := pack.Passages[0]
+	if passage.Heading != "Rename a page" || passage.Markdown != section || passage.Revision != created.Concept.Revision || passage.Path != "/passages" {
+		t.Fatalf("incorrect passage: %#v", passage)
+	}
+	opts.MaxTokens = pack.Budget.UsedTokens - 1
+	pack, err = ws.Context(ctx, "/", "rename", opts)
+	if err != nil || len(pack.Passages) != 0 || len(pack.Omitted) != 1 || pack.Omitted[0].Reason != "token_budget" {
+		t.Fatalf("oversized passage: %#v %v", pack, err)
+	}
+	opts.Passages, opts.MaxTokens = false, 1200
+	pack, err = ws.Context(ctx, "/", "rename", opts)
+	if err != nil || pack.Mode != "" || len(pack.Concepts) != 0 || len(pack.Omitted) != 1 || pack.Omitted[0].Reason != "token_budget" {
+		t.Fatalf("whole-document mode changed: %#v %v", pack, err)
+	}
+}

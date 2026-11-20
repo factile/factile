@@ -27,7 +27,27 @@ func fencedContext(w io.Writer, text, language string) error {
 }
 
 func renderContextEvidence(w io.Writer, concept factile.Concept, index int) error {
-	data, err := json.Marshal(concept)
+	if _, err := fmt.Fprintf(w, "\n## Document %d: %s\n\nEvidence and identity for this document:\n", index+1, concept.Path); err != nil {
+		return err
+	}
+	if err := renderEvidenceMetadata(w, concept); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "\nThe following Markdown is a separate document; its footnotes refer only to its own sources."); err != nil {
+		return err
+	}
+	return fencedContext(w, concept.Markdown, "markdown")
+}
+
+func renderPassage(w io.Writer, passage factile.ContextPassage) error {
+	if err := renderEvidenceMetadata(w, passage); err != nil {
+		return err
+	}
+	return fencedContext(w, passage.Markdown, "markdown")
+}
+
+func renderEvidenceMetadata(w io.Writer, item any) error {
+	data, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
@@ -40,14 +60,5 @@ func renderContextEvidence(w io.Writer, concept factile.Concept, index int) erro
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "\n## Document %d: %s\n\nEvidence and identity for this document:\n", index+1, concept.Path); err != nil {
-		return err
-	}
-	if err := fencedContext(w, string(metadata), "json"); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "\nThe following Markdown is a separate document; its footnotes refer only to its own sources."); err != nil {
-		return err
-	}
-	return fencedContext(w, concept.Markdown, "markdown")
+	return fencedContext(w, string(metadata), "json")
 }

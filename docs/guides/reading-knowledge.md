@@ -85,6 +85,16 @@ retrieval.
 and backlinks; deeper values are not supported. Omitted documents are reported
 when they do not fit the budget.
 
+Use `--passages` to return the best matching section of each document:
+
+```bash
+factile context /guides "rename" --passages --max-tokens 1200 --json
+```
+
+Passage mode includes the source path and revision, heading when available,
+and original Markdown. It skips link expansion and reports matches without
+matching body text or passages that exceed the remaining budget.
+
 ## Inspect relationships
 
 ```bash

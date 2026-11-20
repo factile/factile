@@ -687,8 +687,9 @@ func runUI(ctx context.Context, ws factile.Workspace, args []string, global glob
 }
 
 func runContext(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
+	const syntax = "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>] [--passages]"
 	if hasHelp(args) {
-		return showUsage(stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>]")
+		return showUsage(stdout, syntax)
 	}
 	fs := flag.NewFlagSet("context", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -696,7 +697,8 @@ func runContext(ctx context.Context, ws factile.Workspace, args []string, global
 	depth := fs.Int("depth", 1, "")
 	view := fs.String("view", "", "")
 	at := fs.String("evaluated-at", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true, "--evaluated-at": true})
+	passages := fs.Bool("passages", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true, "--evaluated-at": true, "--passages": false})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -704,9 +706,9 @@ func runContext(ctx context.Context, ws factile.Workspace, args []string, global
 		return 2, err
 	}
 	if fs.NArg() != 2 {
-		return usage(global, stdout, "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>]")
+		return usage(global, stdout, syntax)
 	}
-	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view, EvaluatedAt: *at})
+	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view, EvaluatedAt: *at, Passages: *passages})
 	if err != nil {
 		return 0, err
 	}

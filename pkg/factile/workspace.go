@@ -2,6 +2,7 @@ package factile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -258,19 +259,7 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 	if err != nil {
 		return SearchResults{}, err
 	}
-	fields := make([]searchpkg.Fields, 0, len(scope.Concepts))
-	for _, item := range scope.Concepts {
-		fields = append(fields, searchpkg.Fields{
-			Path:        item.Concept.Path,
-			ConceptID:   item.Concept.ConceptID,
-			Title:       okf.StringField(item.Concept.Frontmatter, "title"),
-			Description: okf.StringField(item.Concept.Frontmatter, "description"),
-			Tags:        okf.StringSliceField(item.Concept.Frontmatter, "tags"),
-			Resource:    okf.StringField(item.Concept.Frontmatter, "resource"),
-			Body:        item.Concept.Markdown,
-		})
-	}
-	scored := searchpkg.Score(query, fields)
+	scored := scoreScope(query, scope.Concepts)
 	results := make([]SearchResult, 0, len(scored))
 	for _, item := range scored {
 		summary := scope.Summaries[item.Index]
@@ -291,6 +280,22 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 	return SearchResults{Path: scope.Path, Query: query, Results: results, Selection: selection}, nil
 }
 
+func scoreScope(query string, concepts []scopedConcept) []searchpkg.Scored {
+	fields := make([]searchpkg.Fields, 0, len(concepts))
+	for _, item := range concepts {
+		fields = append(fields, searchpkg.Fields{
+			Path:        item.Concept.Path,
+			ConceptID:   item.Concept.ConceptID,
+			Title:       okf.StringField(item.Concept.Frontmatter, "title"),
+			Description: okf.StringField(item.Concept.Frontmatter, "description"),
+			Tags:        okf.StringSliceField(item.Concept.Frontmatter, "tags"),
+			Resource:    okf.StringField(item.Concept.Frontmatter, "resource"),
+			Body:        item.Concept.Markdown,
+		})
+	}
+	return searchpkg.Score(query, fields)
+}
+
 func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query string, opts ContextOptions) (ContextPack, error) {
 	if opts.MaxTokens <= 0 {
 		opts.MaxTokens = 4000
@@ -303,13 +308,16 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	if err != nil {
 		return ContextPack{}, err
 	}
-	searchResults, err := w.Search(ctx, inputPath, query, SearchOptions{View: opts.View})
-	if err != nil {
-		return ContextPack{}, err
+	if strings.TrimSpace(query) == "" {
+		return ContextPack{}, errorf(ErrInvalidPath, "Search query must not be empty")
 	}
 	scope, err := w.scopeWithView(ctx, inputPath, opts.View)
 	if err != nil {
 		return ContextPack{}, err
+	}
+	scored := scoreScope(query, scope.Concepts)
+	if opts.Passages {
+		return passageContext(scope.Path, query, at, opts, scope.Concepts, scored)
 	}
 	byPath := map[string]scopedConcept{}
 	for _, item := range scope.Concepts {
@@ -326,8 +334,8 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 			ordered = append(ordered, item)
 		}
 	}
-	for _, result := range searchResults.Results {
-		add(result.Concept.Path)
+	for _, result := range scored {
+		add(result.Path)
 	}
 	seeds := map[string]bool{}
 	for path := range seen {
@@ -384,6 +392,38 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		summaries = append(summaries, item.Summary)
 	}
 	return ContextPack{Path: scope.Path, Query: query, Concepts: concepts, Summaries: summaries, Omitted: omitted, View: opts.View, EvaluatedAt: at, Budget: ContextBudget{MaxTokens: opts.MaxTokens, UsedTokens: opts.MaxTokens - remaining, Estimator: "utf8_json_bytes/4"}}, nil
+}
+
+func passageContext(path, query, at string, opts ContextOptions, concepts []scopedConcept, scored []searchpkg.Scored) (ContextPack, error) {
+	pack := ContextPack{
+		Path: path, Query: query, View: opts.View, EvaluatedAt: at,
+		Mode: "passages", Concepts: []Concept{},
+		Budget: ContextBudget{MaxTokens: opts.MaxTokens, Estimator: "utf8_json_bytes/4"},
+	}
+	for _, result := range scored {
+		concept := concepts[result.Index].Concept
+		if result.Passage == "" {
+			pack.Omitted = append(pack.Omitted, OmittedItem{Path: concept.Path, Reason: "no_matching_passage"})
+			continue
+		}
+		state, _ := okf.Review(concept.Frontmatter, at)
+		passage := ContextPassage{
+			Path: concept.Path, Revision: concept.Revision, Heading: result.Heading,
+			Markdown: result.Passage, Origin: concept.origin, ReviewState: state,
+		}
+		data, err := json.Marshal(passage)
+		if err != nil {
+			return ContextPack{}, NormalizeError(err)
+		}
+		tokens := (len(data) + 3) / 4
+		if tokens > opts.MaxTokens-pack.Budget.UsedTokens {
+			pack.Omitted = append(pack.Omitted, OmittedItem{Path: concept.Path, Reason: "token_budget", EstimatedTokens: tokens})
+			continue
+		}
+		pack.Passages = append(pack.Passages, passage)
+		pack.Budget.UsedTokens += tokens
+	}
+	return pack, nil
 }
 
 func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts GraphOptions) (GraphResult, error) {

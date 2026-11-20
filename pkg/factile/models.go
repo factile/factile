@@ -143,7 +143,18 @@ type ContextPack struct {
 	Query       string           `json:"query"`
 	Concepts    []Concept        `json:"concepts"`
 	Summaries   []ConceptSummary `json:"summaries,omitempty"`
+	Mode        string           `json:"mode,omitempty"`
+	Passages    []ContextPassage `json:"passages,omitempty"`
 	Omitted     []OmittedItem    `json:"omitted,omitempty"`
+}
+
+type ContextPassage struct {
+	Path        string            `json:"path"`
+	Revision    string            `json:"revision"`
+	Heading     string            `json:"heading,omitempty"`
+	Markdown    string            `json:"markdown"`
+	Origin      map[string]string `json:"origin,omitempty"`
+	ReviewState okf.ReviewState   `json:"review_state"`
 }
 
 type ContextBudget struct {
@@ -349,6 +360,7 @@ type ContextOptions struct {
 	MaxTokens   int
 	Depth       int
 	View        string
+	Passages    bool
 }
 
 type CreateConceptInput struct {
