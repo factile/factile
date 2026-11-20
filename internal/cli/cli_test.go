@@ -3615,6 +3615,25 @@ func TestCLITraceFile(t *testing.T) {
 	}
 }
 
+func TestCLICreateFromTemplate(t *testing.T) {
+	root := t.TempDir()
+	writeCLICombinedWorkspace(t, root)
+	base := []string{"--workspace", root, "--json"}
+	args := append(append([]string{}, base...), "create", "/runbooks/restore", "--template", "runbook", "--title", "Restore from backup")
+	created := runCLIJSON[factile.ConceptResult](t, args...)
+	body := created.Concept.Markdown
+	if created.Concept.Frontmatter["type"] != "Runbook" || created.Concept.Frontmatter["title"] != "Restore from backup" ||
+		!strings.Contains(body, "# Restore from backup") || !strings.Contains(body, "## Trigger\n\n## Checks\n\n## Steps\n\n## Escalation") {
+		t.Fatalf("unexpected template result: %#v", created)
+	}
+	assertCLIJSONError(t, 2, factile.ErrInvalidPath, "unknown template", append(append([]string{}, base...), "create", "/unknown", "--template", "unknown", "--title", "Unknown")...)
+	assertCLIJSONError(t, 5, factile.ErrConceptAlreadyExist, "", args...)
+	read := runCLIJSON[factile.ConceptResult](t, append(append([]string{}, base...), "read", "/runbooks/restore")...)
+	if read.Concept.Revision != created.Concept.Revision {
+		t.Fatal("a rejected create changed the document")
+	}
+}
+
 func TestCLIReviewList(t *testing.T) {
 	root, mount := t.TempDir(), t.TempDir()
 	writeCLICombinedWorkspace(t, root)

@@ -2,10 +2,13 @@ package profile
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/factile/factile/profiles"
 )
 
 type Summary struct {
@@ -75,6 +78,25 @@ func Load(root string, id string) (Profile, error) {
 		return Profile{}, err
 	}
 	return profile, nil
+}
+
+func BundledTemplate(id string) ([]byte, error) {
+	manifest, err := profiles.Software.ReadFile("software/profile.json")
+	if err != nil {
+		return nil, err
+	}
+	var software Profile
+	if err := json.Unmarshal(manifest, &software); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, template := range software.Templates {
+		if template.ID == id {
+			return profiles.Software.ReadFile("software/" + template.Path)
+		}
+		ids = append(ids, template.ID)
+	}
+	return nil, fmt.Errorf("unknown template %q. Available templates: %s", id, strings.Join(ids, ", "))
 }
 
 func LoadRecipe(root string, profileID string, recipeID string) (Recipe, error) {

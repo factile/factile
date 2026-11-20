@@ -18,6 +18,7 @@ import (
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/mcpserver"
 	"github.com/factile/factile/pkg/okf"
+	"github.com/factile/factile/pkg/profile"
 	"github.com/factile/factile/pkg/skill"
 	"github.com/factile/factile/pkg/trace"
 	"github.com/factile/factile/pkg/uibridge"
@@ -786,21 +787,49 @@ func runCreate(ctx context.Context, ws factile.Workspace, args []string, global 
 	typeValue := fs.String("type", "", "")
 	title := fs.String("title", "", "")
 	bodyFile := fs.String("body", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--type": true, "--title": true, "--body": true})
+	templateID := fs.String("template", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--type": true, "--title": true, "--body": true, "--template": true})
 	if orderErr != nil {
 		return 2, orderErr
 	}
 	if err := fs.Parse(ordered); err != nil {
 		return 2, err
 	}
-	if fs.NArg() != 1 || *typeValue == "" || *title == "" || *bodyFile == "" {
+	if fs.NArg() != 1 || *title == "" {
 		return usage(global, stdout, "factile create <document-path> --type <type> --title <title> --body <file|->")
 	}
-	body, err := readContent(*bodyFile, stdin)
-	if err != nil {
-		return 0, err
+	input := factile.CreateConceptInput{Type: *typeValue, Title: *title}
+	if *templateID != "" {
+		if *typeValue != "" || *bodyFile != "" {
+			return 2, factile.NewError(factile.ErrInvalidPath, "--template supplies the type and body. Use it with --title.")
+		}
+		bundled, err := profile.BundledTemplate(*templateID)
+		if err != nil {
+			return 2, factile.NewError(factile.ErrInvalidPath, err.Error())
+		}
+		doc, err := okf.ParseConcept(*templateID, bundled)
+		if err != nil {
+			return 0, err
+		}
+		input.Type = okf.StringField(doc.Frontmatter, "type")
+		input.Tags = okf.StringSliceField(doc.Frontmatter, "tags")
+		input.Description = okf.StringField(doc.Frontmatter, "description")
+		if strings.HasPrefix(input.Description, "<") && strings.HasSuffix(input.Description, ">") {
+			input.Description = ""
+		}
+		placeholder := okf.StringField(doc.Frontmatter, "title")
+		input.Markdown = strings.Replace(doc.Markdown, "# "+placeholder, "# "+strings.Join(strings.Fields(input.Title), " "), 1)
+	} else {
+		if *typeValue == "" || *bodyFile == "" {
+			return usage(global, stdout, "factile create <document-path> --type <type> --title <title> --body <file|->")
+		}
+		body, err := readContent(*bodyFile, stdin)
+		if err != nil {
+			return 0, err
+		}
+		input.Markdown = string(body)
 	}
-	result, err := ws.Create(ctx, fs.Arg(0), factile.CreateConceptInput{Type: *typeValue, Title: *title, Markdown: string(body)})
+	result, err := ws.Create(ctx, fs.Arg(0), input)
 	if err != nil {
 		return 0, err
 	}
@@ -837,8 +866,10 @@ func runWrite(ctx context.Context, ws factile.Workspace, args []string, global g
 }
 
 const createUsage = `factile create <document-path> --type <type> --title <title> --body <file|->
+factile create <document-path> --template <id> --title <title>
 Create a new typed OKF document. --body supplies Markdown, without frontmatter;
-use - for stdin. Existing paths are rejected.
+use - for stdin. --template uses a bundled software profile template.
+Existing paths are rejected.
 Example: printf '# Note\n' | factile create /note --type Note --title Note --body - --json`
 
 const writeUsage = `factile write <document-path> --rev <rev> --body <file|->

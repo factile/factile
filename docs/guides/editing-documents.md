@@ -36,6 +36,15 @@ printf '# Cache Recovery\n\nFollow the recovery steps.\n' |
 `type` must be non-empty, but Factile does not require a central type registry.
 Choose a stable value that communicates the document's role.
 
+Use `--template` to start from a bundled software profile template:
+
+```bash
+factile create /runbooks/restore --template runbook --title "Restore from backup"
+```
+
+The template supplies the type, tags, and Markdown sections. Write your own
+description where the template provides a prompt.
+
 ## Read before updating
 
 Use JSON to capture the exact current revision:
