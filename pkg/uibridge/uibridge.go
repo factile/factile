@@ -116,8 +116,9 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func NewHandler(ws curatorWorkspace, opts Options) http.Handler {
 	mux := http.NewServeMux()
+	drafts, supportsDrafts := ws.(draftWorkspace)
 	mux.HandleFunc(APIPrefix+"/health", healthHandler(opts))
-	mux.HandleFunc(APIPrefix+"/capabilities", capabilitiesHandler(opts))
+	mux.HandleFunc(APIPrefix+"/capabilities", capabilitiesHandler(opts, opts.Curator && supportsDrafts))
 	mux.HandleFunc(APIPrefix+"/source", sourceHandler(ws, opts))
 	mux.HandleFunc(APIPrefix+"/views", viewsHandler(ws))
 	mux.HandleFunc(APIPrefix+"/view", viewHandler(ws))
@@ -128,6 +129,11 @@ func NewHandler(ws curatorWorkspace, opts Options) http.Handler {
 	mux.HandleFunc(APIPrefix+"/reader/context", contextHandler(ws))
 	mux.HandleFunc(APIPrefix+"/reader/graph", graphHandler(ws))
 	mux.HandleFunc(APIPrefix+"/reader/validate", validateHandler(ws))
+	if opts.Curator && supportsDrafts {
+		mux.HandleFunc(APIPrefix+"/writer/draft", draftHandler(drafts))
+	} else {
+		mux.HandleFunc(APIPrefix+"/writer/draft", unsupportedOperationHandler("draft"))
+	}
 
 	if opts.Curator {
 		mux.HandleFunc(APIPrefix+"/writer/create", createHandler(ws))
@@ -202,7 +208,7 @@ func healthHandler(opts Options) http.HandlerFunc {
 	}
 }
 
-func capabilitiesHandler(opts Options) http.HandlerFunc {
+func capabilitiesHandler(opts Options, drafts bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !requireGet(w, r) {
 			return
@@ -227,6 +233,7 @@ func capabilitiesHandler(opts Options) http.HandlerFunc {
 				"patch":          opts.Curator,
 				"review":         opts.Curator,
 				"validate_draft": opts.Curator,
+				"drafts":         drafts,
 				"rename":         opts.Curator,
 				"delete":         false,
 				"deprecate":      opts.Curator,

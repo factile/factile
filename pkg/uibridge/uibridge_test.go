@@ -744,6 +744,39 @@ title = "Test"
 `)
 }
 
+func TestCuratorDraftsPersistInWorkspaceState(t *testing.T) {
+	root, other := t.TempDir(), t.TempDir()
+	writeUICombinedWorkspace(t, root)
+	writeUICombinedWorkspace(t, other)
+	handlerFor := func(root string, curator bool) http.Handler {
+		return NewHandler(factile.NewWorkspace(factile.WorkspaceOptions{Workspace: root}), Options{Curator: curator})
+	}
+	const route = APIPrefix + "/writer/draft?path=%2Fguide&mode=edit"
+	const draft = `{"path":"/guide","type":"Guide","title":"Guide","description":"","tags":"","markdown":"unfinished text","revision":"old"}`
+	const updated = `{"path":"/guide","type":"Guide","title":"Guide","description":"","tags":"","markdown":"newer draft","revision":"old"}`
+	assert := func(handler http.Handler, method, path, body string, status int, contains string) {
+		t.Helper()
+		res := requestWithBody(handler, method, path, body)
+		if res.Code != status || !strings.Contains(res.Body.String(), contains) {
+			t.Fatalf("%s %s: got %d %s, want %d with %q", method, path, res.Code, res.Body.String(), status, contains)
+		}
+	}
+	first := handlerFor(root, true)
+	assert(first, http.MethodGet, APIPrefix+"/capabilities", "", http.StatusOK, `"drafts":true`)
+	assert(first, http.MethodGet, route, "", http.StatusOK, "null")
+	assert(first, http.MethodPut, route, draft, http.StatusOK, "null")
+	second := handlerFor(root, true)
+	assert(second, http.MethodGet, route, "", http.StatusOK, draft)
+	assert(second, http.MethodGet, APIPrefix+"/writer/draft?path=%2Fguide&mode=create", "", http.StatusOK, "null")
+	assert(handlerFor(other, true), http.MethodGet, route, "", http.StatusOK, "null")
+	assert(handlerFor(root, false), http.MethodGet, route, "", http.StatusNotImplemented, `"unsupported_operation"`)
+	assert(second, http.MethodPut, route, updated, http.StatusOK, "null")
+	assert(first, http.MethodDelete, route, draft, http.StatusOK, "null")
+	assert(second, http.MethodGet, route, "", http.StatusOK, updated)
+	assert(second, http.MethodDelete, route, updated, http.StatusOK, "null")
+	assert(first, http.MethodGet, route, "", http.StatusOK, "null")
+}
+
 func writeUIConcept(t *testing.T, filename, title string) {
 	t.Helper()
 	writeUITestFile(t, filename, "---\ntype: Reference\ntitle: "+title+"\n---\n\n# "+title+"\n")
