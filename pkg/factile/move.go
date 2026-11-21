@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/factile/factile/internal/atomicfile"
 	"github.com/factile/factile/pkg/graph"
@@ -43,7 +44,7 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 	if err != nil {
 		return MovePlan{}, err
 	}
-	_, newTarget, err := w.resolveForConceptWrite(newPath)
+	mounts, newTarget, err := w.resolveForConceptWrite(newPath)
 	if err != nil {
 		return MovePlan{}, err
 	}
@@ -54,6 +55,9 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 		return MovePlan{}, NewError(ErrInvalidPath, "Move requires ordinary document paths")
 	}
 	if err := w.ensureWritable(oldTarget.Mount); err != nil {
+		return MovePlan{}, err
+	}
+	if err := checkMoveDestination(mounts, newTarget); err != nil {
 		return MovePlan{}, err
 	}
 	store, err := storage.NewLocal(oldTarget.Mount.SourcePath)
@@ -71,17 +75,30 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 	if result.Plan != expectedPlan {
 		return MovePlan{}, NewError(ErrRevisionMismatch, "Documents changed since the move preview. Preview again.")
 	}
-	files := []string{destination}
+	files := []string{destination, strings.TrimSuffix(destination, ".md")}
+	for parent := filepath.Dir(destination); parent != store.Root; parent = filepath.Dir(parent) {
+		files = append(files, parent+".md")
+	}
 	for _, item := range planned {
 		files = append(files, item.filename)
 	}
 	err = w.withWorkspaceLocks(files, func() error {
+		currentMounts, err := w.mounts()
+		if err != nil {
+			return err
+		}
+		if err := checkMoveDestination(currentMounts, newTarget); err != nil {
+			return err
+		}
 		latest, changes, err := buildMovePlan(store, oldTarget, newTarget)
 		if err != nil {
 			return err
 		}
 		if latest.Plan != expectedPlan {
 			return NewError(ErrRevisionMismatch, "Documents changed since the move preview. Preview again.")
+		}
+		if err := checkMoveDestination(currentMounts, newTarget); err != nil {
+			return err
 		}
 		return applyMovePlan(destination, changes, oldTarget.Path)
 	})
@@ -90,6 +107,35 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 	}
 	result.Applied = true
 	return result, nil
+}
+
+func checkMoveDestination(mounts []vfs.Mount, destination vfs.Target) error {
+	if len(mountsForVirtualPath(mounts, destination.Path)) != 0 {
+		return errorf(ErrPathAlreadyExists, "Move destination contains a mount: %s", destination.Path)
+	}
+	target, err := vfs.Resolve(mounts, destination.Path)
+	if err != nil {
+		if ErrorCode(NormalizeError(err)) != ErrMountNotFound {
+			return err
+		}
+	} else if target.Exists {
+		return errorf(ErrPathAlreadyExists, "Move destination already exists: %s", destination.Path)
+	} else if target.Mount.SourcePath != destination.Mount.SourcePath {
+		return NewError(ErrRevisionMismatch, "Move destination source changed. Preview again.")
+	}
+	for parent := path.Dir(destination.Path); parent != destination.Mount.MountPath; parent = path.Dir(parent) {
+		target, err := vfs.Resolve(mounts, parent)
+		if err != nil {
+			if ErrorCode(NormalizeError(err)) == ErrMountNotFound {
+				continue
+			}
+			return err
+		}
+		if target.Kind == TargetConcept {
+			return errorf(ErrPathAlreadyExists, "Move destination has a document as a parent: %s", parent)
+		}
+	}
+	return nil
 }
 
 func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target) (MovePlan, []moveFile, error) {
@@ -178,8 +224,16 @@ func rewriteMoveLinks(markdown, id, from, to string, plan MovePlan) string {
 			continue
 		}
 		body.WriteString(markdown[offset:link.Start])
-		body.WriteString(rewritten)
 		offset = link.End
+		if strings.IndexFunc(rewritten, unicode.IsSpace) >= 0 && markdown[link.Start-1] != '<' {
+			offset = link.Start + len(link.Raw)
+			body.WriteByte('<')
+			body.WriteString(rewritten)
+			body.WriteString(markdown[link.End:offset])
+			body.WriteByte('>')
+		} else {
+			body.WriteString(rewritten)
+		}
 	}
 	body.WriteString(markdown[offset:])
 	return body.String()
