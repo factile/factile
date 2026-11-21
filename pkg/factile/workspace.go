@@ -235,7 +235,7 @@ func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOp
 	if err != nil {
 		return ConceptResult{}, err
 	}
-	concept.WorkspaceLinks = workspaceLinkOverrides(concept, mounts)
+	concept.WorkspaceLinks = workspaceLinkOverrides(concept, w.cachedLinkMounts(mounts))
 	if opts.IncludeReview || opts.EvaluatedAt != "" {
 		at, err := evaluationTime(opts.EvaluatedAt)
 		if err != nil {
@@ -319,6 +319,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	if opts.Passages {
 		return passageContext(scope.Path, query, at, opts, scope.Concepts, scored)
 	}
+	linkMounts := w.cachedLinkMounts(scope.Mounts)
 	byPath := map[string]scopedConcept{}
 	for _, item := range scope.Concepts {
 		byPath[item.Concept.Path] = item
@@ -345,7 +346,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		related := map[string]bool{}
 		for _, item := range scope.Concepts {
 			for _, link := range conceptLinks(item) {
-				target, ok := resolveConceptLink(item, link, scope.Mounts)
+				target, ok := resolveConceptLink(item, link, linkMounts)
 				destination, exists := byPath[target]
 				if !ok || !exists || !sourceTargetVisible(item, destination, link) {
 					continue
@@ -373,7 +374,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	remaining := opts.MaxTokens
 	for _, item := range ordered {
 		concept := item.Concept
-		concept.WorkspaceLinks = workspaceLinkOverrides(concept, scope.Mounts)
+		concept.WorkspaceLinks = workspaceLinkOverrides(concept, linkMounts)
 		if strings.TrimSpace(opts.View) != "" {
 			concept = restrictSourceTargets(concept, scope.Paths)
 		}
@@ -445,6 +446,10 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 	}
 	allConcepts := scope.Concepts
 	viewID := strings.TrimSpace(opts.View)
+	linkMounts := scope.Mounts
+	if depth > 0 {
+		linkMounts = w.cachedLinkMounts(linkMounts)
+	}
 	if viewID == "" && targetResolved && target.Kind == TargetConcept {
 		allConcepts, err = w.scopeForMount(target.Mount, "")
 		if err != nil {
@@ -479,7 +484,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 			continue
 		}
 		for _, link := range conceptLinks(item) {
-			targetPath, ok := resolveConceptLink(item, link, scope.Mounts)
+			targetPath, ok := resolveConceptLink(item, link, linkMounts)
 			if !ok {
 				continue
 			}
@@ -488,8 +493,11 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 				continue
 			}
 			destination, exists := byPath[targetPath]
-			if !exists && viewID == "" && targetResolved && item.Concept.Path == target.Path {
-				if resolved, found := existingLinkTarget(scope.Mounts, targetPath); found && resolved.Kind == TargetConcept {
+			if !exists && viewID == "" && link.Kind != "source_reference" {
+				if resolved, found := existingLinkTarget(linkMounts, targetPath); found && resolved.Kind == TargetConcept {
+					if !targetResolved || target.Kind != TargetConcept || item.Concept.Path != target.Path {
+						continue
+					}
 					if concept, err := w.readConcept(resolved.Mount, resolved.ConceptID); err == nil {
 						destination = scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
 						exists = true
@@ -549,7 +557,7 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 		return ValidationResult{}, err
 	}
 	issues := append(metadataIssues, scan.Issues...)
-	issues = append(issues, linkIssues(scan.Concepts, scan.Mounts)...)
+	issues = append(issues, linkIssues(scan.Concepts, w.cachedLinkMounts(scan.Mounts))...)
 	return w.applyConceptSchemas(ctx, baseValidation(scan.Path, issues), scan.Scopes)
 }
 

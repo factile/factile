@@ -571,6 +571,44 @@ func TestWorkspaceMountFallbackKeepsOwningBundleTargetsFirst(t *testing.T) {
 	}
 }
 
+func TestScopedLinksResolveCachedGitMounts(t *testing.T) {
+	ctx := context.Background()
+	root, component := t.TempDir(), t.TempDir()
+	writeRootConfig(t, root)
+	writeRootConfig(t, component)
+	mustWriteWorkspace(t, filepath.Join(root, "component.mount.toml"), "source = "+strconv.Quote(component)+"\nwritable = false\n")
+	writeOKFFile(t, filepath.Join(component, "guide.md"), "Guide", "Component guide",
+		"[Shared setup](/shared/guides/setup.md#setup)\n[Missing](/shared/missing.md)\n")
+	remote, remotePath, checkout := gitWorkspaceRemote(t)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	revision := gitWorkspaceOutput(t, checkout, "rev-parse", "HEAD")
+	if _, err := ws.Mount(ctx, remote, "/shared", factile.MountOptions{Revision: revision, RevisionSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(remotePath, remotePath+".offline"); err != nil {
+		t.Fatal(err)
+	}
+	const source = "/component/guide"
+	const destination = "/shared/guides/setup"
+	for _, scope := range []string{source, "/component", "/"} {
+		graph, err := ws.Graph(ctx, scope, factile.GraphOptions{Depth: 1})
+		wantEdge := scope != "/component"
+		if err != nil || graphHasEdge(graph, source, destination) != wantEdge || len(graph.Issues) != 1 ||
+			!hasValidationIssue(graph.Issues, "warning", "broken_link", source, "/shared/missing.md") {
+			t.Errorf("graph %s should only warn about the missing link: %#v, %v", scope, graph, err)
+		}
+		report, err := ws.Validate(ctx, scope, factile.ValidateOptions{})
+		if err != nil || !report.Valid || len(report.Issues) != 1 ||
+			!hasValidationIssue(report.Issues, "warning", "broken_link", source, "/shared/missing.md") {
+			t.Errorf("validation %s should only warn about the missing link: %#v, %v", scope, report, err)
+		}
+	}
+	read, err := ws.Read(ctx, source, factile.ReadOptions{})
+	if err != nil || read.Concept.WorkspaceLinks["/shared/guides/setup.md"] != destination {
+		t.Errorf("document should link to the same cached target: %#v, %v", read.Concept.WorkspaceLinks, err)
+	}
+}
+
 func TestWorkspaceValidateReportsInvalidGitMountsAsScopedIssues(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "root")

@@ -82,6 +82,16 @@ func (c *Cache) Status(intent Intent) (vfs.SourceStatus, error) {
 	return status, err
 }
 
+// CachedResolution reports the selected snapshot without fetching or modifying cache state.
+// SourcePath is empty when the current selector has no usable snapshot.
+func (c *Cache) CachedResolution(intent Intent) (Resolution, error) {
+	status, snapshot, err := c.cachedStatus(intent)
+	if err != nil {
+		return Resolution{}, err
+	}
+	return resolutionFromStatus(snapshot, status, false), nil
+}
+
 func (c *Cache) cachedStatus(intent Intent) (vfs.SourceStatus, string, error) {
 	selected, err := validateIntent(intent)
 	if err != nil {

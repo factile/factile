@@ -86,7 +86,7 @@ func (w *LocalWorkspace) ValidateDraft(ctx context.Context, path string, input D
 	if input.Create != nil && strings.TrimSpace(input.Create.Title) == "" {
 		issues = append(issues, ValidationIssue{Severity: "error", Code: "missing_title", Message: "Title is required for a new document", Path: target.Path})
 	}
-	issues = append(issues, linkIssues(items, mounts)...)
+	issues = append(issues, linkIssues(items, w.cachedLinkMounts(mounts))...)
 	scope := schemaScope{Mount: target.Mount, Path: target.Path, Concepts: items, Issues: issues}
 	return w.applyConceptSchemas(ctx, baseValidation(target.Path, issues), []schemaScope{scope})
 }

@@ -146,6 +146,34 @@ func (w *LocalWorkspace) hydrateMountIndexes(ctx context.Context, mounts []vfs.M
 	return mounts, nil
 }
 
+// cachedLinkMounts also resolves links into cached Git bundles outside a scan's scope.
+func (w *LocalWorkspace) cachedLinkMounts(mounts []vfs.Mount) []vfs.Mount {
+	var cache *gitsource.Cache
+	for index, mount := range mounts {
+		if mount.Kind != vfs.SourceKindGit || mount.SourcePath != "" {
+			continue
+		}
+		if cache == nil {
+			workspace, err := w.resolvedWorkspace()
+			if err != nil {
+				return mounts
+			}
+			cache, err = gitsource.OpenCacheForStatus(workspace, gitsource.NewRunner())
+			if err != nil {
+				return mounts
+			}
+			mounts = append([]vfs.Mount(nil), mounts...)
+		}
+		resolution, err := cache.CachedResolution(gitIntent(mount))
+		if err == nil && resolution.SourcePath != "" {
+			mount.SourcePath = resolution.SourcePath
+			mount.SourceStatus = &resolution.Status
+			mounts[index] = mount
+		}
+	}
+	return mounts
+}
+
 func normalizeGitSourceError(err error) error {
 	var selection *gitsource.SelectionError
 	if errors.As(err, &selection) {
