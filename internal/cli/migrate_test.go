@@ -125,7 +125,7 @@ func TestMigrationAmbiguityAndValidationNeverPartiallyApply(t *testing.T) {
 		"custom status":         "---\ntype: Note\nstatus: proposal\n---\n# Note\n",
 		"conflicting lifecycle": "---\ntype: Note\nstatus: draft\ndeprecated: true\n---\n# Note\n",
 		"unattributed citation": "---\ntype: Note\n---\n# Citations\nUnclear source\n",
-		"invalid concept":       "---\ntitle: Missing type\n---\n# Note\n",
+		"invalid concept":       "---\ntype: [broken\n---\n# Note\n",
 		"unknown version":       "---\nokf_version: next\n---\n# Index\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -171,4 +171,48 @@ func TestMigrationUsesNativeSchemaValidationAndSkipsSymlinks(t *testing.T) {
 	if string(got) != "not a concept" {
 		t.Fatal("followed symlink")
 	}
+}
+
+func TestMigrationPreviewListsPhysicalInventory(t *testing.T) {
+	root := t.TempDir()
+	writeCLITestFile(t, filepath.Join(root, "index.md"), "# Plain index\n")
+	writeCLITestFile(t, filepath.Join(root, "README.md"), "# Ordinary Markdown\n")
+	writeCLITestFile(t, filepath.Join(root, "file.json"), "{\"keep\":true}\n")
+	writeCLITestFile(t, filepath.Join(root, "child/index.md"), "---\nokf_version: \"0.2\"\n---\n")
+	writeCLITestFile(t, filepath.Join(root, "child/concept.md"), "---\ntype: Separate\n---\n")
+	snapshot := runMigrationPreview(t, root, 3)
+	if snapshot["source_version"] != "unversioned" {
+		t.Fatalf("unexpected version: %v", snapshot)
+	}
+	entries := snapshot["inventory"].([]any)
+	indexed := map[string]map[string]any{}
+	for _, raw := range entries {
+		entry := raw.(map[string]any)
+		indexed[entry["path"].(string)] = entry
+	}
+	if indexed["README.md"]["kind"] != "ordinary_markdown" || indexed["file.json"]["revision"] == nil ||
+		indexed["child"]["kind"] != "nested_bundle" || indexed["child/concept.md"] != nil {
+		t.Fatalf("unexpected inventory: %v", indexed)
+	}
+	sub := runMigrationPreview(t, filepath.Join(root, "child"), 0)
+	if sub["source_version"] != "0.2" {
+		t.Fatalf("unexpected child version: %v", sub["source_version"])
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "index.md")); err != nil || string(data) != "# Plain index\n" {
+		t.Fatalf("preview changed root: %s %v", data, err)
+	}
+}
+
+func runMigrationPreview(t *testing.T, root string, expectedStatus int) map[string]any {
+	t.Helper()
+	var out, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"migrate", root, "--json"}, nil, &out, &stderr)
+	if code != expectedStatus {
+		t.Fatalf("exit %d, want %d: %s %s", code, expectedStatus, out.String(), stderr.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

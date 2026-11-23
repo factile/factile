@@ -56,9 +56,15 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			return 0, factile.NewError(factile.ErrSourceReadOnly, "Cannot migrate tool-private or Git cache content")
 		}
 	}
-	ids, err := store.ListDocumentIDs("")
+	store.Portable = true
+	inventory, err := inspectMigrationInventory(store)
 	if err != nil {
 		return 0, err
+	}
+	ids := inventory.IDs
+	sourceVersion := inventory.Version
+	if sourceVersion == "" {
+		sourceVersion = "unversioned"
 	}
 	type finding struct {
 		Path     string `json:"path"`
@@ -74,12 +80,14 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		Applied bool   `json:"applied"`
 	}
 	report := struct {
-		Bundle     string                   `json:"bundle"`
-		Apply      bool                     `json:"apply"`
-		Changes    []change                 `json:"changes"`
-		Findings   []finding                `json:"findings"`
-		Validation factile.ValidationResult `json:"validation"`
-	}{Bundle: store.Root, Apply: *apply, Changes: []change{}, Findings: []finding{}}
+		Bundle        string                   `json:"bundle"`
+		SourceVersion string                   `json:"source_version"`
+		Inventory     []migrationEntry         `json:"inventory"`
+		Apply         bool                     `json:"apply"`
+		Changes       []change                 `json:"changes"`
+		Findings      []finding                `json:"findings"`
+		Validation    factile.ValidationResult `json:"validation"`
+	}{Bundle: store.Root, SourceVersion: sourceVersion, Inventory: inventory.Entries, Apply: *apply, Changes: []change{}, Findings: []finding{}}
 	before := map[string][]byte{}
 	after := map[string][]byte{}
 	blocked := false
@@ -87,6 +95,17 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 	note := func(id, code, message string, blocking bool) {
 		report.Findings = append(report.Findings, finding{id + ".md", code, message, blocking})
 		blocked = blocked || blocking
+	}
+	for _, item := range inventory.Entries {
+		if item.Kind == "nested_bundle" {
+			report.Findings = append(report.Findings, finding{item.Path, "nested_bundle", "Select this physical bundle separately or remove it from the outer distribution before migrating the outer bundle", true})
+			blocked = true
+		}
+	}
+	switch inventory.Version {
+	case "", "0.1", "0.2", "0.3":
+	default:
+		note("index", "unknown_version", "Unknown OKF version "+inventory.Version+"; migration cannot downgrade it", true)
 	}
 	citationHeading := regexp.MustCompile(`^(#{1,6})[ \t]+Citations[ \t]*#*[ \t]*$`)
 	heading := regexp.MustCompile(`^(#{1,6})[ \t]+`)
@@ -96,12 +115,12 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		data, _, err := store.ReadConcept(id)
-		if err != nil {
-			return 0, err
-		}
+		data := inventory.Inputs[id]
 		before[id] = data
 		after[id] = data
+		if inventory.Version == "0.3" || (inventory.Version != "" && inventory.Version != "0.1" && inventory.Version != "0.2") {
+			continue
+		}
 		doc, err := okf.ParseConcept(id, data)
 		if err != nil {
 			note(id, "parse_error", err.Error(), true)
@@ -364,11 +383,11 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		}
 		err = storage.WithFileLocks(targets, func() error {
 			// Check all observed input revisions before replacing any file.
-			currentIDs, e := store.ListDocumentIDs("")
+			current, e := inspectMigrationInventory(store)
 			if e != nil {
 				return e
 			}
-			if !reflect.DeepEqual(currentIDs, ids) {
+			if !reflect.DeepEqual(current.Entries, inventory.Entries) {
 				return factile.NewError(factile.ErrRevisionMismatch, "Bundle document inventory changed; preview again")
 			}
 			for _, id := range ids {
@@ -405,7 +424,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			return 0, e
 		}
 	} else {
-		fmt.Fprintf(stdout, "Bundle: %s\nChanges: %d; apply: %t; valid: %t\n", report.Bundle, len(report.Changes), report.Apply, report.Validation.Valid)
+		fmt.Fprintf(stdout, "Bundle: %s\nSource version: %s\nInventory entries: %d\nChanges: %d; apply: %t; valid: %t\n", report.Bundle, report.SourceVersion, len(report.Inventory), len(report.Changes), report.Apply, report.Validation.Valid)
 		for _, item := range report.Changes {
 			fmt.Fprint(stdout, item.Diff)
 		}
