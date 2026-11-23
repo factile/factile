@@ -75,7 +75,7 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string, ke
 	if err != nil {
 		return MovePlan{}, NormalizeError(err)
 	}
-	result, planned, err := buildMovePlan(store, oldTarget, newTarget, keep)
+	result, planned, err := buildMovePlan(store, mounts, oldTarget, newTarget, keep)
 	if err != nil || expectedPlan == "" {
 		return result, NormalizeError(err)
 	}
@@ -97,7 +97,7 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string, ke
 		if err := checkMoveDestination(currentMounts, newTarget); err != nil {
 			return err
 		}
-		latest, changes, err := buildMovePlan(store, oldTarget, newTarget, keep)
+		latest, changes, err := buildMovePlan(store, currentMounts, oldTarget, newTarget, keep)
 		if err != nil {
 			return err
 		}
@@ -145,10 +145,28 @@ func checkMoveDestination(mounts []vfs.Mount, destination vfs.Target) error {
 	return nil
 }
 
-func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target, keepOld bool) (MovePlan, []moveFile, error) {
+func buildMovePlan(store storage.Local, mounts []vfs.Mount, oldTarget, newTarget vfs.Target, keepOld bool) (MovePlan, []moveFile, error) {
 	result := MovePlan{OldPath: oldTarget.Path, NewPath: newTarget.Path, KeepOld: keepOld, Changes: []MoveChange{}}
 	var planned []moveFile
-	ids, err := store.ListDocumentIDs("")
+	mountedRoots := make(map[string]bool, len(mounts))
+	for _, mount := range mounts {
+		mountedRoots[mount.SourcePath] = true
+	}
+	nestedRoot := func(dir string) bool {
+		if mountedRoots[dir] {
+			return true
+		}
+		manifest, _ := vfs.LoadManifest(dir)
+		return manifest.Bundle != nil || vfs.SelectOKF(vfs.Mount{SourcePath: dir}, true).OKFVersion != ""
+	}
+	for _, target := range []vfs.Target{oldTarget, newTarget} {
+		for parent := path.Dir(target.ConceptID); parent != "."; parent = path.Dir(parent) {
+			if nestedRoot(filepath.Join(store.Root, filepath.FromSlash(parent))) {
+				return result, nil, errorf(ErrInvalidPath, "Move path belongs to a separate physical bundle: %s", target.Path)
+			}
+		}
+	}
+	ids, err := store.ListDocumentIDsSkipping(nestedRoot)
 	if err != nil {
 		return result, nil, err
 	}

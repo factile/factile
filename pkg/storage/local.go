@@ -194,14 +194,19 @@ func (s Local) ResourceExists(rel string) bool {
 }
 
 func (s Local) ListConceptIDs(prefix string) ([]string, error) {
-	return s.listMarkdownIDs(prefix, false)
+	return s.listMarkdownIDs(prefix, false, nil)
 }
 
 func (s Local) ListDocumentIDs(prefix string) ([]string, error) {
-	return s.listMarkdownIDs(prefix, true)
+	return s.listMarkdownIDs(prefix, true, nil)
 }
 
-func (s Local) listMarkdownIDs(prefix string, reserved bool) ([]string, error) {
+// ListDocumentIDsSkipping prunes the absolute directories selected by skipDir.
+func (s Local) ListDocumentIDsSkipping(skipDir func(string) bool) ([]string, error) {
+	return s.listMarkdownIDs("", true, skipDir)
+}
+
+func (s Local) listMarkdownIDs(prefix string, reserved bool, skipDir func(string) bool) ([]string, error) {
 	prefix = okf.NormalizeConceptID(prefix)
 	root := s.Root
 	if prefix != "" {
@@ -230,7 +235,8 @@ func (s Local) listMarkdownIDs(prefix string, reserved bool) ([]string, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if p != root && (strings.EqualFold(name, ".factile") || strings.EqualFold(name, ".git")) {
+			if p != root && (strings.EqualFold(name, ".factile") || strings.EqualFold(name, ".git") ||
+				skipDir != nil && skipDir(p)) {
 				return filepath.SkipDir
 			}
 			return nil

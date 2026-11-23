@@ -133,6 +133,55 @@ func TestPortableSuccessorMoveAcrossBundleBoundary(t *testing.T) {
 	}
 }
 
+func TestMovePrunesNestedBundleBeforePlanningAndApply(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeRootConfig(t, root)
+	mustWriteWorkspace(t, filepath.Join(root, "index.md"), "---\nokf_version: \"0.3\"\n---\n")
+	writeOKFFile(t, filepath.Join(root, "original.md"), "Guide", "Parent", "Parent document.\n")
+	writeOKFFile(t, filepath.Join(root, "inbound.md"), "Guide", "Inbound", "[Parent](/original.md)\n")
+	child := filepath.Join(root, "child-source")
+	nestedFile := filepath.Join(child, "inbound.md")
+	original := "---\ntype: Guide\nresource: /original.md\n---\n[Child](/original.md)\n"
+	mustWriteWorkspace(t, nestedFile, original)
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	stale, err := ws.MoveWithLinks("/original", "/replacement", "", true)
+	if err != nil || len(stale.Changes) != 3 {
+		t.Fatalf("original preview = %#v, %v", stale, err)
+	}
+
+	writeRootConfig(t, child)
+	writeOKFFile(t, filepath.Join(child, "original.md"), "Guide", "Child", "Child document.\n")
+	if _, err := ws.Mount(ctx, child, "/child", factile.MountOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ws.MoveWithLinks("/original", "/replacement", stale.Plan, true); factile.ErrorCode(err) != factile.ErrRevisionMismatch {
+		t.Fatalf("preview from before the boundary change applied or returned the wrong error: %v", err)
+	}
+	if _, err := ws.MoveWithLinks("/original", "/child-source/replacement", "", true); factile.ErrorCode(err) != factile.ErrInvalidPath {
+		t.Fatalf("moving into the child using its physical path returned %v", err)
+	}
+	preview, err := ws.MoveWithLinks("/original", "/replacement", "", true)
+	if err != nil || len(preview.Changes) != 2 {
+		t.Fatalf("scoped preview = %#v, %v", preview, err)
+	}
+	if _, err := ws.MoveWithLinks("/original", "/replacement", preview.Plan, true); err != nil {
+		t.Fatal(err)
+	}
+	nested, err := os.ReadFile(nestedFile)
+	if err != nil || string(nested) != original {
+		t.Fatalf("child document changed: %s, %v", nested, err)
+	}
+	parent, err := ws.Read(ctx, "/inbound", factile.ReadOptions{})
+	if err != nil || !strings.Contains(parent.Concept.Markdown, "[Parent](/replacement.md)") {
+		t.Fatalf("parent backlink was not repaired: %#v, %v", parent, err)
+	}
+	stub, err := ws.Read(ctx, "/original", factile.ReadOptions{})
+	if err != nil || stub.Concept.Successor != "/replacement" {
+		t.Fatalf("parent stub = %#v, %v", stub, err)
+	}
+}
+
 func TestPortableDeprecationChain(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
