@@ -789,7 +789,7 @@ func ensureInitLayout(layout initLayout, now time.Time) ([]FileChange, error) {
 		changes = append(changes, change)
 	}
 
-	knowledge, err := ensureKnowledgeBundle(workDir, layout.rootBundleDir, layout.bundle, now, layout.rootManifest == nil || layout.rootManifest.Bundle == nil)
+	knowledge, err := ensureKnowledgeBundle(workDir, layout.rootBundleDir, layout.bundle, now)
 	if err != nil {
 		return nil, err
 	}
@@ -867,17 +867,14 @@ func quoteTOMLString(value string) string {
 	return b.String()
 }
 
-func ensureKnowledgeBundle(workDir, bundlePath string, bundle vfs.BundleConfig, now time.Time, newBundle bool) ([]FileChange, error) {
+func ensureKnowledgeBundle(workDir, bundlePath string, bundle vfs.BundleConfig, now time.Time) ([]FileChange, error) {
 	index := indexMarkdown(bundle)
-	if !newBundle {
-		store := storage.Local{Root: bundlePath}
-		documents, err := store.ListDocumentIDs("")
-		if err != nil {
-			return nil, err
-		}
-		newBundle = len(documents) == 0
+	store := storage.Local{Root: bundlePath}
+	documents, err := store.ListDocumentIDs("")
+	if err != nil {
+		return nil, err
 	}
-	if !newBundle {
+	if len(documents) > 0 {
 		// A missing index in an existing bundle has no version declaration to retain.
 		_, body, _ := strings.Cut(index, "\n---\n")
 		index = strings.TrimLeft(body, "\n")

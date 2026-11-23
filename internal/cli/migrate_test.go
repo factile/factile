@@ -14,6 +14,38 @@ import (
 	"github.com/factile/factile/pkg/storage"
 )
 
+func TestInitPreservesMigrationForExistingIndexlessBundle(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.Mkdir("docs", 0755); err != nil {
+		t.Fatal(err)
+	}
+	const legacy = "---\ntype: Note\ntimestamp: 2026-02-03\n---\n# Old note\n"
+	if err := os.WriteFile("docs/note.md", []byte(legacy), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runCLIJSON[map[string]any](t, "init", "--root", "docs", "--agent", "none", "--json")
+	index, err := os.ReadFile("docs/index.md")
+	if err != nil || bytes.Contains(index, []byte("okf_version")) {
+		t.Fatalf("init index = %q, %v", index, err)
+	}
+	preview := runCLIJSON[struct {
+		SourceVersion string `json:"source_version"`
+		Changes       []any  `json:"changes"`
+	}](t, "migrate", "docs", "--json")
+	if preview.SourceVersion != "unversioned" || len(preview.Changes) != 2 {
+		t.Fatalf("unexpected migration preview: %#v", preview)
+	}
+	runCLIJSON[map[string]any](t, "migrate", "docs", "--apply", "--json")
+	note, err := os.ReadFile("docs/note.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	concept, err := okf.ParseConcept("note", note)
+	if err != nil || concept.Frontmatter["timestamp"] != nil || !bytes.Contains(note, []byte("legacy_metadata:")) || !bytes.Contains(note, []byte("2026-02-03")) {
+		t.Fatalf("migration note = %q, %v", note, err)
+	}
+}
+
 func TestMigrationPreviewApplyAndIdempotence(t *testing.T) {
 	root := t.TempDir()
 	files := map[string]string{
