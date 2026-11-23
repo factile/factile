@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	clirender "github.com/factile/factile/internal/cli/render"
+	"github.com/factile/factile/internal/selfupdate"
 	"github.com/factile/factile/pkg/bootstrap"
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/mcpserver"
@@ -146,6 +147,33 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 		return runCommand(ctx, ws, append(append([]string{}, args[1:]...), "--help"), global, stdin, stdout, stderr)
 	case "--help", "-h":
 		return 0, writeHelp(stdout, global)
+	case "update":
+		const help = "factile update [--json]\nUpdate the installed Factile CLI to the latest published stable release."
+		if hasHelp(args) {
+			return showUsage(stdout, help)
+		}
+		if len(args) != 1 {
+			return usage(global, stdout, help)
+		}
+		if os.Getenv("FACTILE_NPM_LAUNCHER") == "1" {
+			// The npm launcher takes over after the native executable exits.
+			return 80, nil
+		}
+		result, err := selfupdate.Run(ctx, version.Current().Version)
+		if err != nil {
+			return 1, factile.NewError("update_failed", "update Factile: "+err.Error())
+		}
+		if global.structuredOutput() {
+			return writeResult(stdout, global, result)
+		}
+		if !global.Quiet {
+			if result.Updated {
+				_, err = fmt.Fprintf(stdout, "Updated Factile from %s to %s.\n", result.Installed, result.Target)
+			} else {
+				_, err = fmt.Fprintf(stdout, "Factile %s is up to date (latest release %s).\n", result.Installed, result.Target)
+			}
+		}
+		return 0, err
 	case "version":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile version")

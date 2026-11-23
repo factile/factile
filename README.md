@@ -57,6 +57,12 @@ If you prefer the scoped package name, it is available as an alias:
 npm install -g @factile/cli
 ```
 
+Run `factile update` (or `ft update`) from any directory to upgrade to the
+latest stable release. For npm installations the launcher upgrades its owning
+npm package. For a standalone executable, Factile verifies the official release
+archive against its published SHA-256 checksum before replacing the installed
+binary. Use `factile update --json` for a machine-readable result.
+
 Other install methods are available when npm is not the right fit.
 
 Build or install from source:

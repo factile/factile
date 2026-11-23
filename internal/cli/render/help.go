@@ -30,6 +30,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 		{command: "factile list / --brief", description: "Show compact reader cards"},
 		{command: "factile context / \"what should I know?\"", description: "Gather task context"},
 		{command: "factile ui", description: "Open the local browser reader"},
+		{command: "factile update", description: "Update the installed CLI to the latest stable release"},
 		{command: "factile version", description: "Show build version"},
 		{command: "factile help <command>", description: "Show command options and examples"},
 	}); err != nil {

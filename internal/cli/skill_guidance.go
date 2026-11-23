@@ -13,7 +13,7 @@ func writeSkillWarnings(stderr io.Writer, global globals, args []string) {
 	}
 	if len(args) > 0 {
 		switch args[0] {
-		case "init", "skill", "version", "mcp", "help":
+		case "init", "skill", "version", "update", "mcp", "help":
 			return
 		}
 	}

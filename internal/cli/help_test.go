@@ -12,7 +12,7 @@ import (
 
 func TestHelpRoutesDoNotNeedWorkspace(t *testing.T) {
 	missing := t.TempDir() + "/missing"
-	for _, command := range [][]string{{"migrate"}, {"patch"}, {"create"}, {"write"}, {"rename"}, {"delete"}, {"deprecate"}, {"mkdir"}, {"view", "set"}, {"mcp", "serve"}} {
+	for _, command := range [][]string{{"update"}, {"migrate"}, {"patch"}, {"create"}, {"write"}, {"rename"}, {"delete"}, {"deprecate"}, {"mkdir"}, {"view", "set"}, {"mcp", "serve"}} {
 		var want bytes.Buffer
 		canonical := append(append([]string{}, command...), "--help")
 		if code := Run(context.Background(), canonical, nil, &want, &bytes.Buffer{}); code != 0 {

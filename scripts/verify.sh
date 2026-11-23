@@ -35,6 +35,7 @@ go build -ldflags '-X github.com/factile/factile/pkg/version.Version=v0.0.1' -o 
 
 factile_bin="$tmpdir/factile"
 
+python3 test/update-smoke.py "$factile_bin"
 python3 scripts/compare-editing.py "$factile_bin" > "$tmpdir/editing-comparison.json"
 
 require_contains() {

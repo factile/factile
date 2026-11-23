@@ -6,6 +6,7 @@ binaries.
 ```bash
 npm install -g factile
 factile version
+factile update
 ```
 
 The `ft` command is also installed as a shorter alias.

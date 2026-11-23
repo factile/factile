@@ -2,6 +2,7 @@
 
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
+const { updatePackage } = require("./update");
 
 const targets = {
   "linux-x64": {
@@ -57,7 +58,10 @@ function run(argv = process.argv.slice(2)) {
     process.exit(1);
   }
 
-  const result = spawnSync(binary, argv, { stdio: "inherit" });
+  const result = spawnSync(binary, argv, {
+    stdio: "inherit",
+    env: { ...process.env, FACTILE_NPM_LAUNCHER: "1" },
+  });
   if (result.error) {
     console.error(`failed to run ${binary}: ${result.error.message}`);
     process.exit(1);
@@ -65,6 +69,11 @@ function run(argv = process.argv.slice(2)) {
   if (result.signal) {
     console.error(`factile exited due to signal ${result.signal}`);
     process.exit(1);
+  }
+  // Only a validated update command returns 80. Release the native binary
+  // before asking npm to replace its package (especially on Windows).
+  if (result.status === 80) {
+    return updatePackage(argv);
   }
   process.exit(result.status === null ? 1 : result.status);
 }
