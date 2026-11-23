@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -150,6 +151,46 @@ func TestMigrationPreviewApplyAndIdempotence(t *testing.T) {
 		actual, _ := os.ReadFile(filepath.Join(root, name))
 		if string(actual) != files[name] {
 			t.Fatal("changed unrelated file", name)
+		}
+	}
+}
+
+func TestMigrationPreservesExistingFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix permissions")
+	}
+	root := t.TempDir()
+	fixtures := []struct {
+		name string
+		body string
+		mode os.FileMode
+	}{
+		{"index.md", "---\nokf_version: \"0.2\"\n---\n", 0644},
+		{"private.md", "---\ntype: Note\ntimestamp: 2026-02-03\n---\n", 0600},
+	}
+	for _, fixture := range fixtures {
+		filename := filepath.Join(root, fixture.name)
+		writeCLITestFile(t, filename, fixture.body)
+		if err := os.Chmod(filename, fixture.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preview := runMigrationPreview(t, root, 0)
+	applied := runCLIJSON[struct{ Changes []migrationChange }](t, "migrate", root, "--apply", "--expect-plan", preview["plan_revision"].(string), "--json")
+	if len(applied.Changes) != 2 || !applied.Changes[0].Applied || !applied.Changes[1].Applied {
+		t.Fatalf("migration did not replace both files: %#v", applied.Changes)
+	}
+	repeated := runCLIJSON[struct{ Changes []migrationChange }](t, "migrate", root, "--apply", "--json")
+	if len(repeated.Changes) != 0 {
+		t.Fatalf("second apply changed files: %#v", repeated.Changes)
+	}
+	for _, fixture := range fixtures {
+		info, err := os.Stat(filepath.Join(root, fixture.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != fixture.mode {
+			t.Fatalf("%s mode = %o, want %o", fixture.name, mode, fixture.mode)
 		}
 	}
 }

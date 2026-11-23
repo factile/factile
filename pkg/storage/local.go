@@ -269,8 +269,12 @@ func (s Local) AtomicReplace(conceptID string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectSymlink(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(file)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if info != nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: non-regular concept file %s", ErrUnsafePath, file)
 	}
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return err
@@ -284,6 +288,12 @@ func (s Local) AtomicReplace(conceptID string, data []byte) error {
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
+	}
+	if info != nil {
+		if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+			tmp.Close()
+			return err
+		}
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
