@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/factile/factile/pkg/okf"
+	"github.com/factile/factile/pkg/storage"
 )
 
 func TestMigrationPreviewApplyAndIdempotence(t *testing.T) {
@@ -275,4 +277,80 @@ func TestMigrationConvertsSixLegacyPathFields(t *testing.T) {
 func prettyMigration(value any) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+func TestMigrationRejectsStaleReviewedPlan(t *testing.T) {
+	root := t.TempDir()
+	writeCLITestFile(t, filepath.Join(root, "note.md"), "---\ntype: Note\n---\n")
+	writeCLITestFile(t, filepath.Join(root, "asset.txt"), "original\n")
+	plan := runMigrationPreview(t, root, 0)["plan_revision"].(string)
+	for _, args := range [][]string{
+		{"asset.txt", "changed asset\n"},
+		{"another.md", "---\ntype: Added\n---\n"},
+	} {
+		writeCLITestFile(t, filepath.Join(root, args[0]), args[1])
+		var out, stderr bytes.Buffer
+		status := Run(context.Background(), []string{"migrate", root, "--apply", "--expect-plan", plan, "--json"}, nil, &out, &stderr)
+		if status != 3 || !strings.Contains(out.String(), "stale_plan") {
+			t.Fatalf("stale plan accepted: %d %s %s", status, out.String(), stderr.String())
+		}
+		if _, err := os.Stat(filepath.Join(root, "index.md")); !os.IsNotExist(err) {
+			t.Fatalf("stale plan wrote the marker: %v", err)
+		}
+		plan = runMigrationPreview(t, root, 0)["plan_revision"].(string)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Run(context.Background(), []string{"migrate", root, "--apply", "--expect-plan", plan, "--json"}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("reviewed plan failed: %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if changes := runMigrationPreview(t, root, 0)["changes"].([]any); len(changes) != 0 {
+		t.Fatalf("rerun proposed changes: %v", changes)
+	}
+}
+
+func TestMigrationFailureLeavesRootMarkerForRetry(t *testing.T) {
+	root := t.TempDir()
+	const oldRoot = "---\nokf_version: \"0.2\"\n---\n"
+	writeCLITestFile(t, filepath.Join(root, "index.md"), oldRoot)
+	for _, name := range []string{"first", "second"} {
+		writeCLITestFile(t, filepath.Join(root, name+".md"), "---\ntype: Note\ntimestamp: 2020-01-01\n---\n")
+	}
+	store := storage.Local{Root: root, Portable: true}
+	inventory, err := inspectMigrationInventory(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := map[string][]byte{
+		"index": []byte(strings.Replace(oldRoot, "0.2", "0.3", 1)),
+	}
+	for _, name := range []string{"first", "second"} {
+		after[name] = []byte("---\ntype: Note\nlegacy_metadata: {timestamp: 2020-01-01}\n---\n")
+	}
+	changes := make([]migrationChange, 0, len(after))
+	for _, id := range []string{"index", "first", "second"} {
+		changes = append(changes, migrationChange{
+			Path: id + ".md", Before: migrationRevision(inventory.Inputs[id]), After: migrationRevision(after[id]),
+		})
+	}
+	failure := fmt.Errorf("simulated write failure")
+	err = applyMigration(context.Background(), store, inventory, changes, after, func(id string, data []byte) error {
+		if id == "second" {
+			return failure
+		}
+		return store.AtomicReplace(id, data)
+	})
+	if err != failure || changes[0].Applied || !changes[1].Applied || changes[2].Applied {
+		t.Fatalf("unexpected failure receipt: %v %v", err, changes)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, "index.md")); string(raw) != oldRoot {
+		t.Fatalf("marker published after partial failure: %s", raw)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"migrate", root, "--apply", "--json"}, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("retry failed: %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if changes := runMigrationPreview(t, root, 0)["changes"].([]any); len(changes) != 0 {
+		t.Fatalf("retry failed to converge: %v", changes)
+	}
 }

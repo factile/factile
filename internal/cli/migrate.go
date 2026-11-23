@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -26,9 +25,9 @@ import (
 
 // migrateOKF performs an explicit physical bundle upgrade.
 func migrateOKF(ctx context.Context, args []string, global globals, stdout io.Writer) (int, error) {
-	const usageText = `factile migrate <physical-bundle-directory> [--apply] [--json]
+	const usageText = `factile migrate <physical-bundle-directory> [--apply [--expect-plan <revision>]] [--json]
 Preview an upgrade from OKF 0.1, 0.2, or unversioned input to 0.3.
-Use --apply to write the validated plan.
+Use --apply to write the validated plan. --expect-plan checks an earlier preview.
 The selected directory is the physical bundle. Mounts are ignored.
 Resolve blocking findings before applying. Historical producers and reviews are
 never invented. Missing history is retained in legacy_metadata and reported.
@@ -39,14 +38,15 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	apply := fs.Bool("apply", false, "")
-	ordered, err := reorderFlags(args[1:], map[string]bool{"--apply": false})
+	expectedPlan := fs.String("expect-plan", "", "")
+	ordered, err := reorderFlags(args[1:], map[string]bool{"--apply": false, "--expect-plan": true})
 	if err != nil {
 		return 2, err
 	}
 	if err := fs.Parse(ordered); err != nil {
 		return 2, err
 	}
-	if fs.NArg() != 1 {
+	if fs.NArg() != 1 || *expectedPlan != "" && !*apply {
 		return usage(global, stdout, usageText)
 	}
 	store, err := storage.NewLocal(fs.Arg(0))
@@ -75,23 +75,17 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		Message  string `json:"message"`
 		Blocking bool   `json:"blocking"`
 	}
-	type change struct {
-		Path    string `json:"path"`
-		Before  string `json:"before_revision"`
-		After   string `json:"after_revision"`
-		Diff    string `json:"diff"`
-		Applied bool   `json:"applied"`
-	}
 	report := struct {
 		Bundle        string                   `json:"bundle"`
 		TargetVersion string                   `json:"target_version"`
 		SourceVersion string                   `json:"source_version"`
+		PlanRevision  string                   `json:"plan_revision"`
 		Inventory     []migrationEntry         `json:"inventory"`
 		Apply         bool                     `json:"apply"`
-		Changes       []change                 `json:"changes"`
+		Changes       []migrationChange        `json:"changes"`
 		Findings      []finding                `json:"findings"`
 		Validation    factile.ValidationResult `json:"validation"`
-	}{Bundle: store.Root, TargetVersion: "0.3", SourceVersion: sourceVersion, Inventory: inventory.Entries, Apply: *apply, Changes: []change{}, Findings: []finding{}}
+	}{Bundle: store.Root, TargetVersion: "0.3", SourceVersion: sourceVersion, Inventory: inventory.Entries, Apply: *apply, Changes: []migrationChange{}, Findings: []finding{}}
 	before := map[string][]byte{}
 	after := map[string][]byte{}
 	blocked := false
@@ -323,7 +317,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			return 0, err
 		}
 		if !bytes.Equal(before[id], after[id]) {
-			report.Changes = append(report.Changes, change{Path: id + ".md", Before: migrationRevision(before[id]), After: revision.DigestBytes(after[id]), Diff: patch.Diff(id+".md", string(before[id]), string(after[id]))})
+			report.Changes = append(report.Changes, migrationChange{Path: id + ".md", Before: migrationRevision(before[id]), After: revision.DigestBytes(after[id]), Diff: patch.Diff(id+".md", string(before[id]), string(after[id]))})
 		}
 	}
 	report.Validation, err = factile.NewWorkspace(factile.WorkspaceOptions{OKFBundle: stage, IncludeConceptSchemas: true}).Validate(ctx, "/", factile.ValidateOptions{})
@@ -331,51 +325,13 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		return 0, err
 	}
 	blocked = blocked || !report.Validation.Valid
+	report.PlanRevision = migrationPlanRevision(store.Root, inventory, report.Changes)
+	if *expectedPlan != "" && *expectedPlan != report.PlanRevision {
+		note("index", "stale_plan", "Bundle inventory or proposed edits changed; review a new preview", true)
+	}
 	if *apply && !blocked {
-		targets := []string{}
-		for _, id := range ids {
-			file, e := store.ConceptFile(id)
-			if e != nil {
-				return 0, e
-			}
-			targets = append(targets, file)
-		}
-		err = storage.WithFileLocks(targets, func() error {
-			// Check all observed input revisions before replacing any file.
-			current, e := inspectMigrationInventory(store)
-			if e != nil {
-				return e
-			}
-			if !reflect.DeepEqual(current.Entries, inventory.Entries) {
-				return factile.NewError(factile.ErrRevisionMismatch, "Bundle document inventory changed; preview again")
-			}
-			for _, id := range ids {
-				current, _, e := store.ReadConcept(id)
-				if errors.Is(e, os.ErrNotExist) && before[id] == nil {
-					continue
-				}
-				if e != nil {
-					return e
-				}
-				if !bytes.Equal(current, before[id]) {
-					return factile.NewError(factile.ErrRevisionMismatch, "Bundle changed while migration was being prepared; preview again")
-				}
-			}
-			for i := range report.Changes {
-				item := &report.Changes[i]
-				id := strings.TrimSuffix(item.Path, ".md")
-				if e := ctx.Err(); e != nil {
-					return e
-				}
-				if e := store.AtomicReplace(id, after[id]); e != nil {
-					return e
-				}
-				item.Applied = true
-			}
-			return nil
-		})
-		if err != nil {
-			note("", "apply_failed", err.Error(), true)
+		if err = applyMigration(ctx, store, inventory, report.Changes, after, store.AtomicReplace); err != nil {
+			note("index", "apply_failed", err.Error()+"; the root declaration is finalized only after document writes. Preview before retrying.", true)
 		}
 	}
 	sort.SliceStable(report.Findings, func(i, j int) bool { return report.Findings[i].Path < report.Findings[j].Path })
@@ -386,7 +342,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			return 0, e
 		}
 	} else {
-		fmt.Fprintf(stdout, "Bundle: %s\nSource version: %s\nInventory entries: %d\nChanges: %d; apply: %t; valid: %t\n", report.Bundle, report.SourceVersion, len(report.Inventory), len(report.Changes), report.Apply, report.Validation.Valid)
+		fmt.Fprintf(stdout, "Bundle: %s\nSource version: %s\nPlan revision: %s\nInventory entries: %d\nChanges: %d; apply: %t; valid: %t\n", report.Bundle, report.SourceVersion, report.PlanRevision, len(report.Inventory), len(report.Changes), report.Apply, report.Validation.Valid)
 		for _, item := range report.Changes {
 			fmt.Fprint(stdout, item.Diff)
 		}

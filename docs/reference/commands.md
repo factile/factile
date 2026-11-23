@@ -299,7 +299,7 @@ behavior in v2.
 
 ## Explicit Bundle Migration
 
-`factile migrate <physical-bundle-directory> [--apply] [--json]` previews the local OKF v0.2 conversion by default. Apply only after reviewing its revisions, diffs, findings, and native validation. Ambiguities and errors block writes; historical producers and review events are never invented. See [Migrating a Local Bundle](../guides/migrating-okf.md) for conversion rules and file atomicity.
+`factile migrate <physical-bundle-directory> [--apply [--expect-plan <revision>]] [--json]` previews a direct upgrade to OKF 0.3. Apply only after reviewing its revisions, diffs, findings, and native validation. Ambiguities and errors block writes; historical producers and review events are never invented. See [Migrating a Local Bundle](../guides/migrating-okf.md) for conversion rules and file atomicity.
 
 ## Sources and Claim References
 

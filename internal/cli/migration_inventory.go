@@ -43,7 +43,7 @@ func inspectMigrationInventory(store storage.Local) (migrationInventory, error) 
 			return err
 		}
 		rel := filepath.ToSlash(relative)
-		if storage.HiddenPath(rel) || isMigrationLock(rel) {
+		if storage.HiddenPath(rel) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -123,10 +123,6 @@ func inspectMigrationInventory(store storage.Local) (migrationInventory, error) 
 	return inventory, err
 }
 
-func isMigrationLock(rel string) bool {
-	return strings.HasSuffix(rel, ".md.lock")
-}
-
 func copyMigrationAssets(store storage.Local, destination string, entries []migrationEntry) error {
 	root, err := os.OpenRoot(store.Root)
 	if err != nil {
@@ -152,7 +148,8 @@ func copyMigrationAssets(store storage.Local, destination string, entries []migr
 				input.Close()
 				return err
 			}
-			_, copyErr := io.Copy(output, input)
+			hash := sha256.New()
+			_, copyErr := io.Copy(io.MultiWriter(output, hash), input)
 			input.Close()
 			closeErr := output.Close()
 			if copyErr != nil {
@@ -160,6 +157,9 @@ func copyMigrationAssets(store storage.Local, destination string, entries []migr
 			}
 			if closeErr != nil {
 				return closeErr
+			}
+			if fmt.Sprintf("sha256:%x", hash.Sum(nil)) != entry.Revision {
+				return fmt.Errorf("migration input changed: %s", entry.Path)
 			}
 		}
 	}

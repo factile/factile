@@ -1,57 +1,58 @@
 ---
 type: Guide
-title: Migrate a Local Bundle to OKF v0.2
-generated:
-  at: "2026-09-11T08:34:43.120788542Z"
-  by: factile/v0.6.0
+title: Migrate a Local Bundle to OKF 0.3
 ---
 
-# Migrate a Local Bundle to OKF v0.2
+# Migrate a Local Bundle to OKF 0.3
 
-Use the explicit migration command for an authorized local bundle conversion:
+Upgrade an OKF 0.1, 0.2 or unversioned bundle with one reviewed plan. Store the
+plan and receipt outside the bundle, since both would change its inventory.
 
 ```bash
-factile migrate /absolute/path/to/bundle --json > migration-preview.json
-factile migrate /absolute/path/to/bundle --apply --json > migration-result.json
+factile migrate /absolute/path/to/bundle --json > /tmp/migration-preview.json
+plan=$(jq -r .plan_revision /tmp/migration-preview.json)
+factile migrate /absolute/path/to/bundle --apply --expect-plan "$plan" --json > /tmp/migration-result.json
+factile --okf-bundle /absolute/path/to/bundle validate /
 ```
 
-The operand is the physical bundle directory, not a logical mount path or the
-workspace containing it. Select each independent bundle separately. All Markdown
-inside that directory is considered; mounts, symlinks, `.git`, and `.factile`
-content are not followed. Normal reading, writing, initialization, and ingestion
-never migrate content automatically.
+The operand selects one physical bundle directory. The inventory reports
+ordinary Markdown, assets, reserved files and independently declared nested
+bundles. Mount descriptors and links never cause migration of another source.
+Hidden paths and symlinks are skipped. A nested bundle blocks migration of the
+outer directory. Select the nested bundle directly and reconcile the outer
+distribution separately.
 
-Preview is the default. Inspect the per-file before/after revisions, diff,
-findings, and normal v0.2 validation result. `--apply` recomputes the candidate,
-validates it in an isolated workspace, locks the observed files, checks their
-bytes and document inventory again, and atomically replaces changed files.
-Blocking findings or validation errors cause exit 3 and no writes. Each file
-replacement is atomic; an I/O failure across multiple files is reported with
-which replacements completed. Re-run preview against the resulting state.
-Already converted content produces no further changes.
+Review the inventory, per-file revisions, diffs, diagnostic findings and
+candidate validation. `--expect-plan` binds the apply to the selected root,
+observed bytes and proposed edits. `--apply` by itself prepares a fresh plan.
+A stale plan, unknown declared format, unresolved ambiguity or invalid
+candidate produces exit 3. Earlier bundles remain readable through normal
+commands before an explicit migration.
 
-## Conversion Decisions
+The migration copies the candidate to an isolated directory, including its
+assets and schemas. It checks the physical inventory under a migration lock,
+replaces documents atomically, and checks the resulting inventory before
+publishing the root version marker last. If a write fails, the receipt reports
+completed replacements and the old declaration remains. Fix the reported
+problem, preview the current bytes, and retry. A compliant OKF 0.3 bundle
+produces zero changes.
 
-- A valid old timestamp fills `generated.at` only when a producer is already
-  explicitly recorded and the generation datetime is absent. An identical
-  existing datetime needs no duplicate. Otherwise the original value is retained
-  in `legacy_metadata.timestamp` with a historical-information finding. Migration
-  never attributes past content to itself or invents a producer or reviewer.
-- Existing `generated` extensions and all `verified` history remain unchanged.
-- An unambiguous deprecation flag becomes `status: deprecated`. Conflicting
-  lifecycle fields or custom status values block application. Resolve their
-  meaning explicitly; preserve a separate workflow value under an extension
-  field when appropriate before choosing `draft`, `stable`, or `deprecated`.
-- Explicit links and bare HTTP URLs in a body citation list become `sources`
-  entries. The heading becomes `Sources`, retaining its prose and links.
-  Ambiguous entries block application. Source authors, source IDs, and claim
-  attribution are never inferred. Fenced examples are unchanged.
-- Root index declarations become `okf_version: "0.2"`; valid plain root indexes
-  remain plain. Other reserved-file frontmatter is removed and preserved as
-  inert Markdown under `Previous navigation metadata`. Ordinary directory
-  indexes remain plain. Unknown declared versions require explicit resolution.
+## Conversion decisions
 
-The command preserves unrelated files, concept metadata, Markdown, and source
-resources. The normal validator reports unresolved links and malformed optional
-metadata; its warnings remain visible in the migration result. Review these
-findings before treating the converted bundle as ready for readers.
+- Old timestamps fill an absent `generated.at` only when an explicit producer
+  supports the attribution. Other old values remain in `legacy_metadata.timestamp`.
+  Existing generation and review history stays authored. The report identifies
+  changes in derived review tier.
+- Supported links and bare HTTP URLs in legacy citation lists become source
+  entries. Their prose remains in the body. Fix ambiguous citations by
+  identifying the resource explicitly. No author or claim association is inferred.
+- The legacy relative lookup takes priority. When only the root target exists,
+  the migrator writes a rooted URI reference with the existing query and
+  fragment. Different plausible targets produce a blocking finding. Choose
+  an explicit `./relative.md` or `/rooted.md` path before retrying.
+- Recognized deprecation flags become native lifecycle metadata. Conflicting
+  values need explicit reconciliation. An authored unknown status remains
+  in the document and is excluded from current-only results.
+- The selected root index gains the quoted 0.3 declaration and keeps its
+  existing metadata. Legacy frontmatter in ordinary indexes and logs stays
+  available in a Markdown block. Assets and untyped Markdown retain their bytes.
