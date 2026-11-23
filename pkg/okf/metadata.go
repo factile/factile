@@ -192,7 +192,7 @@ func metadataDiagnostics(fm map[string]any, portable bool) []Diagnostic {
 		warn("status")
 	}
 	if v, ok := fm["stale_after"]; ok {
-		if _, yes := Datetime(v); !yes {
+		if _, yes := datetime(v); !yes {
 			warn("stale_after")
 		}
 	}

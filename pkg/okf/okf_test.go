@@ -7,6 +7,16 @@ import (
 	"github.com/factile/factile/pkg/revision"
 )
 
+func TestDateOnlyFreshnessDeadlineUsesPortableValidation(t *testing.T) {
+	fields := map[string]any{"stale_after": "2026-11-23"}
+	if got := PortableMetadataDiagnostics(fields); len(got) != 0 {
+		t.Fatalf("date-only deadline produced portable diagnostics: %#v", got)
+	}
+	if got := MetadataDiagnostics(fields); len(got) != 1 || got[0].Field != "stale_after" {
+		t.Fatalf("date-only deadline changed legacy diagnostics: %#v", got)
+	}
+}
+
 func TestParseConceptPreservesUnknownFrontmatter(t *testing.T) {
 	doc, err := ParseConcept("workflows/import", []byte(`---
 type: Workflow
