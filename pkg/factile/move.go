@@ -193,7 +193,7 @@ func buildMovePlan(store storage.Local, mounts []vfs.Mount, oldTarget, newTarget
 		}
 		markdown := doc.Markdown
 		next := data
-		if keepOld {
+		if oldTarget.Mount.OKFVersion == "0.3" {
 			rewrite := func(field, value string) string {
 				return movedPortableReference(store, id, oldTarget.ConceptID, newTarget.ConceptID, field, value)
 			}

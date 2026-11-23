@@ -133,6 +133,35 @@ func TestPortableSuccessorMoveAcrossBundleBoundary(t *testing.T) {
 	}
 }
 
+func TestPortableMoveRepairsEncodedBacklinksWithoutStub(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	writeRootConfig(t, root)
+	mustWriteWorkspace(t, filepath.Join(root, "index.md"), "---\nokf_version: \"0.3\"\n---\n")
+	writeOKFFile(t, filepath.Join(root, "old name.md"), "Guide", "Original", "## Steps\n")
+	writeOKFFile(t, filepath.Join(root, "guide.md"), "Guide", "Link",
+		"[Inline](old%20name.md#steps \"Title\") and [Reference][steps].\n\n[steps]: <old%20name.md#steps>\n")
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{WorkDir: root})
+	preview, err := ws.MoveWithLinks("/old name", "/new name", "")
+	if err != nil || len(preview.Changes) != 1 || preview.Changes[0].Path != "/guide" {
+		t.Fatalf("preview = %#v, %v", preview, err)
+	}
+	if _, err := ws.MoveWithLinks("/old name", "/new name", preview.Plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "old name.md")); !os.IsNotExist(err) {
+		t.Fatalf("old file still present: %v", err)
+	}
+	read, err := ws.Read(ctx, "/guide", factile.ReadOptions{})
+	if want := "\n[Inline](/new%20name.md#steps \"Title\") and [Reference][steps].\n\n[steps]: </new%20name.md#steps>\n"; err != nil || read.Concept.Markdown != want {
+		t.Fatalf("rewritten Markdown: %q, %v", read.Concept.Markdown, err)
+	}
+	graph, err := ws.Graph(ctx, "/guide", factile.GraphOptions{Depth: 1})
+	if err != nil || len(graph.Edges) != 1 || len(graph.Issues) != 0 || graph.Edges[0].To != "/new name" {
+		t.Fatalf("rewritten links did not resolve: %#v, %v", graph, err)
+	}
+}
+
 func TestMovePrunesNestedBundleBeforePlanningAndApply(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
