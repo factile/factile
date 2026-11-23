@@ -150,6 +150,9 @@ func sourceTargetVisible(item, target scopedConcept, link graphpkg.Link) bool {
 
 // Authored resource strings stay intact; derived target paths respect the view.
 func restrictSourceTargets(concept Concept, paths []string) Concept {
+	if concept.Successor != "" && !pathInAnyScope(concept.Successor, paths) {
+		concept.Successor = ""
+	}
 	concept.SourceReferences = append([]okf.SourceReference(nil), concept.SourceReferences...)
 	for i := range concept.SourceReferences {
 		target := concept.SourceReferences[i].Target

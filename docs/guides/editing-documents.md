@@ -200,6 +200,18 @@ rebasing. A changed document invalidates the preview. Other bundles require
 updates in their own checkouts. The single-file `--rev` invocation still
 reports backlink warnings.
 
+In an OKF 0.3 bundle, pass `--replacement /path/to/current` to
+`factile deprecate` to record a successor in the same bundle. To preserve
+outside links during a move, add `--keep-old` to both the preview and apply
+commands. The old path opens a deprecated page that links to the moved
+concept. The preview includes the stub and the in-bundle link updates.
+
+Use `factile search / "query" --status stable` or
+`factile context / "query" --current-only` to follow visible successors.
+These commands report `replacement_unavailable` for matches whose deprecated
+path cannot lead to a stable concept within the selected scope. Ordinary reads
+of the original path still open the deprecated page.
+
 ## Safety boundary
 
 Writes are allowed only in the workspace's root bundle or an explicitly writable local

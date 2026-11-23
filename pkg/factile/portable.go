@@ -72,17 +72,31 @@ func portableConceptSources(concept Concept, mount vfs.Mount) Concept {
 	})
 	concept.MetadataDiagnostics = append(okf.PortableMetadataDiagnostics(concept.Frontmatter), concept.MetadataDiagnostics...)
 	selected := ""
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	for _, reference := range okf.PathReferences(concept.Frontmatter, concept.Markdown) {
 		kind, rel := resolve(reference.Field, reference.Value)
+		if reference.Field == "superseded_by" && kind != "external" && (kind != "concept" || rel == concept.ConceptID+".md") {
+			concept.MetadataDiagnostics = append(concept.MetadataDiagnostics, okf.Diagnostic{
+				Code: "broken_path_field", Field: reference.Field,
+				Message: "Successor must refer to a different concept in the bundle: " + reference.Value,
+			})
+			continue
+		}
 		if reference.Field == "computation" {
 			selected = kind
 		}
 		if kind == "concept" {
 			target := cleanVirtualJoin(mount.MountPath, strings.TrimSuffix(rel, ".md"))
-			if target != concept.Path && !seen[target] {
-				seen[target] = true
-				concept.portableLinks = append(concept.portableLinks, graphpkg.Link{Raw: reference.Value, Target: target, Kind: reference.Field})
+			replacement := reference.Field == "superseded_by"
+			if replacement && concept.Frontmatter["status"] == "deprecated" && target != concept.Path {
+				concept.Successor = target
+			}
+			link := graphpkg.Link{Raw: reference.Value, Target: target, Kind: reference.Field}
+			if index, exists := seen[target]; exists && replacement {
+				concept.portableLinks[index] = link
+			} else if !exists && target != concept.Path {
+				seen[target] = len(concept.portableLinks)
+				concept.portableLinks = append(concept.portableLinks, link)
 			}
 		}
 		if kind == "missing" || kind == "outside" || kind == "invalid" {

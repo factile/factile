@@ -463,9 +463,9 @@ func contextHandler(ws readerWorkspace) http.HandlerFunc {
 		}
 		result, err := ws.Context(r.Context(), input.Path, input.Query, factile.ContextOptions{
 			MaxTokens:   maxTokens,
-			EvaluatedAt: input.EvaluatedAt,
-			Depth:       depth,
-			View:        input.View,
+			EvaluatedAt: input.EvaluatedAt, CurrentOnly: input.CurrentOnly,
+			Depth: depth,
+			View:  input.View,
 		})
 		if err != nil {
 			writeError(w, errorStatus(err), err)
@@ -783,6 +783,7 @@ type searchInput struct {
 
 type contextInput struct {
 	EvaluatedAt string `json:"evaluated_at,omitempty"`
+	CurrentOnly bool   `json:"current_only,omitempty"`
 	sourceSelector
 	Path      string `json:"path"`
 	Query     string `json:"query"`

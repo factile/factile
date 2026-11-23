@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,6 +25,7 @@ type MovePlan struct {
 	NewPath string       `json:"new_path"`
 	Plan    string       `json:"plan"`
 	Applied bool         `json:"applied"`
+	KeepOld bool         `json:"keep_old,omitempty"`
 	Changes []MoveChange `json:"changes"`
 }
 
@@ -35,11 +37,12 @@ type MoveChange struct {
 type moveFile struct {
 	path, filename string
 	before, after  []byte
+	stub           []byte
 	mode           os.FileMode
 }
 
 // MoveWithLinks previews a move or applies an unchanged preview.
-func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (MovePlan, error) {
+func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string, keepOld ...bool) (MovePlan, error) {
 	_, oldTarget, err := w.resolveExistingConceptWrite(oldPath)
 	if err != nil {
 		return MovePlan{}, err
@@ -60,7 +63,11 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 	if err := checkMoveDestination(mounts, newTarget); err != nil {
 		return MovePlan{}, err
 	}
-	store, err := storage.NewLocal(oldTarget.Mount.SourcePath)
+	keep := len(keepOld) != 0 && keepOld[0]
+	if keep && oldTarget.Mount.OKFVersion != "0.3" {
+		return MovePlan{}, NewError(ErrInvalidPath, "Keeping a portable successor requires an OKF 0.3 bundle")
+	}
+	store, err := storeForMount(oldTarget.Mount)
 	if err != nil {
 		return MovePlan{}, NormalizeError(err)
 	}
@@ -68,7 +75,7 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 	if err != nil {
 		return MovePlan{}, NormalizeError(err)
 	}
-	result, planned, err := buildMovePlan(store, oldTarget, newTarget)
+	result, planned, err := buildMovePlan(store, oldTarget, newTarget, keep)
 	if err != nil || expectedPlan == "" {
 		return result, NormalizeError(err)
 	}
@@ -90,7 +97,7 @@ func (w *LocalWorkspace) MoveWithLinks(oldPath, newPath, expectedPlan string) (M
 		if err := checkMoveDestination(currentMounts, newTarget); err != nil {
 			return err
 		}
-		latest, changes, err := buildMovePlan(store, oldTarget, newTarget)
+		latest, changes, err := buildMovePlan(store, oldTarget, newTarget, keep)
 		if err != nil {
 			return err
 		}
@@ -138,8 +145,8 @@ func checkMoveDestination(mounts []vfs.Mount, destination vfs.Target) error {
 	return nil
 }
 
-func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target) (MovePlan, []moveFile, error) {
-	result := MovePlan{OldPath: oldTarget.Path, NewPath: newTarget.Path, Changes: []MoveChange{}}
+func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target, keepOld bool) (MovePlan, []moveFile, error) {
+	result := MovePlan{OldPath: oldTarget.Path, NewPath: newTarget.Path, KeepOld: keepOld, Changes: []MoveChange{}}
 	var planned []moveFile
 	ids, err := store.ListDocumentIDs("")
 	if err != nil {
@@ -166,13 +173,29 @@ func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target) (MovePl
 			}
 			continue
 		}
-		markdown := rewriteMoveLinks(doc.Markdown, id, from, to, result)
+		markdown := doc.Markdown
 		next := data
+		if keepOld {
+			rewrite := func(field, value string) string {
+				return movedPortableReference(store, id, oldTarget.ConceptID, newTarget.ConceptID, field, value)
+			}
+			markdown = rewritePortableMoveMarkdown(doc.Markdown, rewrite)
+			if fields := portableMoveFields(doc.Frontmatter, rewrite); len(fields) != 0 {
+				next, err = okf.PatchFrontmatter(id, next, fields, nil)
+				if err != nil {
+					return result, nil, err
+				}
+			}
+		} else {
+			markdown = rewriteMoveLinks(markdown, id, from, to, result)
+		}
 		if markdown != doc.Markdown {
-			next, err = okf.ReplaceMarkdown(id, data, markdown)
+			next, err = okf.ReplaceMarkdown(id, next, markdown)
 			if err != nil {
 				return result, nil, err
 			}
+		}
+		if !bytes.Equal(next, data) {
 			result.Changes = append(result.Changes, MoveChange{Path: from, Diff: patch.Diff(from+".md", string(data), string(next))})
 		} else if from == to {
 			continue
@@ -182,13 +205,97 @@ func buildMovePlan(store storage.Local, oldTarget, newTarget vfs.Target) (MovePl
 			return result, nil, err
 		}
 		fmt.Fprintf(&fingerprint, "%s\x00%s\x00%s\x00", id, revision.DigestBytes(data), revision.DigestBytes(next))
-		planned = append(planned, moveFile{path: from, filename: filename, before: data, after: next, mode: info.Mode().Perm()})
+		item := moveFile{path: from, filename: filename, before: data, after: next, mode: info.Mode().Perm()}
+		if keepOld && from == oldTarget.Path {
+			successor := escapedBundlePath(newTarget.ConceptID + ".md")
+			fields := map[string]any{"type": doc.Frontmatter["type"], "status": "deprecated", "superseded_by": successor}
+			if title, ok := doc.Frontmatter["title"].(string); ok {
+				fields["title"] = title
+			}
+			item.stub = okf.Serialize(okf.Document{Frontmatter: fields, Markdown: "This concept moved to its [replacement](" + successor + ").\n"})
+			result.Changes = append(result.Changes, MoveChange{Path: from, Diff: patch.Diff(from+".md", string(data), string(item.stub))})
+			fmt.Fprintf(&fingerprint, "stub:%s\x00", revision.DigestBytes(item.stub))
+		}
+		planned = append(planned, item)
 	}
 	if !found {
 		return result, nil, NewError(ErrConceptNotFound, "Source document disappeared")
 	}
 	result.Plan = revision.DigestBytes([]byte(fingerprint.String()))
 	return result, planned, nil
+}
+
+func movedPortableReference(store storage.Local, id, oldID, newID, field, value string) string {
+	kind, rel := okf.ResolvePath(id, value, field, "0.3", store.EntryKind)
+	if kind != "file" && kind != "directory" {
+		return value
+	}
+	if rel == oldID+".md" {
+		rel = newID + ".md"
+	} else if id != oldID || path.Dir(id) == path.Dir(newID) || strings.HasPrefix(value, "/") {
+		return value
+	}
+	if suffix := strings.IndexAny(value, "?#"); suffix >= 0 {
+		return escapedBundlePath(rel) + value[suffix:]
+	}
+	if strings.HasSuffix(value, "/") && rel != "" {
+		rel += "/"
+	}
+	return escapedBundlePath(rel)
+}
+
+func escapedBundlePath(rel string) string {
+	return (&url.URL{Path: "/" + rel}).EscapedPath()
+}
+
+func rewritePortableMoveMarkdown(markdown string, rewrite func(field, value string) string) string {
+	var body strings.Builder
+	offset := 0
+	for _, link := range graph.MarkdownTargets(markdown) {
+		next := rewrite("markdown", link.Target)
+		if next != link.Target {
+			body.WriteString(markdown[offset:link.Start])
+			body.WriteString(next)
+			offset = link.End
+		}
+	}
+	body.WriteString(markdown[offset:])
+	return body.String()
+}
+
+func portableMoveFields(fields map[string]any, rewrite func(field, value string) string) map[string]any {
+	set := map[string]any{}
+	for _, field := range []string{"resource", "computation", "superseded_by"} {
+		if value, ok := fields[field].(string); ok {
+			if next := rewrite(field, value); next != value {
+				set[field] = next
+			}
+		}
+	}
+	object := func(field string, entry any) bool {
+		values, _ := entry.(map[string]any)
+		value, ok := values["resource"].(string)
+		if !ok {
+			return false
+		}
+		next := rewrite(field, value)
+		if next == value {
+			return false
+		}
+		values["resource"] = next
+		return true
+	}
+	for _, field := range []string{"executor", "attester"} {
+		if object(field+".resource", fields[field]) {
+			set[field] = fields[field]
+		}
+	}
+	for _, entry := range okf.MetadataItems(fields["sources"]) {
+		if object("sources[].resource", entry) {
+			set["sources"] = fields["sources"]
+		}
+	}
+	return set
 }
 
 func rewriteMoveLinks(markdown, id, from, to string, plan MovePlan) string {
@@ -272,6 +379,9 @@ func applyMovePlan(destination string, changes []moveFile, oldPath string) error
 		}
 		if err := checkMoveFile(source.filename, source.before); err != nil {
 			return err
+		}
+		if source.stub != nil {
+			return rewriteMoveFile(source.filename, source.before, source.stub, source.mode)
 		}
 		return os.Remove(source.filename)
 	}

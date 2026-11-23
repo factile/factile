@@ -45,6 +45,7 @@ func (s *Server) Tools() []Tool {
 			"path": stringSchema("Virtual Factile path to inspect."),
 		})),
 		tool("factile_context", "Retrieve focused OKF context for a task or question.", objectSchema(map[string]any{
+			"current_only": boolSchema("Return current knowledge and visible replacements."),
 			"path":         stringSchema("Virtual Factile path to search from."),
 			"query":        stringSchema("Task or question to retrieve context for."),
 			"max_tokens":   integerSchema("Approximate maximum size of complete concepts, evidence and summaries."),
@@ -356,7 +357,7 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 	case "factile_search":
 		return s.workspace.Search(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.SearchOptions{View: stringArg(args, "view"), IncludeReview: boolArg(args, "include_review"), EvaluatedAt: stringArg(args, "evaluated_at"), Status: stringArg(args, "status"), ReviewTier: stringArg(args, "review_tier"), Stale: optionalBoolArg(args, "stale"), ChangedSinceReview: optionalBoolArg(args, "changed_since_review")})
 	case "factile_context":
-		return s.workspace.Context(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.ContextOptions{MaxTokens: intArg(args, "max_tokens"), Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view"), EvaluatedAt: stringArg(args, "evaluated_at")})
+		return s.workspace.Context(ctx, stringArg(args, "path"), stringArg(args, "query"), factile.ContextOptions{MaxTokens: intArg(args, "max_tokens"), Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view"), EvaluatedAt: stringArg(args, "evaluated_at"), CurrentOnly: boolArg(args, "current_only")})
 	case "factile_graph":
 		return s.workspace.Graph(ctx, stringArg(args, "path"), factile.GraphOptions{Depth: intArgDefault(args, "depth", 1), View: stringArg(args, "view")})
 	case "factile_validate":

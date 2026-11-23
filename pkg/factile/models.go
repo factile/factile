@@ -45,6 +45,7 @@ type Concept struct {
 	portable            bool
 	portableLinks       []graphpkg.Link
 	Computation         *okf.ComputationDeclaration `json:"computation_declaration,omitempty"`
+	Successor           string                      `json:"successor,omitempty"`
 	Origin              map[string]string           `json:"origin,omitempty"`
 	ReviewState         *okf.ReviewState            `json:"review_state,omitempty"`
 	Path                string                      `json:"path"`
@@ -358,6 +359,7 @@ type DeleteOptions struct {
 	ExpectedRevision string
 }
 type DeprecateOptions struct {
+	Replacement      string
 	ExpectedRevision string
 	Reason           string
 }
@@ -365,6 +367,7 @@ type DeprecateOptions struct {
 type ReviewOptions struct{ ExpectedRevision string }
 
 type ContextOptions struct {
+	CurrentOnly bool
 	EvaluatedAt string
 	MaxTokens   int
 	Depth       int
@@ -433,7 +436,7 @@ type Workspace interface {
 	Write(ctx context.Context, path string, input WriteConceptInput) (ConceptResult, error)
 	Patch(ctx context.Context, path string, input PatchConceptInput) (ConceptResult, error)
 	Rename(ctx context.Context, oldPath string, newPath string, opts RenameOptions) (RenameResult, error)
-	MoveWithLinks(oldPath, newPath, expectedPlan string) (MovePlan, error)
+	MoveWithLinks(oldPath, newPath, expectedPlan string, keepOld ...bool) (MovePlan, error)
 	Delete(ctx context.Context, path string, opts DeleteOptions) (DeleteResult, error)
 	Deprecate(ctx context.Context, path string, opts DeprecateOptions) (ConceptResult, error)
 	Review(ctx context.Context, path string, opts ReviewOptions) (ConceptResult, error)

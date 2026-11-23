@@ -700,7 +700,7 @@ func runUI(ctx context.Context, ws factile.Workspace, args []string, global glob
 }
 
 func runContext(ctx context.Context, ws factile.Workspace, args []string, global globals, stdout io.Writer) (int, error) {
-	const syntax = "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>] [--passages]"
+	const syntax = "factile context <path> <query> [--max-tokens <n>] [--depth 0|1] [--view <id>] [--evaluated-at <datetime>] [--passages] [--current-only]"
 	if hasHelp(args) {
 		return showUsage(stdout, syntax)
 	}
@@ -711,7 +711,8 @@ func runContext(ctx context.Context, ws factile.Workspace, args []string, global
 	view := fs.String("view", "", "")
 	at := fs.String("evaluated-at", "", "")
 	passages := fs.Bool("passages", false, "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true, "--evaluated-at": true, "--passages": false})
+	currentOnly := fs.Bool("current-only", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--max-tokens": true, "--depth": true, "--view": true, "--evaluated-at": true, "--passages": false, "--current-only": false})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -721,7 +722,7 @@ func runContext(ctx context.Context, ws factile.Workspace, args []string, global
 	if fs.NArg() != 2 {
 		return usage(global, stdout, syntax)
 	}
-	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view, EvaluatedAt: *at, Passages: *passages})
+	result, err := ws.Context(ctx, fs.Arg(0), fs.Arg(1), factile.ContextOptions{MaxTokens: *maxTokens, Depth: *depth, View: *view, EvaluatedAt: *at, Passages: *passages, CurrentOnly: *currentOnly})
 	if err != nil {
 		return 0, err
 	}
@@ -891,16 +892,18 @@ or the preceding successful mutation. Plain index/log documents are supported.
 Example: factile write /note --rev <observed-revision> --body ./body.md --json`
 
 const renameUsage = `factile rename <old-path> <new-path> --rev <rev>
-factile rename <old-path> <new-path> --preview
-factile rename <old-path> <new-path> --apply-plan <plan>
-Move using the observed revision, or preview and apply a move with link repairs.`
+factile rename <old-path> <new-path> --preview [--keep-old]
+factile rename <old-path> <new-path> --apply-plan <plan> [--keep-old]
+Preview and apply a move with link repairs. Use --keep-old in both commands
+to retain a deprecated concept at the old path in an OKF 0.3 bundle.`
 
 const deleteUsage = `factile delete <document-path> --rev <rev>
 Delete one document using its observed revision. Use deprecate to retain the
 document with a transition notice.`
 
-const deprecateUsage = `factile deprecate <document-path> --rev <rev> --reason <text>
+const deprecateUsage = `factile deprecate <document-path> --rev <rev> --reason <text> [--replacement <path>]
 Set status: deprecated and append the reason to a Deprecation section.
+Use --replacement to point to another concept in the same OKF 0.3 bundle.
 Use the revision from a read or the preceding successful mutation.`
 
 const patchUsage = `factile patch <document-path> --rev <rev> [patch options]
@@ -1077,7 +1080,8 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 	rev := fs.String("rev", "", "")
 	preview := fs.Bool("preview", false, "")
 	applyPlan := fs.String("apply-plan", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true, "--preview": false, "--apply-plan": true})
+	keepOld := fs.Bool("keep-old", false, "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true, "--preview": false, "--apply-plan": true, "--keep-old": false})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -1091,7 +1095,10 @@ func runRename(ctx context.Context, ws factile.Workspace, args []string, global 
 		if *rev != "" || (*preview && *applyPlan != "") {
 			return usage(global, stdout, renameUsage)
 		}
-		return runMoveWithLinks(ws, fs.Arg(0), fs.Arg(1), *applyPlan, global, stdout)
+		return runMoveWithLinks(ws, fs.Arg(0), fs.Arg(1), *applyPlan, *keepOld, global, stdout)
+	}
+	if *keepOld {
+		return usage(global, stdout, renameUsage)
 	}
 	result, err := ws.Rename(ctx, fs.Arg(0), fs.Arg(1), factile.RenameOptions{ExpectedRevision: *rev})
 	if err != nil {
@@ -1132,7 +1139,8 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 	fs.SetOutput(io.Discard)
 	rev := fs.String("rev", "", "")
 	reason := fs.String("reason", "", "")
-	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true, "--reason": true})
+	replacement := fs.String("replacement", "", "")
+	ordered, orderErr := reorderFlags(args[1:], map[string]bool{"--rev": true, "--reason": true, "--replacement": true})
 	if orderErr != nil {
 		return 2, orderErr
 	}
@@ -1142,7 +1150,7 @@ func runDeprecate(ctx context.Context, ws factile.Workspace, args []string, glob
 	if fs.NArg() != 1 {
 		return usage(global, stdout, "factile deprecate <document-path> --rev <rev> --reason <text>")
 	}
-	result, err := ws.Deprecate(ctx, fs.Arg(0), factile.DeprecateOptions{ExpectedRevision: *rev, Reason: *reason})
+	result, err := ws.Deprecate(ctx, fs.Arg(0), factile.DeprecateOptions{ExpectedRevision: *rev, Reason: *reason, Replacement: *replacement})
 	if err != nil {
 		return 0, err
 	}

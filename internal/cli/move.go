@@ -7,8 +7,8 @@ import (
 	"github.com/factile/factile/pkg/factile"
 )
 
-func runMoveWithLinks(ws factile.Workspace, oldPath, newPath, plan string, global globals, stdout io.Writer) (int, error) {
-	result, err := ws.MoveWithLinks(oldPath, newPath, plan)
+func runMoveWithLinks(ws factile.Workspace, oldPath, newPath, plan string, keepOld bool, global globals, stdout io.Writer) (int, error) {
+	result, err := ws.MoveWithLinks(oldPath, newPath, plan, keepOld)
 	if err != nil {
 		return 0, err
 	}

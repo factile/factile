@@ -268,10 +268,25 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 		return SearchResults{}, err
 	}
 	scored := scoreScope(query, scope.Concepts)
+	var byPath map[string]int
+	if opts.Status == "stable" {
+		byPath = currentScopeIndex(scope.Concepts)
+	}
+	seen := map[string]bool{}
 	results := make([]SearchResult, 0, len(scored))
 	for _, item := range scored {
 		summary := scope.Summaries[item.Index]
 		if selection != nil {
+			original := scope.Concepts[item.Index].Concept
+			if byPath != nil && original.portable && conceptReview(original, selection.EvaluatedAt).Status == "deprecated" {
+				index, ok := visibleCurrent(item.Index, selection.EvaluatedAt, scope.Concepts, byPath)
+				if !ok {
+					selection.Excluded = append(selection.Excluded, OmittedItem{Path: summary.Path, Reason: "replacement_unavailable"})
+					continue
+				}
+				item.Index, item.Snippet = index, ""
+				summary = scope.Concepts[index].Summary
+			}
 			state := conceptReview(scope.Concepts[item.Index].Concept, selection.EvaluatedAt)
 			if reason := reviewExclusion(state, opts); reason != "" {
 				selection.Excluded = append(selection.Excluded, OmittedItem{Path: summary.Path, Reason: reason})
@@ -279,6 +294,10 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 			}
 			summary.ReviewState = &state
 		}
+		if seen[summary.Path] {
+			continue
+		}
+		seen[summary.Path] = true
 		results = append(results, SearchResult{
 			Concept: summary,
 			Score:   item.Score,
@@ -324,8 +343,14 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		return ContextPack{}, err
 	}
 	scored := scoreScope(query, scope.Concepts)
+	var omitted []OmittedItem
+	if opts.CurrentOnly {
+		scored, omitted = currentScores(scored, scope.Concepts, at)
+	}
 	if opts.Passages {
-		return passageContext(scope.Path, query, at, opts, scope.Concepts, scored)
+		pack, err := passageContext(scope.Path, query, at, opts, scope.Concepts, scored)
+		pack.Omitted = append(omitted, pack.Omitted...)
+		return pack, err
 	}
 	linkMounts := w.cachedLinkMounts(scope.Mounts)
 	byPath := map[string]scopedConcept{}
@@ -334,7 +359,22 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	}
 	var ordered []scopedConcept
 	seen := map[string]bool{}
+	var currentByPath map[string]int
+	if opts.CurrentOnly {
+		currentByPath = currentScopeIndex(scope.Concepts)
+	}
 	add := func(p string) {
+		if currentByPath != nil {
+			index, exists := currentByPath[p]
+			if !exists || index < 0 {
+				return
+			}
+			current, ok := visibleCurrent(index, at, scope.Concepts, currentByPath)
+			if !ok {
+				return
+			}
+			p = scope.Concepts[current].Concept.Path
+		}
 		if seen[p] {
 			return
 		}
@@ -378,7 +418,6 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 	}
 	concepts := []Concept{}
 	summaries := []ConceptSummary{}
-	var omitted []OmittedItem
 	remaining := opts.MaxTokens
 	for _, item := range ordered {
 		concept := item.Concept
@@ -982,12 +1021,26 @@ func (w *LocalWorkspace) Deprecate(ctx context.Context, inputPath string, opts D
 	if opts.Reason == "" {
 		return ConceptResult{}, errorf(ErrValidationFailed, "Deprecation reason is required")
 	}
+	fields := map[string]any{"status": "deprecated", "deprecated_reason": opts.Reason}
+	if opts.Replacement != "" {
+		_, current, err := w.resolveReadable(ctx, inputPath)
+		if err != nil {
+			return ConceptResult{}, err
+		}
+		_, successor, err := w.resolveReadable(ctx, opts.Replacement)
+		if err != nil {
+			return ConceptResult{}, err
+		}
+		if current.Mount.OKFVersion != "0.3" || successor.Kind != TargetConcept ||
+			current.Path == successor.Path || current.Mount.MountPath != successor.Mount.MountPath ||
+			okf.IsReservedFile(successor.ConceptID+".md") {
+			return ConceptResult{}, NewError(ErrInvalidPath, "Replacement must be a different concept in the same OKF 0.3 bundle")
+		}
+		fields["superseded_by"] = escapedBundlePath(successor.ConceptID + ".md")
+	}
 	return w.Patch(ctx, inputPath, PatchConceptInput{
 		ExpectedRevision: opts.ExpectedRevision,
-		Set: map[string]any{
-			"status":            "deprecated",
-			"deprecated_reason": opts.Reason,
-		},
+		Set:              fields,
 		AppendSections: map[string]string{
 			"Deprecation": opts.Reason,
 		},
