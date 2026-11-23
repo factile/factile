@@ -126,3 +126,42 @@ func inspectMigrationInventory(store storage.Local) (migrationInventory, error) 
 func isMigrationLock(rel string) bool {
 	return strings.HasSuffix(rel, ".md.lock")
 }
+
+func copyMigrationAssets(store storage.Local, destination string, entries []migrationEntry) error {
+	root, err := os.OpenRoot(store.Root)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	for _, entry := range entries {
+		switch entry.Kind {
+		case "directory":
+			if err := os.MkdirAll(filepath.Join(destination, filepath.FromSlash(entry.Path)), 0700); err != nil {
+				return err
+			}
+		case "asset", "ordinary_markdown":
+			if store.EntryKind(entry.Path) != "file" {
+				return fmt.Errorf("migration input changed: %s", entry.Path)
+			}
+			input, err := root.Open(filepath.FromSlash(entry.Path))
+			if err != nil {
+				return err
+			}
+			output, err := os.Create(filepath.Join(destination, filepath.FromSlash(entry.Path)))
+			if err != nil {
+				input.Close()
+				return err
+			}
+			_, copyErr := io.Copy(output, input)
+			input.Close()
+			closeErr := output.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+	}
+	return nil
+}

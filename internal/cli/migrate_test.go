@@ -106,7 +106,7 @@ func TestMigrationPreviewApplyAndIdempotence(t *testing.T) {
 	}
 	indexBytes, _ := os.ReadFile(filepath.Join(root, "index.md"))
 	index, _ := okf.ParseConcept("index", indexBytes)
-	if len(index.Frontmatter) != 1 || index.Frontmatter["okf_version"] != "0.2" || !strings.Contains(index.Markdown, "custom:") {
+	if index.Frontmatter["okf_version"] != "0.3" || index.Frontmatter["custom"] == nil || index.Frontmatter["title"] != "Original" {
 		t.Fatal(string(indexBytes))
 	}
 	if changes := run(true)["changes"].([]any); len(changes) != 0 {
@@ -122,7 +122,6 @@ func TestMigrationPreviewApplyAndIdempotence(t *testing.T) {
 
 func TestMigrationAmbiguityAndValidationNeverPartiallyApply(t *testing.T) {
 	for name, body := range map[string]string{
-		"custom status":         "---\ntype: Note\nstatus: proposal\n---\n# Note\n",
 		"conflicting lifecycle": "---\ntype: Note\nstatus: draft\ndeprecated: true\n---\n# Note\n",
 		"unattributed citation": "---\ntype: Note\n---\n# Citations\nUnclear source\n",
 		"invalid concept":       "---\ntype: [broken\n---\n# Note\n",
@@ -215,4 +214,65 @@ func runMigrationPreview(t *testing.T, root string, expectedStatus int) map[stri
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestMigrationConvertsSixLegacyPathFields(t *testing.T) {
+	root := t.TempDir()
+	index := "---\nokf_version: \"0.2\"\nlicense: 'MIT' # authored\nx-keep: {path: guide.md}\n---\n"
+	writeCLITestFile(t, filepath.Join(root, "index.md"), index)
+	writeCLITestFile(t, filepath.Join(root, "Readme.md"), "# Ordinary Markdown\n")
+	writeCLITestFile(t, filepath.Join(root, "shared policy.md"), "---\ntype: Policy\n---\n")
+	for _, name := range []string{"run.sql", "executor.txt", "attester.py"} {
+		writeCLITestFile(t, filepath.Join(root, name), "Asset\n")
+	}
+	const review = "verified: [{by: 'human:older', at: '2026-01-01T00:00:00Z'}, {by: 'process:later', at: '2026-01-03T00:00:00Z'}]"
+	content := "---\ntype: Attested Computation\nruntime: sql\nstatus: deprecated\n" +
+		"resource: shared%20policy.md#part\n" +
+		"sources: {resource: shared%20policy.md, id: old, x-extra: {preserve: true}}\n" +
+		"computation: run.sql\nexecutor: {resource: executor.txt, receipt: [job]}\n" +
+		"attester: {resource: attester.py}\nsuperseded_by: shared%20policy.md\n" +
+		"generated: {by: writer/1, at: '2026-01-02T00:00:00Z'}\n" + review + "\n---\n"
+	writeCLITestFile(t, filepath.Join(root, "sub", "guide.md"), content)
+	writeCLITestFile(t, filepath.Join(root, "sub", "run.sql"), "Conflicting asset\n")
+	conflict := runMigrationPreview(t, root, 3)
+	if !strings.Contains(prettyMigration(conflict), "ambiguous_path") {
+		t.Fatalf("missing ambiguity: %v", conflict)
+	}
+	if err := os.Remove(filepath.Join(root, "sub", "run.sql")); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if status := Run(context.Background(), []string{"migrate", root, "--apply", "--json"}, nil, &out, &stderr); status != 0 {
+		t.Fatalf("apply: %s %s", out.String(), stderr.String())
+	}
+	for _, finding := range []string{"root_path_preserved", "review_tier_changed"} {
+		if !strings.Contains(out.String(), finding) {
+			t.Fatalf("missing %s from %s", finding, out.String())
+		}
+	}
+	after, _ := os.ReadFile(filepath.Join(root, "sub", "guide.md"))
+	doc, err := okf.ParseConcept("sub/guide", after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := doc.Frontmatter
+	if fields["resource"] != "/shared%20policy.md#part" || fields["computation"] != "/run.sql" ||
+		fields["superseded_by"] != "/shared%20policy.md" ||
+		fields["executor"].(map[string]any)["resource"] != "/executor.txt" ||
+		fields["attester"].(map[string]any)["resource"] != "/attester.py" ||
+		fields["sources"].(map[string]any)["resource"] != "/shared%20policy.md" ||
+		!strings.Contains(string(after), review) {
+		t.Fatalf("unexpected migration: %s", after)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "index.md")); string(got) != strings.Replace(index, "0.2", "0.3", 1) {
+		t.Fatalf("authored index changed: %s", got)
+	}
+	if changes := runMigrationPreview(t, root, 0)["changes"].([]any); len(changes) != 0 {
+		t.Fatalf("repeat preview: %v", changes)
+	}
+}
+
+func prettyMigration(value any) string {
+	data, _ := json.Marshal(value)
+	return string(data)
 }

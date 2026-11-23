@@ -24,8 +24,9 @@ import (
 )
 
 type WorkspaceOptions struct {
-	Workspace string
-	OKFBundle string
+	Workspace             string
+	OKFBundle             string
+	IncludeConceptSchemas bool
 	// Deprecated: Root Layout v2 does not support --mount-file composition.
 	MountFile string
 	// Deprecated: Root Layout v2 uses Workspace for exact selection.
@@ -566,7 +567,7 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 	issues := append(metadataIssues, scan.Issues...)
 	issues = append(issues, linkIssues(scan.Concepts, w.cachedLinkMounts(scan.Mounts))...)
 	result := baseValidation(scan.Path, issues)
-	if w.opts.OKFBundle != "" {
+	if w.opts.OKFBundle != "" && !w.opts.IncludeConceptSchemas {
 		sort.SliceStable(result.Issues, func(i, j int) bool {
 			a, b := result.Issues[i], result.Issues[j]
 			return a.Path < b.Path || a.Path == b.Path && a.Code < b.Code

@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/okf"
@@ -21,12 +24,12 @@ import (
 	"github.com/factile/factile/pkg/storage"
 )
 
-// migrate_okf_01_to_02 is the only legacy-format interpreter. It is reachable
-// only through the explicit CLI command; ordinary readers and writers never call it.
-func migrate_okf_01_to_02(ctx context.Context, args []string, global globals, stdout io.Writer) (int, error) {
+// migrateOKF performs an explicit physical bundle upgrade.
+func migrateOKF(ctx context.Context, args []string, global globals, stdout io.Writer) (int, error) {
 	const usageText = `factile migrate <physical-bundle-directory> [--apply] [--json]
-Preview the explicit OKF v0.1 to v0.2 conversion. --apply writes the validated plan.
-All Markdown under this physical bundle is included; mounts are not followed.
+Preview an upgrade from OKF 0.1, 0.2, or unversioned input to 0.3.
+Use --apply to write the validated plan.
+The selected directory is the physical bundle. Mounts are ignored.
 Resolve blocking findings before applying. Historical producers and reviews are
 never invented. Missing history is retained in legacy_metadata and reported.
 The result includes per-file revisions, diffs, findings, and native validation.`
@@ -81,13 +84,14 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 	}
 	report := struct {
 		Bundle        string                   `json:"bundle"`
+		TargetVersion string                   `json:"target_version"`
 		SourceVersion string                   `json:"source_version"`
 		Inventory     []migrationEntry         `json:"inventory"`
 		Apply         bool                     `json:"apply"`
 		Changes       []change                 `json:"changes"`
 		Findings      []finding                `json:"findings"`
 		Validation    factile.ValidationResult `json:"validation"`
-	}{Bundle: store.Root, SourceVersion: sourceVersion, Inventory: inventory.Entries, Apply: *apply, Changes: []change{}, Findings: []finding{}}
+	}{Bundle: store.Root, TargetVersion: "0.3", SourceVersion: sourceVersion, Inventory: inventory.Entries, Apply: *apply, Changes: []change{}, Findings: []finding{}}
 	before := map[string][]byte{}
 	after := map[string][]byte{}
 	blocked := false
@@ -107,6 +111,13 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 	default:
 		note("index", "unknown_version", "Unknown OKF version "+inventory.Version+"; migration cannot downgrade it", true)
 	}
+
+	if inventory.Version == "" || inventory.Version == "0.1" || inventory.Version == "0.2" {
+		if _, exists := inventory.Inputs["index"]; !exists {
+			ids = append(ids, "index")
+		}
+	}
+	evaluatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	citationHeading := regexp.MustCompile(`^(#{1,6})[ \t]+Citations[ \t]*#*[ \t]*$`)
 	heading := regexp.MustCompile(`^(#{1,6})[ \t]+`)
 	linkedCitation := regexp.MustCompile(`^[-*+]\s+\[([^\]]+)\]\(([^\s)]+)\)(?:\s.*)?$`)
@@ -129,43 +140,33 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		fields := doc.Frontmatter
 		set := map[string]any{}
 		remove := []string{}
+		if id == "index" {
+			updated, err := patchMigrationFrontmatter(doc, data, map[string]any{"okf_version": "0.3"}, nil, note)
+			if err != nil {
+				return 0, err
+			}
+			after[id] = updated
+			continue
+		}
 		if okf.IsReservedFile(id + ".md") {
 			if !doc.HasFrontmatter {
 				continue
 			}
-			if id == "index" && len(fields) == 1 && fields["okf_version"] == "0.2" {
-				continue
-			}
-			if v, present := fields["okf_version"]; present && v != "0.1" && v != "0.2" {
-				note(id, "unknown_version", "Resolve the unrecognized bundle version before migration", true)
-				continue
-			}
-			// Preserve every removed field as inert Markdown, including unknown extensions.
-			archive := map[string]any{}
-			for key, value := range fields {
-				if key != "okf_version" {
-					archive[key] = value
-				}
-			}
 			body := doc.Markdown
-			if len(archive) > 0 {
-				encoded := okf.Serialize(okf.Document{Frontmatter: archive, Order: doc.Order})
+			if len(fields) > 0 {
+				encoded := okf.Serialize(okf.Document{Frontmatter: fields, Order: doc.Order})
 				fence := "```"
 				for strings.Contains(string(encoded), fence) {
 					fence += "`"
 				}
-				body += "\n\n## Previous navigation metadata\n\n" + fence + "yaml\n" + string(encoded) + fence + "\n"
-				note(id, "index_metadata_preserved", "Removed index fields are retained in the Markdown body", false)
+				body += "\n\n### Previous navigation metadata\n\n" + fence + "yaml\n" + string(encoded) + fence + "\n"
+				note(id, "index_metadata_preserved", "Reserved-file metadata is retained in the Markdown body", false)
 			}
-			if id == "index" {
-				after[id] = []byte("---\nokf_version: \"0.2\"\n---\n" + body)
-			} else {
-				after[id] = []byte(body)
-			}
+			after[id] = []byte(body)
 			continue
 		}
 		legacy := map[string]any{}
-		if existing, present := fields["legacy_metadata"]; present {
+		if existing, present := fields["legacy_metadata"]; present && fields["timestamp"] != nil {
 			m, ok := existing.(map[string]any)
 			if !ok {
 				note(id, "conflicting_metadata", "legacy_metadata is not a mapping", true)
@@ -178,7 +179,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		if timestamp, present := fields["timestamp"]; present {
 			generated, hasGenerated := fields["generated"].(map[string]any)
 			by, _ := generated["by"].(string)
-			_, validTime := okf.Datetime(timestamp)
+			_, validTime := okf.PortableDatetime(timestamp)
 			if hasGenerated && strings.TrimSpace(by) != "" && generated["at"] == nil && validTime {
 				copy := map[string]any{}
 				for k, v := range generated {
@@ -200,7 +201,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			remove = append(remove, "timestamp")
 		}
 		if status, present := fields["status"]; present && status != "draft" && status != "stable" && status != "deprecated" {
-			note(id, "ambiguous_status", "Choose an explicit native lifecycle status and preserve any separate workflow meaning before migration", true)
+			note(id, "unknown_status", "Authored lifecycle value is retained and excluded from current-only results", false)
 		}
 		if value, present := fields["deprecated"]; present {
 			deprecated, ok := value.(bool)
@@ -226,13 +227,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		sources := []any{}
 		seen := map[string]bool{}
 		if existing, present := fields["sources"]; present {
-			var ok bool
-			sources, ok = existing.([]any)
-			if !ok {
-				note(id, "conflicting_sources", "sources must be a list before citations can be combined", true)
-				continue
-			}
-			sources = append([]any{}, sources...)
+			sources = append(sources, okf.MetadataItems(existing)...)
 			for _, item := range sources {
 				if m, ok := item.(map[string]any); ok {
 					if resource, ok := m["resource"].(string); ok {
@@ -241,6 +236,7 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 				}
 			}
 		}
+		initialSources := len(sources)
 		for i, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
@@ -285,26 +281,11 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 				seen[resource] = true
 			}
 		}
-		if sawCitations && len(sources) > 0 {
+		if sawCitations && len(sources) > initialSources {
 			set["sources"] = sources
 		}
-		updated, err := okf.PatchFrontmatter(id, data, set, remove)
-		if err != nil && strings.Contains(err.Error(), "metadata patches require a block mapping") {
-			// Explicit migration can serialize a parsed flow mapping. Normal
-			// byte-preserving edits keep their existing stricter surface.
-			for key, value := range set {
-				doc.Frontmatter[key] = value
-			}
-			for _, key := range remove {
-				delete(doc.Frontmatter, key)
-			}
-			body := doc.Markdown
-			doc.Markdown = ""
-			updated = append(okf.Serialize(doc), []byte(body)...)
-			doc.Markdown = body
-			err = nil
-			note(id, "frontmatter_presentation", "Flow frontmatter serialized as a block mapping; portable values and Markdown are preserved", false)
-		}
+		migrateMetadataPaths(store, doc, set, note)
+		updated, err := patchMigrationFrontmatter(doc, data, set, remove, note)
 		if err != nil {
 			return 0, err
 		}
@@ -312,21 +293,25 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			updated = append(updated[:len(updated)-len(doc.Markdown)], []byte(strings.Join(lines, ""))...)
 		}
 		after[id] = updated
+		candidate, err := okf.ParseConcept(id, updated)
+		if err != nil {
+			note(id, "candidate_parse_error", err.Error(), true)
+			continue
+		}
+		prior, _ := okf.Review(fields, evaluatedAt)
+		current := okf.PortableReview(candidate.Frontmatter, evaluatedAt)
+		if prior.Tier != current.Tier {
+			note(id, "review_tier_changed", prior.Tier+" → "+current.Tier+" at "+evaluatedAt, false)
+		}
 	}
-	// Validate the candidate as an ordinary v0.2 bundle in an isolated workspace.
+	// Validate the complete physical candidate in isolation.
 	stage, err := os.MkdirTemp("", "factile-migrate-*")
 	if err != nil {
 		return 0, err
 	}
 	defer os.RemoveAll(stage)
-	if err = os.WriteFile(filepath.Join(stage, "factile.toml"), []byte("version = 2\n[workspace]\nroot = \"bundle\"\n"), 0600); err != nil {
-		return 0, err
-	}
-	bundle := filepath.Join(stage, "bundle")
-	if err = os.Mkdir(bundle, 0700); err != nil {
-		return 0, err
-	}
-	if err = os.WriteFile(filepath.Join(bundle, "factile.toml"), []byte("version = 2\n[bundle]\nname = \"migration-preview\"\n"), 0600); err != nil {
+	bundle := stage
+	if err := copyMigrationAssets(store, bundle, inventory.Entries); err != nil {
 		return 0, err
 	}
 	staged, err := storage.NewLocal(bundle)
@@ -338,36 +323,10 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			return 0, err
 		}
 		if !bytes.Equal(before[id], after[id]) {
-			report.Changes = append(report.Changes, change{Path: id + ".md", Before: revision.DigestBytes(before[id]), After: revision.DigestBytes(after[id]), Diff: patch.Diff(id+".md", string(before[id]), string(after[id]))})
+			report.Changes = append(report.Changes, change{Path: id + ".md", Before: migrationRevision(before[id]), After: revision.DigestBytes(after[id]), Diff: patch.Diff(id+".md", string(before[id]), string(after[id]))})
 		}
 	}
-	// Include native concept schemas in validation; never follow a schema symlink.
-	schemaDir := filepath.Join(store.Root, "concept-schemas")
-	if info, statErr := os.Lstat(schemaDir); statErr == nil && info.IsDir() {
-		entries, readErr := os.ReadDir(schemaDir)
-		if readErr != nil {
-			return 0, readErr
-		}
-		for _, entry := range entries {
-			if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".schema.json") {
-				continue
-			}
-			data, readErr := os.ReadFile(filepath.Join(schemaDir, entry.Name()))
-			if readErr != nil {
-				return 0, readErr
-			}
-			target := filepath.Join(bundle, "concept-schemas")
-			if err = os.MkdirAll(target, 0700); err != nil {
-				return 0, err
-			}
-			if err = os.WriteFile(filepath.Join(target, entry.Name()), data, 0600); err != nil {
-				return 0, err
-			}
-		}
-	} else if statErr != nil && !os.IsNotExist(statErr) {
-		return 0, statErr
-	}
-	report.Validation, err = factile.NewWorkspace(factile.WorkspaceOptions{Workspace: stage}).Validate(ctx, "/", factile.ValidateOptions{})
+	report.Validation, err = factile.NewWorkspace(factile.WorkspaceOptions{OKFBundle: stage, IncludeConceptSchemas: true}).Validate(ctx, "/", factile.ValidateOptions{})
 	if err != nil {
 		return 0, err
 	}
@@ -392,6 +351,9 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 			}
 			for _, id := range ids {
 				current, _, e := store.ReadConcept(id)
+				if errors.Is(e, os.ErrNotExist) && before[id] == nil {
+					continue
+				}
 				if e != nil {
 					return e
 				}
@@ -439,4 +401,29 @@ The result includes per-file revisions, diffs, findings, and native validation.`
 		return 3, nil
 	}
 	return 0, nil
+}
+
+func migrationRevision(data []byte) string {
+	if data == nil {
+		return ""
+	}
+	return revision.DigestBytes(data)
+}
+
+func patchMigrationFrontmatter(doc okf.Document, data []byte, set map[string]any, remove []string, note func(string, string, string, bool)) ([]byte, error) {
+	updated, err := okf.PatchFrontmatter(doc.ConceptID, data, set, remove)
+	if err == nil || !strings.Contains(err.Error(), "metadata patches require a block mapping") {
+		return updated, err
+	}
+	doc.Frontmatter = maps.Clone(doc.Frontmatter)
+	for key, value := range set {
+		doc.Frontmatter[key] = value
+	}
+	for _, key := range remove {
+		delete(doc.Frontmatter, key)
+	}
+	body := doc.Markdown
+	doc.Markdown = ""
+	note(doc.ConceptID, "frontmatter_presentation", "Flow frontmatter serialized as a block mapping; portable values and Markdown are preserved", false)
+	return append(okf.Serialize(doc), []byte(body)...), nil
 }

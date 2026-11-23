@@ -169,7 +169,7 @@ func runCommand(ctx context.Context, ws factile.Workspace, args []string, global
 	case "init":
 		return runInit(ctx, args, global, stdin, stdout)
 	case "migrate":
-		return migrate_okf_01_to_02(ctx, args, global, stdout)
+		return migrateOKF(ctx, args, global, stdout)
 	case "list":
 		if hasHelp(args) {
 			return showUsage(stdout, "factile list [path] [--brief] [--view <id>]")
