@@ -98,3 +98,55 @@ func TestPortableFormattingAndPathRepairsKeepGenerationTime(t *testing.T) {
 		t.Fatalf("historic review remained current: %#v, %v", reread, err)
 	}
 }
+
+func TestPortableEditsDistinguishEncodedPathFromFragment(t *testing.T) {
+	for _, field := range []string{"resource", "markdown"} {
+		t.Run(field, func(t *testing.T) {
+			dir, ws := editingWorkspace(t)
+			ctx := context.Background()
+			mustWriteWorkspace(t, filepath.Join(dir, "index.md"), "---\nokf_version: \"0.3\"\n---\n")
+			mustWriteWorkspace(t, filepath.Join(dir, "ledger#old.csv"), "first asset\n")
+			mustWriteWorkspace(t, filepath.Join(dir, "ledger"), "second asset\n")
+			original := "---\ntype: Note\ngenerated: {by: producer/1, at: 2020-01-01}\n" +
+				"verified: {by: 'human:reviewer', at: 2020-02-01}\n"
+			if field == "resource" {
+				original += "resource: ./ledger%23old.csv\n---\nEvidence.\n"
+			} else {
+				original += "---\n[Evidence](./ledger%23old.csv)\n"
+			}
+			mustWriteWorkspace(t, filepath.Join(dir, "guide.md"), original)
+			before, err := ws.Read(ctx, "/guide", factile.ReadOptions{IncludeReview: true})
+			if err != nil || before.Concept.ReviewState.Tier != "human-reviewed" {
+				t.Fatalf("original review = %#v, %v", before, err)
+			}
+			edit := func(revision, reference string) factile.Concept {
+				t.Helper()
+				input := factile.PatchConceptInput{ExpectedRevision: revision}
+				if field == "resource" {
+					input.Set = map[string]any{"resource": reference}
+				} else {
+					body := "[Evidence](" + reference + ")\n"
+					input.ReplaceBody = &body
+				}
+				after, err := ws.Patch(ctx, "/guide", input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return after.Concept
+			}
+			repaired := edit(before.Concept.Revision, "/ledger%23old.csv")
+			if !reflect.DeepEqual(repaired.Frontmatter["generated"], before.Concept.Frontmatter["generated"]) {
+				t.Fatal("equivalent path changed generation time")
+			}
+			changed := edit(repaired.Revision, "/ledger#old.csv")
+			current, err := ws.Read(ctx, "/guide", factile.ReadOptions{IncludeReview: true})
+			if err != nil || current.Concept.ReviewState.Tier != "unverified" {
+				t.Fatalf("review remains current for a different asset: %#v, %v", current, err)
+			}
+			if !reflect.DeepEqual(changed.Frontmatter["verified"], before.Concept.Frontmatter["verified"]) ||
+				reflect.DeepEqual(changed.Frontmatter["generated"], before.Concept.Frontmatter["generated"]) {
+				t.Fatalf("asset change should advance generation and retain review history: %#v", changed.Frontmatter)
+			}
+		})
+	}
+}

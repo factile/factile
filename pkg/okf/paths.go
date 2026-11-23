@@ -209,5 +209,5 @@ func CanonicalReference(id, value, field string) string {
 	if strings.HasSuffix(raw, "/") && rel != "" {
 		rel += "/"
 	}
-	return "/" + rel + suffix
+	return (&url.URL{Path: "/" + rel}).EscapedPath() + suffix
 }
