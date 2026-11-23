@@ -14,13 +14,16 @@ Use `--json` for agent results and virtual paths such as `/guides/setup`, withou
 ## Read what you need
 
 - If the workspace is unknown, run `factile status --json`. Use
-  `--workspace <directory>` to select one explicitly.
+  `--workspace <directory>` to select one explicitly. Use `--okf-bundle <directory>`
+  to read one physical bundle without mounts.
 - For a known path, call `factile read <path> --json` directly.
 - Otherwise, use `factile list <scope> --brief --json` or
   `factile search <scope> '<query>' --json` to find it. Use
   `factile context <scope> '<task>' --json` when the task needs several documents;
   narrow with `--view <id>` when useful. These are alternatives, not a checklist.
 - Apply relevant knowledge with current project facts and cite the paths used.
+- For current 0.3 evidence, use `search --status stable` or `context --current-only`
+  to follow visible successors. A direct read still opens the original path.
 
 ## Edit when requested
 
@@ -53,9 +56,13 @@ JSON
 - Content edits record the Factile tool in `generated` and preserve `verified`;
   reviewing content is a separate explicit action. Lifecycle is `draft`, `stable`,
   or `deprecated`. Store evidence in `sources` and cite stable source IDs with footnotes.
-- `/index` and `/log` support the same revision-fenced workflow. Only a physical
-  bundle-root index may have frontmatter, containing `okf_version: "0.2"` alone.
-  Batches cover one document; each document needs its own observed revision.
+- Use `deprecate --replacement` to retire a 0.3 concept with a successor. Use
+  `rename --preview --keep-old` and apply the reviewed plan with `--keep-old`
+  when existing links to the old path must remain usable.
+- `/index` and `/log` support revision-fenced edits. The 0.3 root index can
+  declare its version, title, description and license. Preserve that metadata.
+  Subdirectory indexes and logs use plain Markdown. Upgrade an earlier bundle
+  only by running `factile migrate` on an authorized physical root.
 - Brief receipts validate document frontmatter only. Run `factile validate <scope>`
   for broader bundle/link checks when relevant.
 - MCP `factile_patch` accepts the same `operations`, `expected_revision`, `brief`,

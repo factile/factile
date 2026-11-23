@@ -14,6 +14,7 @@ okf_version: "0.2"
 - [Validate concept schemas](/guides/concept-schemas) - Portable frontmatter and bundle-local validation.
 - [Curating workspaces, mounts, and views](guides/curating-knowledge.md)
 - [Precise document editing and compact receipts](guides/editing-documents.md)
+- [Initialize and migrate OKF bundles](guides/migrating-okf.md)
 - [Agents, skill versions and upgrades, and local MCP](/guides/agents-and-mcp.md)
 - [Contributing](guides/contributing.md)
 - [Troubleshooting](guides/troubleshooting.md)
