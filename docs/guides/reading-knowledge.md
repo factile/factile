@@ -30,6 +30,16 @@ from verification events that apply to the current content. Use
 `factile read <path> --include-review --json` to inspect review history and
 the current events separately.
 
+## Discover a bundle before mounting it
+
+`factile bundle inspect ./downloaded-bundle` shows authored title, description
+and license when present. A license can be SPDX text or a link to an existing
+file in the bundle. A repository's code license does not set its bundle license.
+
+A mount's explicit title and description take precedence over the bundle
+manifest, then the root index. The root index's authored metadata remains
+available in JSON output under `bundle_metadata`.
+
 ## Start shallow
 
 ```bash

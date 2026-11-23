@@ -283,11 +283,14 @@ type ViewDeleteResult struct {
 }
 
 type BundleInspectResult struct {
-	Source       string            `json:"source"`
-	Kind         string            `json:"kind"`
-	PlausibleOKF bool              `json:"plausible_okf"`
-	Concepts     []ConceptSummary  `json:"concepts,omitempty"`
-	Issues       []ValidationIssue `json:"issues,omitempty"`
+	Source       string              `json:"source"`
+	Kind         string              `json:"kind"`
+	PlausibleOKF bool                `json:"plausible_okf"`
+	Title        string              `json:"title,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Metadata     *vfs.BundleMetadata `json:"bundle_metadata,omitempty"`
+	Concepts     []ConceptSummary    `json:"concepts,omitempty"`
+	Issues       []ValidationIssue   `json:"issues,omitempty"`
 }
 
 type BundleFindResult struct {

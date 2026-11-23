@@ -4159,3 +4159,35 @@ func cliRevision(t *testing.T, fixture string, path string) string {
 	}
 	return result.Concept.Revision
 }
+
+func TestInspectPortableBundleMetadata(t *testing.T) {
+	source := t.TempDir()
+	writeCLITestFile(t, filepath.Join(source, "index.md"), "---\nokf_version: \"0.3\"\ntitle: Native title\ndescription: Native scope\nlicense: ./terms.txt\n---\n")
+	writeCLITestFile(t, filepath.Join(source, "terms.txt"), "Bundle license")
+	writeCLITestFile(t, filepath.Join(source, "note.md"), "---\ntype: Note\n---\n")
+	result := runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", source, "--json")
+	if result.Title != "Native title" || result.Description != "Native scope" || result.Metadata == nil ||
+		result.Metadata.LicensePath != "terms.txt" || result.Metadata.Origin != "index.md" || result.Metadata.LicenseKind != "file" {
+		t.Fatalf("portable metadata: %#v", result)
+	}
+	found := runCLIJSON[factile.BundleFindResult](t, "bundle", "find", source, "--json")
+	if len(found.Sources) != 1 || found.Sources[0] != source {
+		t.Fatalf("portable discovery: %#v", found)
+	}
+	writeCLIBundleManifest(t, source, "mounted", "Manifest title")
+	result = runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", source, "--json")
+	if result.Title != "Manifest title" || result.Metadata.Title != "Native title" {
+		t.Fatalf("manifest precedence: %#v", result)
+	}
+	writeCLITestFile(t, filepath.Join(source, "index.md"), "---\nokf_version: \"0.3\"\nlicense: MIT OR Apache-2.0\n---\n")
+	result = runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", source, "--json")
+	if result.Metadata.LicenseKind != "spdx" || result.Metadata.LicensePath != "" {
+		t.Fatalf("SPDX metadata: %#v", result.Metadata)
+	}
+	writeCLITestFile(t, filepath.Join(source, "index.md"), "---\nokf_version: \"0.3\"\n---\n")
+	writeCLITestFile(t, filepath.Join(source, "LICENSE"), "Repository code license")
+	result = runCLIJSON[factile.BundleInspectResult](t, "bundle", "inspect", source, "--json")
+	if result.Metadata.License != "" {
+		t.Fatalf("repository license inferred: %#v", result.Metadata)
+	}
+}

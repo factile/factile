@@ -173,6 +173,13 @@ func contextOrigin(mount vfs.Mount) map[string]string {
 		bundlePath = "/"
 	}
 	origin := map[string]string{"bundle_path": bundlePath, "kind": mount.Kind}
+	if metadata := mount.BundleMetadata; metadata != nil {
+		for key, value := range map[string]string{"title": mount.Title, "description": mount.Description, "license": metadata.License, "license_origin": metadata.Origin} {
+			if value != "" && (key != "license_origin" || metadata.License != "") {
+				origin[key] = value
+			}
+		}
+	}
 	if mount.Kind == vfs.SourceKindGit {
 		origin["source_uri"] = safeGitSource(mount.Source)
 	}

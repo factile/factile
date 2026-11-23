@@ -260,17 +260,31 @@ func sourceHandler(ws readerWorkspace, opts Options) http.HandlerFunc {
 			writeError(w, errorStatus(err), err)
 			return
 		}
-		writeJSON(w, map[string]any{
-			"source": map[string]any{
-				"title":       "Local Factile workspace",
-				"description": summary.Workspace.WorkspaceDir,
-				"writable":    opts.Curator,
-				"metadata": map[string]any{
-					"workspace": summary.Workspace,
-					"sources":   summary.Sources,
-				},
-			},
-		})
+		source := map[string]any{
+			"title":       "Local Factile workspace",
+			"description": summary.Workspace.WorkspaceDir,
+			"writable":    opts.Curator,
+			"metadata":    map[string]any{"workspace": summary.Workspace, "sources": summary.Sources},
+		}
+		for _, root := range summary.Sources {
+			if root.MountPath != "/" || root.BundleMetadata == nil {
+				continue
+			}
+			source["bundle_metadata"] = root.BundleMetadata
+			if root.Title != "" {
+				source["title"] = root.Title
+			}
+			if root.Description != "" {
+				source["description"] = root.Description
+			} else {
+				delete(source, "description")
+			}
+			if root.BundleMetadata.License != "" {
+				source["license"] = root.BundleMetadata.License
+				source["license_origin"] = root.BundleMetadata.Origin
+			}
+		}
+		writeJSON(w, map[string]any{"source": source})
 	}
 }
 

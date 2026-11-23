@@ -209,6 +209,19 @@ func (r *Renderer) RenderBundleInspect(w io.Writer, result factile.BundleInspect
 		"kind":          result.Kind,
 		"plausible_okf": result.PlausibleOKF,
 	}
+	if result.Title != "" {
+		metadata["title"] = result.Title
+	}
+	if result.Description != "" {
+		metadata["description"] = result.Description
+	}
+	if root := result.Metadata; root != nil && root.License != "" {
+		metadata["license"] = root.License
+		metadata["license_origin"] = root.Origin
+		if root.LicensePath != "" {
+			metadata["license_path"] = root.LicensePath
+		}
+	}
 	if rendered := r.RenderMetadata(metadata); rendered != "" {
 		if _, err := fmt.Fprintln(w, rendered); err != nil {
 			return err

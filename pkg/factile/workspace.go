@@ -1166,30 +1166,34 @@ func (w *LocalWorkspace) InspectBundle(ctx context.Context, source string) (Bund
 	if err != nil {
 		return BundleInspectResult{}, NormalizeError(err)
 	}
-	manifest, err := vfs.LoadManifest(store.Root)
-	if err != nil || manifest.Bundle == nil {
-		return BundleInspectResult{}, NormalizeError(&vfs.Error{
-			Code:    vfs.ErrInvalidBundle,
-			Message: "Source directory has no valid bundle factile.toml.",
-			Details: map[string]string{"bundle": store.Root},
-		})
+
+	manifest, manifestErr := vfs.LoadManifest(store.Root)
+	if manifestErr != nil && !errors.Is(manifestErr, os.ErrNotExist) || manifestErr == nil && manifest.Bundle == nil {
+		return BundleInspectResult{}, NewError(ErrInvalidBundle, "Source directory has an invalid bundle factile.toml.")
 	}
-	ids, err := store.ListConceptIDs("")
+	mount := vfs.SelectOKF(vfs.Mount{MountPath: "/inspect", Source: source, SourcePath: store.Root, Kind: "local"}, manifest.Bundle == nil)
+	result := BundleInspectResult{Source: source, Kind: "local", Metadata: mount.BundleMetadata}
+	if manifest.Bundle != nil {
+		result.Title, result.Description = manifest.Bundle.Title, manifest.Bundle.Description
+	}
+	if mount.BundleMetadata != nil {
+		setIfBlank(&result.Title, mount.BundleMetadata.Title)
+		setIfBlank(&result.Description, mount.BundleMetadata.Description)
+	}
+	items, issues, err := w.validateMountScope(mount, "")
 	if err != nil {
-		return BundleInspectResult{}, NormalizeError(err)
+		return BundleInspectResult{}, err
 	}
-	var concepts []ConceptSummary
-	var issues []ValidationIssue
-	mount := vfs.Mount{MountPath: "/inspect", Source: source, SourcePath: store.Root, Kind: "local", Writable: true}
-	for _, id := range ids {
-		summary, err := w.summaryForID(store, mount, id)
-		if err != nil {
-			issues = append(issues, ValidationIssue{Severity: "error", Code: ErrOKFParse, Message: err.Error(), ConceptID: id})
-			continue
-		}
-		concepts = append(concepts, summary)
+	for _, item := range items {
+		result.Concepts = append(result.Concepts, item.Summary)
 	}
-	return BundleInspectResult{Source: source, Kind: "local", PlausibleOKF: len(ids) > 0 || fileExists(filepath.Join(store.Root, "index.md")), Concepts: concepts, Issues: issues}, nil
+	result.Issues = issues
+	result.PlausibleOKF = len(items) > 0 || mount.BundleMetadata != nil ||
+		manifest.Bundle != nil && fileExists(filepath.Join(store.Root, "index.md"))
+	if !result.PlausibleOKF && manifest.Bundle == nil {
+		return BundleInspectResult{}, NewError(ErrInvalidBundle, "Source directory has no valid bundle factile.toml, typed concepts, or portable root metadata.")
+	}
+	return result, nil
 }
 
 func (w *LocalWorkspace) FindBundles(ctx context.Context, startPath string) (BundleFindResult, error) {
@@ -1215,6 +1219,9 @@ func (w *LocalWorkspace) FindBundles(ctx context.Context, startPath string) (Bun
 		}
 		manifest, manifestErr := vfs.LoadManifest(p)
 		if manifestErr == nil && manifest.Bundle != nil {
+			sources = append(sources, p)
+		} else if errors.Is(manifestErr, os.ErrNotExist) &&
+			vfs.SelectOKF(vfs.Mount{SourcePath: p}, true).BundleMetadata != nil {
 			sources = append(sources, p)
 		}
 		return nil

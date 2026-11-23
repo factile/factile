@@ -19,6 +19,11 @@ func applyMountMetadataDefaults(sourcePath string, mountPath string, opts MountO
 		setIfBlank(&opts.Description, manifest.Bundle.Description)
 	}
 
+	if metadata := vfs.SelectOKF(vfs.Mount{SourcePath: sourcePath}, false).BundleMetadata; metadata != nil {
+		setIfBlank(&opts.Title, metadata.Title)
+		setIfBlank(&opts.Description, metadata.Description)
+	}
+
 	if !hasText(opts.Title) || !hasText(opts.Description) {
 		title, description := overviewMetadata(sourcePath)
 		setIfBlank(&opts.Title, title)
