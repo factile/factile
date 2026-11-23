@@ -6,20 +6,22 @@ import (
 )
 
 type ReviewState struct {
-	Verified           []map[string]any `json:"verified"`
-	Tier               string           `json:"tier"`
-	Status             string           `json:"status"`
-	LastVerifiedAt     string           `json:"last_verified_at,omitempty"`
-	ChangedSinceReview *bool            `json:"changed_since_review"`
-	Stale              *bool            `json:"stale"`
-	EvaluatedAt        string           `json:"evaluated_at"`
+	Verified           []map[string]any  `json:"verified"`
+	CurrentVerified    *[]map[string]any `json:"current_verified,omitempty"`
+	Freshness          string            `json:"freshness,omitempty"`
+	Tier               string            `json:"tier"`
+	Status             string            `json:"status"`
+	LastVerifiedAt     string            `json:"last_verified_at,omitempty"`
+	ChangedSinceReview *bool             `json:"changed_since_review"`
+	Stale              *bool             `json:"stale"`
+	EvaluatedAt        string            `json:"evaluated_at"`
 }
 
 // CompareDatetimes retains sub-nanosecond precision as well as timezone semantics.
 // Callers validate both inputs with Datetime first.
 func CompareDatetimes(a, b string) int {
-	left, _ := Datetime(a)
-	right, _ := Datetime(b)
+	left, _ := PortableDatetime(a)
+	right, _ := PortableDatetime(b)
 	if left.Unix() < right.Unix() {
 		return -1
 	}
@@ -79,4 +81,65 @@ func Review(fields map[string]any, evaluatedAt string) (ReviewState, error) {
 		state.Stale = &stale
 	}
 	return state, nil
+}
+
+// PortableReview keeps historical evidence while deriving trust from current events.
+func PortableReview(fields map[string]any, evaluatedAt string) ReviewState {
+	current := []map[string]any{}
+	state := ReviewState{
+		Verified: []map[string]any{}, CurrentVerified: &current, Tier: "unverified",
+		Status: "stable", Freshness: "unknown", EvaluatedAt: evaluatedAt,
+	}
+	if status := fields["status"]; !EmptyMetadata(status) {
+		state.Status = "unknown"
+		if text, ok := status.(string); ok {
+			state.Status = text
+		}
+	}
+	generated := fields["generated"]
+	generationKnown := false
+	var generatedAt string
+	if authoring, ok := generated.(map[string]any); ok && PortableActor(authoring["by"]) {
+		generatedAt, _ = authoring["at"].(string)
+		_, generationKnown = PortableDatetime(generatedAt)
+	}
+	for _, raw := range MetadataItems(fields["verified"]) {
+		event, ok := raw.(map[string]any)
+		if !ok || !PortableActor(event["by"]) {
+			continue
+		}
+		at, _ := event["at"].(string)
+		if _, ok := PortableDatetime(at); !ok {
+			continue
+		}
+		state.Verified = append(state.Verified, event)
+		if state.LastVerifiedAt == "" || CompareDatetimes(at, state.LastVerifiedAt) > 0 {
+			state.LastVerifiedAt = at
+		}
+		if EmptyMetadata(generated) || generationKnown && CompareDatetimes(at, generatedAt) >= 0 {
+			current = append(current, event)
+			if strings.HasPrefix(event["by"].(string), "human:") {
+				state.Tier = "human-reviewed"
+			} else if state.Tier == "unverified" {
+				state.Tier = "machine-confirmed"
+			}
+		}
+	}
+	if generationKnown && state.LastVerifiedAt != "" {
+		changed := CompareDatetimes(generatedAt, state.LastVerifiedAt) > 0
+		state.ChangedSinceReview = &changed
+	}
+	if deadline := fields["stale_after"]; !EmptyMetadata(deadline) {
+		if _, valid := PortableDatetime(deadline); valid {
+			stale := CompareDatetimes(evaluatedAt, deadline.(string)) >= 0
+			state.Stale = &stale
+			state.Freshness = "fresh"
+			if stale {
+				state.Freshness = "stale"
+			}
+		} else {
+			state.Freshness = "malformed"
+		}
+	}
+	return state
 }

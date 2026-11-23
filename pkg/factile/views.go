@@ -10,6 +10,9 @@ import (
 
 func (w *LocalWorkspace) ListViews(ctx context.Context) (ViewListResult, error) {
 	_ = ctx
+	if w.opts.OKFBundle != "" {
+		return ViewListResult{Views: []View{}}, nil
+	}
 	viewsPath, err := w.viewsPath()
 	if err != nil {
 		return ViewListResult{}, err

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -67,6 +68,9 @@ func NormalizeConceptID(id string) string {
 }
 
 func ParseConcept(conceptID string, data []byte) (Document, error) {
+	if !utf8.Valid(data) {
+		return Document{}, fmt.Errorf("%w: expected UTF-8", ErrInvalidFrontmatter)
+	}
 	text := string(data)
 	frontmatter, body, err := splitFrontmatter(text)
 	if err != nil && IsReservedFile(NormalizeConceptID(conceptID)+".md") && strings.TrimRight(strings.SplitN(text, "\n", 2)[0], "\r") != "---" {
@@ -86,6 +90,12 @@ func ParseConcept(conceptID string, data []byte) (Document, error) {
 		Order:          order,
 		Markdown:       body,
 	}, nil
+}
+
+// FrontmatterStarts distinguishes plain Markdown from an unterminated block.
+func FrontmatterStarts(text string) bool {
+	first, _, _ := strings.Cut(text, "\n")
+	return strings.TrimSuffix(first, "\r") == "---"
 }
 
 func splitFrontmatter(text string) (string, string, error) {

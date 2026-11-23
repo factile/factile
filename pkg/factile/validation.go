@@ -164,6 +164,15 @@ func (w *LocalWorkspace) validatePathScope(ctx context.Context, normalized strin
 		return scan, nil
 	}
 	scan.Path = target.Path
+	if target.Mount.Portable && target.Kind == TargetPath && !target.Exists {
+		store := storage.Local{Root: target.Mount.SourcePath, Portable: true}
+		if store.EntryKind(target.ConceptID+".md") == "file" {
+			if err := collect(target.Mount, target.ConceptID, true); err != nil {
+				return validationScan{}, err
+			}
+			return scan, nil
+		}
+	}
 	if target.Kind == TargetPath && !target.Exists && !invalid[target.Mount.MountPath] {
 		return validationScan{}, errorf(ErrMountNotFound, "Path not found: %s", target.Path)
 	}

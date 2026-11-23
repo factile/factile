@@ -14,6 +14,8 @@ import (
 	"github.com/factile/factile/pkg/okf"
 )
 
+const MaxDocumentBytes = 16_777_216
+
 var ErrUnsafePath = errors.New("unsafe source path")
 
 // ErrLockTimeout reports that a local lock could not be acquired before the deadline.
@@ -25,7 +27,8 @@ var (
 )
 
 type Local struct {
-	Root string
+	Root     string
+	Portable bool
 }
 
 type ScaffoldFile struct {
@@ -63,10 +66,47 @@ func (s Local) ConceptFile(conceptID string) (string, error) {
 	return s.safeJoin(rel)
 }
 
+func HiddenPath(rel string) bool {
+	for _, part := range strings.Split(rel, "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// EntryKind checks a physical path without exposing symlinks or special files.
+func (s Local) EntryKind(rel string) string {
+	if rel == "" {
+		return "directory"
+	}
+	file, err := s.safeJoin(rel)
+	if errors.Is(err, ErrUnsafePath) {
+		return "outside"
+	}
+	if err != nil {
+		return "missing"
+	}
+	info, err := os.Lstat(file)
+	switch {
+	case err != nil:
+		return "missing"
+	case info.IsDir():
+		return "directory"
+	case info.Mode().IsRegular():
+		return "file"
+	default:
+		return "outside"
+	}
+}
+
 func (s Local) safeJoin(rel string) (string, error) {
 	rel = filepath.Clean(filepath.FromSlash(rel))
 	if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return "", fmt.Errorf("%w: %s", ErrUnsafePath, rel)
+	}
+	if s.Portable && HiddenPath(filepath.ToSlash(rel)) {
+		return "", fmt.Errorf("%w: hidden path", ErrUnsafePath)
 	}
 	conceptPath := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
 	for _, part := range strings.Split(conceptPath, "/") {
@@ -118,7 +158,28 @@ func (s Local) ReadConcept(conceptID string) ([]byte, string, error) {
 	if err := rejectSymlink(file); err != nil {
 		return nil, "", err
 	}
-	data, err := os.ReadFile(file)
+	if !s.Portable {
+		data, err := os.ReadFile(file)
+		return data, file, err
+	}
+	root, err := os.OpenRoot(s.Root)
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+	rel, err := filepath.Rel(s.Root, file)
+	if err != nil {
+		return nil, "", err
+	}
+	handle, err := root.Open(rel)
+	if err != nil {
+		return nil, "", err
+	}
+	defer handle.Close()
+	data, err := io.ReadAll(io.LimitReader(handle, MaxDocumentBytes+1))
+	if len(data) > MaxDocumentBytes {
+		return nil, "", fmt.Errorf("resource limit exceeded: document_bytes")
+	}
 	return data, file, err
 }
 
@@ -161,6 +222,12 @@ func (s Local) listMarkdownIDs(prefix string, reserved bool) ([]string, error) {
 		if err != nil {
 			return err
 		}
+		if s.Portable && p != root && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
 			name := d.Name()
 			if p != root && (strings.EqualFold(name, ".factile") || strings.EqualFold(name, ".git")) {
@@ -168,7 +235,7 @@ func (s Local) listMarkdownIDs(prefix string, reserved bool) ([]string, error) {
 			}
 			return nil
 		}
-		if d.Type()&fs.ModeSymlink != 0 {
+		if !d.Type().IsRegular() {
 			return nil
 		}
 		if !strings.HasSuffix(d.Name(), ".md") || (!reserved && okf.IsReservedFile(d.Name())) {

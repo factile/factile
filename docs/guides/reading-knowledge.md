@@ -12,6 +12,24 @@ legacy_metadata:
 Reader commands use logical Factile paths and work the same across root-bundle
 content, mounted local bundles, and cached Git bundles.
 
+## Read a portable OKF bundle
+
+Use the physical bundle directory when a third-party bundle has no Factile
+workspace manifest.
+
+```bash
+factile --okf-bundle ./downloaded-bundle validate /
+factile --okf-bundle ./downloaded-bundle list /
+factile --okf-bundle ./downloaded-bundle mcp serve --stdio
+```
+
+The selector opens only that directory and makes it read-only. Use
+`--workspace` to read a configured workspace with mounts and views.
+An OKF 0.3 reader skips plain Markdown and hidden files, and derives trust
+from verification events that apply to the current content. Use
+`factile read <path> --include-review --json` to inspect review history and
+the current events separately.
+
 ## Start shallow
 
 ```bash

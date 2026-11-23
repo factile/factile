@@ -28,6 +28,7 @@ import (
 
 type globals struct {
 	Workspace string
+	OKFBundle string
 	Format    string
 	Color     clirender.ColorMode
 	Quiet     bool
@@ -91,7 +92,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 	if global.Format == "" {
 		global.Format = formatText
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace, OKFBundle: global.OKFBundle})
 	if len(rest) == 0 {
 		result, err := ws.Summary(ctx)
 		if err != nil {
@@ -123,6 +124,13 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer, 
 }
 
 func runCommand(ctx context.Context, ws factile.Workspace, args []string, global globals, stdin io.Reader, stdout io.Writer, stderr io.Writer) (int, error) {
+	if global.OKFBundle != "" && !strings.HasPrefix(args[0], "/") {
+		switch args[0] {
+		case "list", "read", "stat", "search", "graph", "context", "validate", "mcp":
+		default:
+			return 2, factile.NewError(factile.ErrUnsupportedCommand, "--okf-bundle supports read-only knowledge commands and MCP")
+		}
+	}
 	if len(args) == 2 && args[1] == "help" {
 		args = append([]string{}, args...)
 		args[1] = "--help"
@@ -1455,7 +1463,7 @@ func runMCP(ctx context.Context, global globals, args []string, stdin io.Reader,
 	if len(args) < 2 || args[0] != "serve" {
 		return 0, factile.NewError(factile.ErrUnsupportedCommand, "Unsupported MCP command")
 	}
-	readOnly := false
+	readOnly := global.OKFBundle != ""
 	stdio := false
 	for _, arg := range args[1:] {
 		switch arg {
@@ -1470,10 +1478,12 @@ func runMCP(ctx context.Context, global globals, args []string, stdin io.Reader,
 	if !stdio {
 		return 2, fmt.Errorf("MCP serve requires --stdio")
 	}
-	if err := requireCLIWorkspace(global); err != nil {
-		return 0, err
+	if global.OKFBundle == "" {
+		if err := requireCLIWorkspace(global); err != nil {
+			return 0, err
+		}
 	}
-	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace})
+	ws := factile.NewWorkspace(factile.WorkspaceOptions{Workspace: global.Workspace, OKFBundle: global.OKFBundle})
 	return 0, mcpserver.Serve(ctx, ws, stdin, stdout, mcpserver.Options{ReadOnly: readOnly})
 }
 
@@ -1493,6 +1503,16 @@ func parseGlobals(args []string) (globals, []string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
+		case "--okf-bundle":
+			value, next, ok := optionValue(args, i)
+			if !ok || value == "" {
+				return global, nil, fmt.Errorf("--okf-bundle requires a directory")
+			}
+			i = next
+			if global.OKFBundle != "" && global.OKFBundle != value {
+				return global, nil, fmt.Errorf("--okf-bundle may select only one directory")
+			}
+			global.OKFBundle = value
 		case "--workspace":
 			value, next, ok := optionValue(args, i)
 			if !ok {
@@ -1577,6 +1597,9 @@ func parseGlobals(args []string) (globals, []string, error) {
 	if legacyErr != nil {
 		return global, rest, legacyErr
 	}
+	if global.Workspace != "" && global.OKFBundle != "" {
+		return global, nil, fmt.Errorf("--okf-bundle cannot be combined with --workspace")
+	}
 	rest = append(rest, initRoot...)
 	return global, rest, nil
 }
@@ -1597,7 +1620,7 @@ func invocationCommand(args []string) string {
 
 func isGlobalOption(arg string) bool {
 	switch arg {
-	case "--workspace", "--format", "--json", "--color", "--quiet", "--version", "--help", "-h":
+	case "--workspace", "--okf-bundle", "--format", "--json", "--color", "--quiet", "--version", "--help", "-h":
 		return true
 	default:
 		return false
@@ -1619,7 +1642,7 @@ func isRecognizedOption(arg string) bool {
 
 func optionNeedsValue(arg string) bool {
 	switch arg {
-	case "--workspace", "--format", "--color", "--root", "--name", "--title", "--description", "--agent", "--mount-file":
+	case "--workspace", "--okf-bundle", "--format", "--color", "--root", "--name", "--title", "--description", "--agent", "--mount-file":
 		return true
 	default:
 		return false

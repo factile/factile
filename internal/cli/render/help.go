@@ -44,7 +44,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, "  factile [global options] (<command> [args] | <path>)"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "  global options: --workspace <directory>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
+	if _, err := fmt.Fprintln(w, "  global options: --workspace <directory>, --okf-bundle <directory>, --json, --format text|json, --color auto|always|never, --quiet, --version"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w, "  Global options may appear before or after the command."); err != nil {
@@ -58,6 +58,7 @@ func (r *Renderer) RenderHelp(w io.Writer) error {
 	}
 	if _, err := fmt.Fprintln(w, `  By default, Factile searches the current directory and its parents for a workspace.
   --workspace <directory> selects an existing workspace at exactly that directory.
+  --okf-bundle <directory> reads exactly that portable bundle without a workspace manifest.
   With init, it can create a workspace there without selecting a parent workspace.
   From inside a subrepo, create its own workspace with:
     factile --workspace . init --root docs

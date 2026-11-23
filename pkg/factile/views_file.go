@@ -10,6 +10,9 @@ import (
 )
 
 func (w *LocalWorkspace) viewsPath() (string, error) {
+	if w.opts.OKFBundle != "" {
+		return "", NewError(ErrUnsupportedCommand, "Views require a Factile workspace")
+	}
 	workspace, err := w.resolvedWorkspace()
 	if err != nil {
 		return "", NormalizeError(err)

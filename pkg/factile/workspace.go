@@ -25,6 +25,7 @@ import (
 
 type WorkspaceOptions struct {
 	Workspace string
+	OKFBundle string
 	// Deprecated: Root Layout v2 does not support --mount-file composition.
 	MountFile string
 	// Deprecated: Root Layout v2 uses Workspace for exact selection.
@@ -46,6 +47,12 @@ func NewWorkspace(opts WorkspaceOptions) *LocalWorkspace {
 
 func (w *LocalWorkspace) resolvedWorkspace() (vfs.WorkspaceContext, error) {
 	w.resolveOnce.Do(func() {
+		if w.opts.OKFBundle != "" {
+			store, err := storage.NewLocal(w.opts.OKFBundle)
+			w.workspaceErr = err
+			w.workspace.RootBundleDir = store.Root
+			return
+		}
 		if w.opts.Root != "" {
 			w.workspaceErr = &vfs.Error{
 				Code:    vfs.ErrInvalidWorkspace,
@@ -131,7 +138,7 @@ func (w *LocalWorkspace) List(ctx context.Context, inputPath string, opts ListOp
 }
 
 func (w *LocalWorkspace) listLocalEntries(mount vfs.Mount, prefix string, folders []FolderSummary) ([]FolderSummary, []DocumentSummary, error) {
-	store, err := storage.NewLocal(mount.SourcePath)
+	store, err := storeForMount(mount)
 	if err != nil {
 		return nil, nil, NormalizeError(err)
 	}
@@ -241,7 +248,7 @@ func (w *LocalWorkspace) Read(ctx context.Context, inputPath string, opts ReadOp
 		if err != nil {
 			return ConceptResult{}, err
 		}
-		state, _ := okf.Review(concept.Frontmatter, at)
+		state := conceptReview(concept, at)
 		concept.ReviewState = &state
 	}
 	return ConceptResult{Concept: concept}, nil
@@ -264,7 +271,7 @@ func (w *LocalWorkspace) Search(ctx context.Context, inputPath string, query str
 	for _, item := range scored {
 		summary := scope.Summaries[item.Index]
 		if selection != nil {
-			state, _ := okf.Review(scope.Concepts[item.Index].Concept.Frontmatter, selection.EvaluatedAt)
+			state := conceptReview(scope.Concepts[item.Index].Concept, selection.EvaluatedAt)
 			if reason := reviewExclusion(state, opts); reason != "" {
 				selection.Excluded = append(selection.Excluded, OmittedItem{Path: summary.Path, Reason: reason})
 				continue
@@ -378,7 +385,7 @@ func (w *LocalWorkspace) Context(ctx context.Context, inputPath string, query st
 		if strings.TrimSpace(opts.View) != "" {
 			concept = restrictSourceTargets(concept, scope.Paths)
 		}
-		state, _ := okf.Review(concept.Frontmatter, at)
+		state := conceptReview(concept, at)
 		concept.ReviewState = &state
 		concept.Origin = concept.origin
 		tokens, err := contextpack.EvidenceTokens(concept, item.Summary)
@@ -408,7 +415,7 @@ func passageContext(path, query, at string, opts ContextOptions, concepts []scop
 			pack.Omitted = append(pack.Omitted, OmittedItem{Path: concept.Path, Reason: "no_matching_passage"})
 			continue
 		}
-		state, _ := okf.Review(concept.Frontmatter, at)
+		state := conceptReview(concept, at)
 		passage := ContextPassage{
 			Path: concept.Path, Revision: concept.Revision, Heading: result.Heading,
 			Markdown: result.Passage, Origin: concept.origin, ReviewState: state,
@@ -474,7 +481,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 				if depth == 0 {
 					break
 				}
-				if viewID != "" && diagnostic.Code == "broken_source" {
+				if viewID != "" && pathDiagnostic(diagnostic.Code) {
 					continue
 				}
 				issues = append(issues, ValidationIssue{Severity: "warning", Code: diagnostic.Code, Message: diagnostic.Message, Path: item.Concept.Path, ConceptID: item.Concept.ConceptID, Details: map[string]any{"field": diagnostic.Field}})
@@ -508,7 +515,7 @@ func (w *LocalWorkspace) Graph(ctx context.Context, inputPath string, opts Graph
 				addNode(item.Summary)
 				addNode(destination.Summary)
 				edges = append(edges, GraphEdge{From: item.Concept.Path, To: targetPath, Kind: linkKind(link)})
-			} else if viewID == "" && link.Kind != "source_reference" {
+			} else if viewID == "" && !item.Concept.portable && link.Kind != "source_reference" {
 				issues = append(issues, linkIssue(item, link))
 			}
 		}
@@ -558,7 +565,16 @@ func (w *LocalWorkspace) Validate(ctx context.Context, inputPath string, opts Va
 	}
 	issues := append(metadataIssues, scan.Issues...)
 	issues = append(issues, linkIssues(scan.Concepts, w.cachedLinkMounts(scan.Mounts))...)
-	return w.applyConceptSchemas(ctx, baseValidation(scan.Path, issues), scan.Scopes)
+	result := baseValidation(scan.Path, issues)
+	if w.opts.OKFBundle != "" {
+		sort.SliceStable(result.Issues, func(i, j int) bool {
+			a, b := result.Issues[i], result.Issues[j]
+			return a.Path < b.Path || a.Path == b.Path && a.Code < b.Code
+		})
+		result.OKF.Issues = append([]ValidationIssue{}, result.Issues...)
+		return result, nil
+	}
+	return w.applyConceptSchemas(ctx, result, scan.Scopes)
 }
 
 // ValidateRootBundle validates only the selected local root bundle. It does
@@ -628,6 +644,9 @@ func validateRootIndex(mount vfs.Mount) (*scopedConcept, []ValidationIssue) {
 }
 
 func (w *LocalWorkspace) validateRootMetadata() ([]ValidationIssue, bool, error) {
+	if w.opts.OKFBundle != "" {
+		return nil, false, nil
+	}
 	context, err := w.resolvedWorkspace()
 	if err != nil {
 		return nil, false, NormalizeError(err)
@@ -702,6 +721,9 @@ func (w *LocalWorkspace) validateViewScope(ctx context.Context, inputPath string
 			concepts = append(concepts, item)
 		}
 		for _, issue := range scan.Issues {
+			if pathDiagnostic(issue.Code) {
+				continue
+			}
 			addIssue(issue)
 		}
 	}
@@ -959,6 +981,9 @@ func (w *LocalWorkspace) Deprecate(ctx context.Context, inputPath string, opts D
 }
 
 func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath string, opts MountOptions) (MountResult, error) {
+	if w.opts.OKFBundle != "" {
+		return MountResult{}, NewError(ErrSourceReadOnly, "Standalone OKF bundles are read-only")
+	}
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
 		return MountResult{}, NormalizeError(err)
@@ -1042,6 +1067,9 @@ func (w *LocalWorkspace) Mount(ctx context.Context, source string, mountPath str
 }
 
 func (w *LocalWorkspace) Unmount(ctx context.Context, mountPath string, opts UnmountOptions) (UnmountResult, error) {
+	if w.opts.OKFBundle != "" {
+		return UnmountResult{}, NewError(ErrSourceReadOnly, "Standalone OKF bundles are read-only")
+	}
 	_, _ = ctx, opts
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
@@ -1096,6 +1124,9 @@ func (w *LocalWorkspace) ListMounts(ctx context.Context) (MountListResult, error
 }
 
 func (w *LocalWorkspace) Refresh(ctx context.Context, mountPath string) (RefreshResult, error) {
+	if w.opts.OKFBundle != "" {
+		return RefreshResult{}, NewError(ErrSourceReadOnly, "Standalone OKF bundles are read-only")
+	}
 	normalized, err := vfs.ValidateMountPath(mountPath)
 	if err != nil {
 		return RefreshResult{}, NormalizeError(err)
@@ -1289,7 +1320,7 @@ func (w *LocalWorkspace) scope(ctx context.Context, inputPath string) (scopedSet
 }
 
 func (w *LocalWorkspace) scopeForMount(mount vfs.Mount, prefix string) ([]scopedConcept, error) {
-	store, err := storage.NewLocal(mount.SourcePath)
+	store, err := storeForMount(mount)
 	if err != nil {
 		return nil, NormalizeError(err)
 	}
@@ -1301,6 +1332,9 @@ func (w *LocalWorkspace) scopeForMount(mount vfs.Mount, prefix string) ([]scoped
 	for _, id := range ids {
 		concept, err := w.readConcept(mount, id)
 		if err != nil {
+			if mount.Portable && (ErrorCode(err) == ErrConceptNotFound || ErrorCode(err) == ErrOKFParse) {
+				continue
+			}
 			return nil, err
 		}
 		items = append(items, scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)})
@@ -1309,7 +1343,7 @@ func (w *LocalWorkspace) scopeForMount(mount vfs.Mount, prefix string) ([]scoped
 }
 
 func (w *LocalWorkspace) readConcept(mount vfs.Mount, conceptID string) (Concept, error) {
-	store, err := storage.NewLocal(mount.SourcePath)
+	store, err := storeForMount(mount)
 	if err != nil {
 		return Concept{}, NormalizeError(err)
 	}
@@ -1320,6 +1354,9 @@ func (w *LocalWorkspace) readConcept(mount vfs.Mount, conceptID string) (Concept
 	doc, err := okf.ParseConcept(conceptID, data)
 	if err != nil {
 		return Concept{}, NormalizeError(err)
+	}
+	if mount.Portable && !okf.IsReservedFile(conceptID+".md") && !typedConcept(doc) {
+		return Concept{}, errorf(ErrConceptNotFound, "Concept not found: %s", cleanVirtualJoin(mount.MountPath, conceptID))
 	}
 	return conceptFromDoc(mount, doc, data), nil
 }
@@ -1332,6 +1369,9 @@ func (w *LocalWorkspace) summaryForID(store storage.Local, mount vfs.Mount, conc
 	doc, err := okf.ParseConcept(conceptID, data)
 	if err != nil {
 		return ConceptSummary{}, err
+	}
+	if mount.Portable && !typedConcept(doc) {
+		return ConceptSummary{}, errorf(ErrConceptNotFound, "Concept not found: %s", cleanVirtualJoin(mount.MountPath, conceptID))
 	}
 	return summaryFromDoc(mount, doc, data), nil
 }
@@ -1492,7 +1532,7 @@ func summaryFromDoc(mount vfs.Mount, doc okf.Document, data []byte) ConceptSumma
 }
 
 func conceptFromDoc(mount vfs.Mount, doc okf.Document, data []byte) Concept {
-	return conceptSources(Concept{origin: contextOrigin(mount),
+	return conceptSources(Concept{origin: contextOrigin(mount), portable: mount.Portable,
 		Path:        cleanVirtualJoin(mount.MountPath, doc.ConceptID),
 		ConceptID:   doc.ConceptID,
 		Revision:    revision.DigestBytes(data),
@@ -1524,7 +1564,7 @@ func validateScope(scope scopedSet) []ValidationIssue {
 }
 
 func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]scopedConcept, []ValidationIssue, error) {
-	store, err := storage.NewLocal(mount.SourcePath)
+	store, err := storeForMount(mount)
 	if err != nil {
 		return nil, nil, NormalizeError(err)
 	}
@@ -1548,7 +1588,7 @@ func (w *LocalWorkspace) validateMountScope(mount vfs.Mount, prefix string) ([]s
 }
 
 func (w *LocalWorkspace) validateConcept(mount vfs.Mount, conceptID string) (*scopedConcept, []ValidationIssue, error) {
-	store, err := storage.NewLocal(mount.SourcePath)
+	store, err := storeForMount(mount)
 	if err != nil {
 		return nil, nil, NormalizeError(err)
 	}
@@ -1557,6 +1597,25 @@ func (w *LocalWorkspace) validateConcept(mount vfs.Mount, conceptID string) (*sc
 		return nil, nil, NormalizeError(err)
 	}
 	doc, err := okf.ParseConcept(conceptID, data)
+	if mount.Portable {
+		logical := cleanVirtualJoin(mount.MountPath, conceptID)
+		reserved := okf.IsReservedFile(conceptID + ".md")
+		if err != nil {
+			if reserved {
+				return nil, []ValidationIssue{{Severity: "error", Code: "invalid_reserved_file", Path: logical, Message: err.Error()}}, nil
+			}
+			if !okf.FrontmatterStarts(string(data)) {
+				return nil, []ValidationIssue{{Severity: "warning", Code: "not_a_concept", Path: logical, Message: "Markdown has no concept frontmatter"}}, nil
+			}
+			return nil, []ValidationIssue{{Severity: "error", Code: ErrOKFParse, Path: logical, Message: err.Error()}}, nil
+		}
+		if !reserved && !typedConcept(doc) {
+			return nil, []ValidationIssue{{Severity: "warning", Code: "not_a_concept", Path: logical, Message: "Markdown has no nonempty concept type"}}, nil
+		}
+		concept := conceptFromDoc(mount, doc, data)
+		item := scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
+		return &item, portableValidation(mount, doc, concept), nil
+	}
 	if err != nil {
 		if strings.HasSuffix(conceptID, "index") && okf.IsReservedFile(conceptID+".md") {
 			return nil, []ValidationIssue{{Severity: "error", Code: "invalid_reserved_file", Message: "Index frontmatter is only permitted at the bundle root with an okf_version key", Path: cleanVirtualJoin(mount.MountPath, conceptID)}}, nil
@@ -2017,14 +2076,23 @@ func (w *LocalWorkspace) mounts() ([]vfs.Mount, error) {
 	if err != nil {
 		return nil, err
 	}
-	return vfs.LoadWorkspaceMounts(context)
+	if w.opts.OKFBundle != "" {
+		return []vfs.Mount{vfs.SelectOKF(vfs.Mount{
+			MountPath: "/", Kind: vfs.SourceKindLocal, Source: ".", SourcePath: context.RootBundleDir,
+		}, true)}, nil
+	}
+	mounts, err := vfs.LoadWorkspaceMounts(context)
+	for index, mount := range mounts {
+		mounts[index] = vfs.SelectOKF(mount, false)
+	}
+	return mounts, err
 }
 
 func (w *LocalWorkspace) ensureWritable(mount vfs.Mount) error {
 	if mount.Kind == vfs.SourceKindGit {
 		return NewError(ErrSourceReadOnly, "Source is read-only: "+mount.MountPath)
 	}
-	if w.opts.ReadOnly || !mount.Writable {
+	if w.opts.ReadOnly || !mount.Writable || mount.Portable && mount.OKFVersion != "0.3" {
 		return NewError(ErrSourceReadOnly, "Source is read-only: "+mount.MountPath)
 	}
 	return ensureLocal(mount)

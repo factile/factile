@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/factile/factile/pkg/storage"
 )
 
 type TargetKind string
@@ -50,6 +52,8 @@ type Mount struct {
 	LocalCheckout *LocalCheckoutStatus `json:"local_checkout,omitempty"`
 	RegistryPath  string               `json:"-"`
 	SourcePath    string               `json:"-"`
+	Portable      bool                 `json:"-"`
+	OKFVersion    string               `json:"-"`
 }
 
 type LocalCheckoutStatus struct {
@@ -485,11 +489,17 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 		target.Kind = TargetPath
 		return target, nil
 	}
-	file := filepath.Join(selected.SourcePath, filepath.FromSlash(rel)+".md")
-	dir := filepath.Join(selected.SourcePath, filepath.FromSlash(rel))
-	fileExists := regularFileExists(file)
-	dirExists := dirExists(dir)
-	if fileExists && dirExists {
+	var fileExists, directoryExists bool
+	if selected.Portable {
+		fileExists = portableConcept(selected.SourcePath, rel)
+		directoryExists = (storage.Local{Root: selected.SourcePath, Portable: true}).EntryKind(rel) == "directory"
+	} else {
+		file := filepath.Join(selected.SourcePath, filepath.FromSlash(rel)+".md")
+		dir := filepath.Join(selected.SourcePath, filepath.FromSlash(rel))
+		fileExists = regularFileExists(file)
+		directoryExists = dirExists(dir)
+	}
+	if fileExists && directoryExists {
 		return Target{}, &Error{Code: "ambiguous_target", Message: "Path is both concept and directory: " + normalized}
 	}
 	if fileExists {
@@ -498,7 +508,7 @@ func Resolve(mounts []Mount, input string) (Target, error) {
 		target.Exists = true
 		return target, nil
 	}
-	if dirExists {
+	if directoryExists {
 		target.Kind = TargetPath
 		target.Exists = true
 		return target, nil

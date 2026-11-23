@@ -103,7 +103,7 @@ func (w *LocalWorkspace) mountsForValidationScope(ctx context.Context, normalize
 		}
 		mount.SourcePath = resolution.SourcePath
 		mount.SourceStatus = &resolution.Status
-		mounts[index] = mount
+		mounts[index] = vfs.SelectOKF(mount, false)
 	}
 	return mounts, issues, invalid, nil
 }
@@ -141,7 +141,7 @@ func (w *LocalWorkspace) hydrateMountIndexes(ctx context.Context, mounts []vfs.M
 		}
 		mount.SourcePath = resolution.SourcePath
 		mount.SourceStatus = &resolution.Status
-		mounts[index] = mount
+		mounts[index] = vfs.SelectOKF(mount, false)
 	}
 	return mounts, nil
 }
@@ -168,7 +168,7 @@ func (w *LocalWorkspace) cachedLinkMounts(mounts []vfs.Mount) []vfs.Mount {
 		if err == nil && resolution.SourcePath != "" {
 			mount.SourcePath = resolution.SourcePath
 			mount.SourceStatus = &resolution.Status
-			mounts[index] = mount
+			mounts[index] = vfs.SelectOKF(mount, false)
 		}
 	}
 	return mounts

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/factile/factile/pkg/conceptschema"
+	graphpkg "github.com/factile/factile/pkg/graph"
 	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/patch"
 	"github.com/factile/factile/pkg/vfs"
@@ -41,17 +42,20 @@ type ConceptSummary struct {
 
 type Concept struct {
 	origin              map[string]string
-	Origin              map[string]string     `json:"origin,omitempty"`
-	ReviewState         *okf.ReviewState      `json:"review_state,omitempty"`
-	Path                string                `json:"path"`
-	ConceptID           string                `json:"concept_id"`
-	Revision            string                `json:"revision"`
-	Frontmatter         map[string]any        `json:"frontmatter"`
-	Markdown            string                `json:"markdown"`
-	WorkspaceLinks      map[string]string     `json:"workspace_links,omitempty"`
-	SourceReferences    []okf.SourceReference `json:"source_references,omitempty"`
-	ClaimReferences     []okf.ClaimReference  `json:"claim_references,omitempty"`
-	MetadataDiagnostics []okf.Diagnostic      `json:"metadata_diagnostics,omitempty"`
+	portable            bool
+	portableLinks       []graphpkg.Link
+	Computation         *okf.ComputationDeclaration `json:"computation_declaration,omitempty"`
+	Origin              map[string]string           `json:"origin,omitempty"`
+	ReviewState         *okf.ReviewState            `json:"review_state,omitempty"`
+	Path                string                      `json:"path"`
+	ConceptID           string                      `json:"concept_id"`
+	Revision            string                      `json:"revision"`
+	Frontmatter         map[string]any              `json:"frontmatter"`
+	Markdown            string                      `json:"markdown"`
+	WorkspaceLinks      map[string]string           `json:"workspace_links,omitempty"`
+	SourceReferences    []okf.SourceReference       `json:"source_references,omitempty"`
+	ClaimReferences     []okf.ClaimReference        `json:"claim_references,omitempty"`
+	MetadataDiagnostics []okf.Diagnostic            `json:"metadata_diagnostics,omitempty"`
 }
 
 type Mount = vfs.Mount

@@ -42,7 +42,7 @@ func (w *LocalWorkspace) ListReview(ctx context.Context, inputPath, evaluatedAt 
 	}
 	result := ReviewListResult{Path: scope.Path, EvaluatedAt: at, Documents: []ReviewListItem{}}
 	for _, item := range scope.Concepts {
-		state, _ := okf.Review(item.Concept.Frontmatter, at)
+		state := conceptReview(item.Concept, at)
 		var reasons []string
 		if state.Stale != nil && *state.Stale {
 			reasons = append(reasons, "stale")
@@ -91,7 +91,7 @@ func (w *LocalWorkspace) Review(ctx context.Context, inputPath string, opts Revi
 	events = append(events, map[string]any{"by": "process:factile/" + version.Current().Version, "at": at, "observed_revision": opts.ExpectedRevision})
 	result, err := w.Patch(ctx, inputPath, PatchConceptInput{ExpectedRevision: opts.ExpectedRevision, Set: map[string]any{"verified": events}})
 	if err == nil {
-		state, _ := okf.Review(result.Concept.Frontmatter, at)
+		state := conceptReview(result.Concept, at)
 		result.Concept.ReviewState = &state
 	}
 	return result, err

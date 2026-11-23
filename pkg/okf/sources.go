@@ -66,11 +66,30 @@ func SourceTarget(conceptID, resource string) (kind, target string) {
 // SourceReferences preserves declared evidence. visible receives bundle-relative
 // paths and must enforce the caller's source, view, and access boundary.
 func SourceReferences(conceptID string, fields map[string]any, markdown string, visible func(string) bool) ([]SourceReference, []ClaimReference, []Diagnostic) {
+	return sourceReferences(fields, markdown, false, func(resource string) (string, string) {
+		kind, target := SourceTarget(conceptID, resource)
+		if kind == "internal" && (target == "" || visible == nil || !visible(target)) {
+			target = ""
+		}
+		return kind, target
+	})
+}
+
+func PortableSourceReferences(fields map[string]any, markdown string, resolve func(string) (string, string)) ([]SourceReference, []ClaimReference, []Diagnostic) {
+	return sourceReferences(fields, markdown, true, resolve)
+}
+
+func sourceReferences(fields map[string]any, markdown string, portable bool, resolve func(string) (string, string)) ([]SourceReference, []ClaimReference, []Diagnostic) {
 	refs := []SourceReference{}
 	claims := []ClaimReference{}
 	diagnostics := []Diagnostic{}
 	counts := map[string]int{}
 	sources, _ := metadataList(fields["sources"])
+	diagnose := MetadataDiagnostics
+	if portable {
+		sources = MetadataItems(fields["sources"])
+		diagnose = PortableMetadataDiagnostics
+	}
 	for _, raw := range sources {
 		source, ok := raw.(map[string]any)
 		if !ok {
@@ -80,13 +99,13 @@ func SourceReferences(conceptID string, fields map[string]any, markdown string, 
 		if !ok || strings.TrimSpace(resource) == "" {
 			continue
 		}
-		kind, target := SourceTarget(conceptID, resource)
+		kind, target := resolve(resource)
 		ref := SourceReference{Source: source, Kind: kind}
 		if id, ok := source["id"].(string); ok && sourceIDPattern.MatchString(id) {
 			counts[id]++
 		}
 		if kind == "internal" {
-			if target != "" && visible != nil && visible(target) {
+			if target != "" {
 				ref.Target = target
 			} else {
 				diagnostics = append(diagnostics, Diagnostic{Code: "broken_source", Field: "sources", Message: "Unresolved internal source: " + resource})
@@ -96,7 +115,7 @@ func SourceReferences(conceptID string, fields map[string]any, markdown string, 
 		if !present {
 			window = fields["usage_window"]
 		}
-		if m, ok := window.(map[string]any); ok && len(MetadataDiagnostics(map[string]any{"usage_window": m})) == 0 {
+		if m, ok := window.(map[string]any); ok && len(diagnose(map[string]any{"usage_window": m})) == 0 {
 			ref.EffectiveUsageWindow = m
 		}
 		refs = append(refs, ref)

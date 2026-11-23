@@ -17,6 +17,9 @@ func conceptSources(concept Concept, mount vfs.Mount) Concept {
 	if okf.IsReservedFile(concept.ConceptID + ".md") {
 		return concept
 	}
+	if mount.Portable {
+		return portableConceptSources(concept, mount)
+	}
 	store, err := storage.NewLocal(mount.SourcePath)
 	refs, claims, diagnostics := okf.SourceReferences(concept.ConceptID, concept.Frontmatter, concept.Markdown, func(target string) bool {
 		if err != nil {
@@ -37,6 +40,9 @@ func conceptSources(concept Concept, mount vfs.Mount) Concept {
 }
 
 func conceptLinks(item scopedConcept) []graphpkg.Link {
+	if item.Concept.portable {
+		return item.Concept.portableLinks
+	}
 	links := graphpkg.ExtractMarkdownLinks(item.Concept.Markdown)
 	sources, _ := item.Concept.Frontmatter["sources"].([]any)
 	for _, raw := range sources {
@@ -57,6 +63,9 @@ func conceptLinks(item scopedConcept) []graphpkg.Link {
 }
 
 func resolveConceptLink(item scopedConcept, link graphpkg.Link, mounts []vfs.Mount) (string, bool) {
+	if item.Concept.portable {
+		return link.Target, true
+	}
 	target, ok := graphpkg.ResolveLink(item.Concept.Path, link.Target)
 	if ok && link.Kind != "source_reference" && strings.HasPrefix(link.Target, "/") {
 		bundleTarget := cleanVirtualJoin(conceptMount(item.Concept), target)
@@ -78,7 +87,7 @@ func existingLinkTarget(mounts []vfs.Mount, path string) (vfs.Target, bool) {
 }
 
 func workspaceLinkOverrides(concept Concept, mounts []vfs.Mount) map[string]string {
-	if conceptMount(concept) == "" {
+	if concept.portable || conceptMount(concept) == "" {
 		return nil
 	}
 	var overrides map[string]string
@@ -98,7 +107,11 @@ func workspaceLinkOverrides(concept Concept, mounts []vfs.Mount) map[string]stri
 }
 
 func linkKind(link graphpkg.Link) string {
-	if link.Kind == "source_reference" {
+	switch link.Kind {
+	case "", "markdown":
+	case "sources[].resource":
+		return "source_reference"
+	default:
 		return link.Kind
 	}
 	return "markdown_link"
@@ -117,6 +130,9 @@ func linkIssue(item scopedConcept, link graphpkg.Link) ValidationIssue {
 }
 
 func missingLink(item scopedConcept, link graphpkg.Link, target string, known map[string]bool) bool {
+	if item.Concept.portable {
+		return false
+	}
 	if link.Kind == "source_reference" {
 		for _, reference := range item.Concept.SourceReferences {
 			if reference.Target == target && reference.Target != "" {
@@ -129,7 +145,7 @@ func missingLink(item scopedConcept, link graphpkg.Link, target string, known ma
 }
 
 func sourceTargetVisible(item, target scopedConcept, link graphpkg.Link) bool {
-	return link.Kind != "source_reference" || conceptMount(item.Concept) == conceptMount(target.Concept)
+	return !item.Concept.portable && link.Kind != "source_reference" || conceptMount(item.Concept) == conceptMount(target.Concept)
 }
 
 // Authored resource strings stay intact; derived target paths respect the view.
@@ -143,7 +159,7 @@ func restrictSourceTargets(concept Concept, paths []string) Concept {
 	}
 	diagnostics := []okf.Diagnostic{}
 	for _, diagnostic := range concept.MetadataDiagnostics {
-		if diagnostic.Code != "broken_source" {
+		if !pathDiagnostic(diagnostic.Code) {
 			diagnostics = append(diagnostics, diagnostic)
 		}
 	}
@@ -170,4 +186,8 @@ func contextOrigin(mount vfs.Mount) map[string]string {
 		origin["revision"] = mount.SourceStatus.SelectedRevision
 	}
 	return origin
+}
+
+func pathDiagnostic(code string) bool {
+	return code == "broken_source" || code == "broken_link" || code == "broken_path_field"
 }

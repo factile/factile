@@ -19,6 +19,50 @@ type Diagnostic struct {
 }
 
 var datetimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$`)
+var portableActorPattern = regexp.MustCompile(`^(?:[^\s/:]+/\S+|[A-Za-z][A-Za-z0-9+.-]*:\S+)$`)
+
+func PortableDatetime(value any) (time.Time, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	if len(text) == 10 {
+		date, err := time.Parse(time.DateOnly, text)
+		return date, err == nil && date.Year() > 0
+	}
+	return Datetime(strings.ToUpper(text))
+}
+
+func PortableActor(value any) bool {
+	text, ok := value.(string)
+	return ok && portableActorPattern.MatchString(text)
+}
+
+func EmptyMetadata(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return v == ""
+	case []any:
+		return len(v) == 0
+	case []string:
+		return len(v) == 0
+	default:
+		return false
+	}
+}
+
+func MetadataItems(value any) []any {
+	if EmptyMetadata(value) {
+		return nil
+	}
+	if items, ok := metadataList(value); ok {
+		return items
+	}
+	return []any{value}
+}
+
 var formatVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
 var sourceIDPattern = regexp.MustCompile(`^[^\s\[\]]+$`)
 
@@ -61,6 +105,28 @@ func IndexDiagnostic(doc Document) *Diagnostic {
 // MetadataDiagnostics validates standard optional families; type and reserved
 // file validity are handled by the caller. Unknown fields remain untouched.
 func MetadataDiagnostics(fm map[string]any) []Diagnostic {
+	return metadataDiagnostics(fm, false)
+}
+
+func PortableMetadataDiagnostics(fm map[string]any) []Diagnostic {
+	return metadataDiagnostics(fm, true)
+}
+
+func metadataDiagnostics(fm map[string]any, portable bool) []Diagnostic {
+	datetime := Datetime
+	list := metadataList
+	if portable {
+		datetime = PortableDatetime
+		list = func(value any) ([]any, bool) { return MetadataItems(value), true }
+		// Optional empty values have the same projection as absent keys.
+		present := make(map[string]any, len(fm))
+		for key, value := range fm {
+			if !EmptyMetadata(value) {
+				present[key] = value
+			}
+		}
+		fm = present
+	}
 	result := []Diagnostic{}
 	warn := func(field string) {
 		result = append(result, Diagnostic{Code: "invalid_metadata", Field: field, Message: "Invalid OKF metadata: " + field})
@@ -83,7 +149,7 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 		if !exists && !required {
 			return
 		}
-		if _, ok := Datetime(value); !ok {
+		if _, ok := datetime(value); !ok {
 			warn(field + "." + key)
 		}
 	}
@@ -94,8 +160,8 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 		}
 		date(m, "from", field, true)
 		date(m, "to", field, true)
-		_, a := Datetime(m["from"])
-		_, b := Datetime(m["to"])
+		_, a := datetime(m["from"])
+		_, b := datetime(m["to"])
 		if a && b && CompareDatetimes(m["from"].(string), m["to"].(string)) > 0 {
 			warn(field)
 		}
@@ -109,7 +175,7 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 		}
 	}
 	if v, ok := fm["tags"]; ok {
-		if values, yes := metadataList(v); !yes {
+		if values, yes := list(v); !yes {
 			warn("tags")
 		} else {
 			for i, v := range values {
@@ -130,22 +196,28 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 	if v, ok := fm["generated"]; ok {
 		if m := object(v, "generated"); m != nil {
 			requiredText(m, "by", "generated")
+			if portable && !PortableActor(m["by"]) {
+				warn("generated.by")
+			}
 			date(m, "at", "generated", false)
 		}
 	}
 	if v, ok := fm["verified"]; ok {
-		values, list := metadataList(v)
+		values, isList := list(v)
 		if m, yes := v.(map[string]any); yes {
 			values = []any{m}
-			list = true
+			isList = true
 		}
-		if !list {
+		if !isList {
 			warn("verified")
 		} else {
 			for i, v := range values {
 				field := fmt.Sprintf("verified[%d]", i)
 				if m := object(v, field); m != nil {
 					requiredText(m, "by", field)
+					if portable && !PortableActor(m["by"]) {
+						warn(field + ".by")
+					}
 					date(m, "at", field, true)
 				}
 			}
@@ -155,8 +227,8 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 		window(v, "usage_window")
 	}
 	if v, ok := fm["sources"]; ok {
-		values, list := metadataList(v)
-		if !list {
+		values, isList := list(v)
+		if !isList {
 			warn("sources")
 		} else {
 			for i, v := range values {
@@ -169,7 +241,7 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 				for _, key := range []string{"id", "author", "title"} {
 					if v, exists := m[key]; exists {
 						s, yes := v.(string)
-						if !yes || (key != "title" && strings.TrimSpace(s) == "") || (key == "id" && !sourceIDPattern.MatchString(s)) {
+						if (portable && key == "author" && !PortableActor(v)) || !yes || (key != "title" && strings.TrimSpace(s) == "") || (key == "id" && !sourceIDPattern.MatchString(s)) {
 							warn(field + "." + key)
 						}
 					}
@@ -204,8 +276,8 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 		}
 	}
 	if v, ok := fm["parameters"]; ok {
-		values, list := metadataList(v)
-		if !list {
+		values, isList := list(v)
+		if !isList {
 			warn("parameters")
 		} else {
 			names := map[string]bool{}
@@ -217,7 +289,7 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 				}
 				requiredText(m, "name", field)
 				requiredText(m, "type", field)
-				if _, yes := m["required"].(bool); !yes {
+				if value, exists := m["required"]; (!portable || exists) && !isBool(value) {
 					warn(field + ".required")
 				}
 				if name, yes := m["name"].(string); yes {
@@ -237,8 +309,8 @@ func MetadataDiagnostics(fm map[string]any) []Diagnostic {
 			}
 			requiredText(m, "resource", key)
 			if key == "executor" {
-				values, list := metadataList(m["receipt"])
-				if !list {
+				values, isList := metadataList(m["receipt"])
+				if !isList {
 					warn(key + ".receipt")
 				} else {
 					seen := map[string]bool{}
@@ -276,4 +348,9 @@ func metadataList(value any) ([]any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func isBool(value any) bool {
+	_, ok := value.(bool)
+	return ok
 }
