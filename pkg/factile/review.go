@@ -47,6 +47,9 @@ func (w *LocalWorkspace) ListReview(ctx context.Context, inputPath, evaluatedAt 
 		if state.Stale != nil && *state.Stale {
 			reasons = append(reasons, "stale")
 		}
+		if state.Freshness == "malformed" {
+			reasons = append(reasons, "malformed_deadline")
+		}
 		if state.ChangedSinceReview != nil && *state.ChangedSinceReview {
 			reasons = append(reasons, "changed_since_review")
 		}
@@ -143,6 +146,9 @@ func reviewExclusion(state okf.ReviewState, opts SearchOptions) string {
 	}
 	if opts.Stale != nil && (state.Stale == nil || *opts.Stale != *state.Stale) {
 		reasons = append(reasons, "stale")
+	}
+	if state.Freshness == "malformed" {
+		reasons = append(reasons, "malformed_deadline")
 	}
 	if opts.ChangedSinceReview != nil && (state.ChangedSinceReview == nil || *opts.ChangedSinceReview != *state.ChangedSinceReview) {
 		reasons = append(reasons, "changed_since_review")

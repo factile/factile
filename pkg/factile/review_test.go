@@ -82,3 +82,22 @@ func TestReviewSearchFiltersExplainExclusionsWithoutHidingReads(t *testing.T) {
 		t.Fatal("explicit read or workflow metadata lost")
 	}
 }
+
+func TestPortableReviewQueueIncludesMalformedDeadline(t *testing.T) {
+	dir, ws := editingWorkspace(t)
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("---\nokf_version: \"0.3\"\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "guide.md"), []byte("---\ntype: Guide\nstale_after: later\nstatus: community-review\n---\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := ws.ListReview(context.Background(), "/", "2026-11-23T00:00:00Z")
+	if err != nil || len(result.Documents) != 1 {
+		t.Fatalf("review queue: %#v, %v", result, err)
+	}
+	item := result.Documents[0]
+	if !reflect.DeepEqual(item.Reasons, []string{"malformed_deadline"}) ||
+		item.Concept.ReviewState.Status != "community-review" || item.Concept.ReviewState.Stale != nil {
+		t.Fatalf("review queue item: %#v", item)
+	}
+}
