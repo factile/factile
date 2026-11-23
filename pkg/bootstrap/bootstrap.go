@@ -15,6 +15,7 @@ import (
 	"github.com/factile/factile/pkg/factile"
 	"github.com/factile/factile/pkg/okf"
 	"github.com/factile/factile/pkg/skill"
+	"github.com/factile/factile/pkg/storage"
 	"github.com/factile/factile/pkg/vfs"
 )
 
@@ -788,7 +789,7 @@ func ensureInitLayout(layout initLayout, now time.Time) ([]FileChange, error) {
 		changes = append(changes, change)
 	}
 
-	knowledge, err := ensureKnowledgeBundle(workDir, layout.rootBundleDir, layout.bundle, now)
+	knowledge, err := ensureKnowledgeBundle(workDir, layout.rootBundleDir, layout.bundle, now, layout.rootManifest == nil || layout.rootManifest.Bundle == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -866,13 +867,27 @@ func quoteTOMLString(value string) string {
 	return b.String()
 }
 
-func ensureKnowledgeBundle(workDir, bundlePath string, bundle vfs.BundleConfig, now time.Time) ([]FileChange, error) {
+func ensureKnowledgeBundle(workDir, bundlePath string, bundle vfs.BundleConfig, now time.Time, newBundle bool) ([]FileChange, error) {
+	index := indexMarkdown(bundle)
+	if !newBundle {
+		store := storage.Local{Root: bundlePath}
+		documents, err := store.ListDocumentIDs("")
+		if err != nil {
+			return nil, err
+		}
+		newBundle = len(documents) == 0
+	}
+	if !newBundle {
+		// A missing index in an existing bundle has no version declaration to retain.
+		_, body, _ := strings.Cut(index, "\n---\n")
+		index = strings.TrimLeft(body, "\n")
+	}
 	var changes []FileChange
 	for _, file := range []struct {
 		path string
 		data string
 	}{
-		{path: filepath.Join(bundlePath, "index.md"), data: indexMarkdown(bundle)},
+		{path: filepath.Join(bundlePath, "index.md"), data: index},
 		{path: filepath.Join(bundlePath, "overview.md"), data: overviewMarkdown(bundle, now)},
 	} {
 		change, err := writeFileIfMissing(workDir, file.path, []byte(file.data))
@@ -1012,13 +1027,15 @@ func titleFromName(name string) string {
 func indexMarkdown(bundle vfs.BundleConfig) string {
 	title := bundle.Title + " Knowledge"
 	return fmt.Sprintf(`---
-okf_version: "0.2"
+okf_version: "0.3"
+title: %s
+description: %s
 ---
 
 # %s
 
 - [Overview](overview.md)
-`, title)
+`, strconv.Quote(bundle.Title), strconv.Quote(bundle.Description), title)
 }
 
 func overviewMarkdown(bundle vfs.BundleConfig, now time.Time) string {

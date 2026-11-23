@@ -72,7 +72,7 @@ func (w *LocalWorkspace) ValidateDraft(ctx context.Context, path string, input D
 		if observed := revision.DigestBytes(current); observed != input.Patch.ExpectedRevision {
 			return ValidationResult{}, revisionMismatch(target.Path, input.Patch.ExpectedRevision, observed)
 		}
-		data, _, doc, err = preparePatch(target.ConceptID, current, *input.Patch)
+		data, _, doc, err = preparePatch(target.ConceptID, current, *input.Patch, target.Mount.Portable)
 		if err != nil {
 			return ValidationResult{}, NormalizeError(err)
 		}

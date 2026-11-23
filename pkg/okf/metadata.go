@@ -86,6 +86,9 @@ func IndexDiagnostic(doc Document) *Diagnostic {
 	if path.Base(doc.ConceptID) != "index" || (!doc.HasFrontmatter && len(doc.Frontmatter) == 0) {
 		return nil
 	}
+	if doc.ConceptID == "index" && doc.Frontmatter["okf_version"] == "0.3" {
+		return nil
+	}
 	invalid := doc.ConceptID != "index"
 	for key, value := range doc.Frontmatter {
 		version, ok := value.(string)

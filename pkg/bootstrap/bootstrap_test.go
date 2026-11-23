@@ -50,7 +50,7 @@ func TestInitCreatesDefaultWorkspaceWithoutLocalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsedIndex, err := okf.ParseConcept("", index)
-	if err != nil || parsedIndex.Frontmatter["okf_version"] != "0.2" || len(parsedIndex.Frontmatter) != 1 {
+	if err != nil || parsedIndex.Frontmatter["okf_version"] != "0.3" || len(parsedIndex.Frontmatter) != 3 {
 		t.Fatalf("init created an invalid bundle index: %#v, %v", parsedIndex.Frontmatter, err)
 	}
 	resolved, err := vfs.ResolveWorkspace(vfs.ResolveWorkspaceOptions{WorkDir: filepath.Join(workspace, "docs")})
@@ -525,7 +525,7 @@ func TestInitDerivesUsefulMetadataAndStarterDocuments(t *testing.T) {
 	}
 	index := readBootstrapTestFile(t, filepath.Join(workspace, "docs", "index.md"))
 	overview := readBootstrapTestFile(t, filepath.Join(workspace, "docs", "overview.md"))
-	for _, want := range []string{`okf_version: "0.2"`, "# My Project Cli Knowledge"} {
+	for _, want := range []string{`okf_version: "0.3"`, "# My Project Cli Knowledge"} {
 		if !strings.Contains(index, want) {
 			t.Fatalf("derived index missing %q:\n%s", want, index)
 		}
@@ -916,7 +916,13 @@ func TestInitReportsInvalidAuthoredKnowledgeWithoutOverwritingIt(t *testing.T) {
 }
 
 func TestInitPreservesPlainOrVersionOnlyRootIndex(t *testing.T) {
-	for _, content := range []string{"# Authored index\n", "---\nokf_version: \"0.2\"\n---\n# Authored index\n"} {
+	for _, content := range []string{"# Authored index\n", "---\nokf_version: \"0.2\"\n---\n# Authored index\n", `---
+okf_version: "0.3"
+license: 'MIT' # authored
+x-example: {nested: keep}
+---
+# Authored index
+`} {
 		t.Run(content, func(t *testing.T) {
 			workspace := t.TempDir()
 			if _, err := Init(context.Background(), Options{WorkDir: workspace, Agent: AgentNone}); err != nil {

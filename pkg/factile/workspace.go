@@ -611,6 +611,16 @@ func (w *LocalWorkspace) ValidateRootBundle(ctx context.Context) (ValidationResu
 	index, indexIssues := validateRootIndex(*root)
 	if index != nil {
 		concepts = append(concepts, *index)
+		if root.Portable {
+			for _, diagnostic := range index.Concept.MetadataDiagnostics {
+				issues = append(issues, ValidationIssue{Severity: "warning", Code: diagnostic.Code, Message: diagnostic.Message, Path: index.Concept.Path})
+			}
+		}
+	}
+	for i := range issues {
+		if issues[i].Code == "not_a_concept" && issues[i].Path == "/overview" {
+			issues[i].Severity = "error"
+		}
 	}
 	issues = append(issues, indexIssues...)
 	issues = append(metadataIssues, issues...)
@@ -639,6 +649,9 @@ func validateRootIndex(mount vfs.Mount) (*scopedConcept, []ValidationIssue) {
 		return nil, []ValidationIssue{{Severity: "error", Code: ErrOKFParse, Message: "Invalid root index.md: " + err.Error(), Path: "/"}}
 	}
 	concept := conceptFromDoc(mount, doc, data)
+	if mount.Portable {
+		concept = portableConceptSources(concept, mount)
+	}
 	item := &scopedConcept{Concept: concept, Summary: summaryFromConcept(concept)}
 	return item, nil
 }
@@ -838,7 +851,7 @@ func (w *LocalWorkspace) Patch(ctx context.Context, inputPath string, input Patc
 		if current != input.ExpectedRevision {
 			return revisionMismatch(target.Path, input.ExpectedRevision, current)
 		}
-		next, summary, doc, err := preparePatch(target.ConceptID, data, input)
+		next, summary, doc, err := preparePatch(target.ConceptID, data, input, target.Mount.Portable)
 		if err != nil {
 			return err
 		}

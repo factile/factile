@@ -130,7 +130,7 @@ func createDocument(conceptID string, input CreateConceptInput) okf.Document {
 	return doc
 }
 
-func preparePatch(conceptID string, data []byte, input PatchConceptInput) ([]byte, []string, okf.Document, error) {
+func preparePatch(conceptID string, data []byte, input PatchConceptInput, portable bool) ([]byte, []string, okf.Document, error) {
 	next, summary, err := applyPatch(conceptID, data, input)
 	if err != nil {
 		return nil, nil, okf.Document{}, err
@@ -144,7 +144,7 @@ func preparePatch(conceptID string, data []byte, input PatchConceptInput) ([]byt
 		if err != nil {
 			return nil, nil, okf.Document{}, err
 		}
-		if meaningfulContentChanged(before, doc) {
+		if meaningfulContentChanged(before, doc, portable) {
 			generated := map[string]any{}
 			if previous, ok := doc.Frontmatter["generated"].(map[string]any); ok {
 				for key, value := range previous {

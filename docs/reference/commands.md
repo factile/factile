@@ -295,7 +295,7 @@ behavior in v2.
 
 `create` and meaningful concept edits record the actual Factile producer and UTC change time in `generated.by` and `generated.at`. Existing verification history and unrelated metadata are preserved. No-op edits retain the revision; review, lifecycle, or freshness-only changes do not restamp generation. `deprecate` sets `status: deprecated`. Valid lifecycle values are `draft`, `stable`, and `deprecated`; omission means stable.
 
-`mkdir` creates plain directory indexes and date-headed logs. `--bundle` is the `--log --overview` shortcut inside the owning bundle. `init` creates a true bundle-root index containing only `okf_version: "0.2"`, and preserves valid existing root indexes. `overview.md` remains a concept with producer metadata.
+`mkdir` creates plain directory indexes and date-headed logs. `--bundle` is the `--log --overview` shortcut inside the owning bundle. `init` creates a bundle-root index with quoted `okf_version: "0.3"`, title and description, and preserves valid existing root indexes. `overview.md` remains a concept with producer metadata.
 
 ## Explicit Bundle Migration
 

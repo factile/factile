@@ -2223,7 +2223,7 @@ func TestCLIInitMetadataFlagsReconcileManifestAndSeedDocuments(t *testing.T) {
 		t.Fatalf("metadata flags were not reconciled: %#v", manifest.Bundle)
 	}
 	index, err := os.ReadFile(filepath.Join(workspace, "docs", "index.md"))
-	if err != nil || !strings.Contains(string(index), "# Service Handbook Knowledge") || !strings.Contains(string(index), `okf_version: "0.2"`) {
+	if err != nil || !strings.Contains(string(index), "# Service Handbook Knowledge") || !strings.Contains(string(index), `okf_version: "0.3"`) {
 		t.Fatalf("metadata did not seed index: %q, %v", index, err)
 	}
 }

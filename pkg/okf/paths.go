@@ -195,3 +195,19 @@ func DescribeComputation(fields map[string]any, body string, selected string) Co
 	result.Attestable = result.BodyKind != "missing" && strings.TrimSpace(runtime) != "" && strings.TrimSpace(resource) != ""
 	return result
 }
+
+// CanonicalReference compares explicit paths without changing their authored spelling.
+func CanonicalReference(id, value, field string) string {
+	kind, rel := ResolvePath(id, value, field, "0.3", func(string) string { return "file" })
+	if kind != "file" && kind != "missing" {
+		return value
+	}
+	raw, suffix := value, ""
+	if index := strings.IndexAny(value, "?#"); index >= 0 {
+		raw, suffix = value[:index], value[index:]
+	}
+	if strings.HasSuffix(raw, "/") && rel != "" {
+		rel += "/"
+	}
+	return "/" + rel + suffix
+}
